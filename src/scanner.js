@@ -8,6 +8,7 @@ const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
 const pumpFun = require('./pumpfun');
 const birdeye = require('./birdeye');
+const gecko = require('./geckoterminal');
 
 const MIGRATION_DEXSCREENER_DELAY_MS = 8_000; // Attendre 8s pour que DexScreener indexe le pool
 
@@ -84,6 +85,44 @@ class Scanner extends EventEmitter {
     return results;
   }
 
+  /**
+   * Scanne GeckoTerminal — nouveaux pools + trending Solana.
+   * Retourne des paires déjà normalisées (format DexScreener).
+   * Filtre sur les critères habituels avant de retourner.
+   */
+  async _scanGecko() {
+    let pools = [];
+    try {
+      const [newPools, trending] = await Promise.all([
+        gecko.getNewPools(),
+        gecko.getTrendingPools(),
+      ]);
+      // Déduplique par adresse de pool (un même pool peut être dans les deux listes)
+      const seen = new Set();
+      for (const p of [...newPools, ...trending]) {
+        const key = p.pairAddress || p.baseToken?.address;
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          pools.push(p);
+        }
+      }
+    } catch (err) {
+      console.error('[Scanner] Erreur GeckoTerminal:', err.message);
+      return [];
+    }
+
+    const results = [];
+    for (const pair of pools) {
+      const addr = pair.baseToken?.address;
+      if (!addr || this.seenAddresses.has(addr)) continue;
+      if (this._passesFilters(pair)) {
+        results.push(pair);
+        this.seenAddresses.add(addr);
+      }
+    }
+    return results;
+  }
+
   /** Scanne les derniers tokens ayant créé un profil */
   async _scanProfiles() {
     const profiles = await dex.getLatestTokenProfiles();
@@ -108,13 +147,14 @@ class Scanner extends EventEmitter {
 
     let candidates = [];
     try {
-      const [boosted, profiles] = await Promise.all([
+      const [boosted, profiles, geckoResults] = await Promise.all([
         this._scanBoosted(),
         this._scanProfiles(),
+        this._scanGecko(),
       ]);
-      // Déduplique par adresse de token
+      // Déduplique par adresse de token (les 3 sources peuvent se chevaucher)
       const seen = new Set();
-      for (const pair of [...boosted, ...profiles]) {
+      for (const pair of [...boosted, ...profiles, ...geckoResults]) {
         const addr = pair.baseToken?.address;
         if (addr && !seen.has(addr)) {
           seen.add(addr);
