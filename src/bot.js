@@ -88,6 +88,7 @@ class Bot {
     const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision.decision] || '⚪';
 
     let msg = `━━━━━━━━━━━━━━━━━━━\n`;
+    if (debate.isGraduated) msg += `🎓 *TOKEN GRADUÉ — vient de quitter Pump.fun*\n`;
     msg += `🪙 *$${sym}* — ${name}\n`;
     msg += `💰 $${price < 0.0001 ? price.toExponential(2) : price.toFixed(6)}  ${arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}%\n`;
     msg += `[📊 Voir sur DexScreener](${pairUrl})\n`;
@@ -105,6 +106,31 @@ class Bot {
     if (decision.decision === 'BUY') {
       msg += `\n💸 Taille: ${decision.suggestedAmountPct}%  |  🛑 SL: -${decision.stopLossPct}%  |  🎯 TP: +${decision.takeProfitPct}%`;
     }
+
+    return msg;
+  }
+
+  /** Alerte légère pour un nouveau token sur la bonding curve Pump.fun */
+  _formatPumpNew(token) {
+    const sym = token.symbol || '???';
+    const name = token.name || '';
+    const mcSol = token.marketCapSol ? `~${parseFloat(token.marketCapSol).toFixed(1)} SOL` : '?';
+    const initialBuy = token.initialBuy ? `${parseFloat(token.initialBuy).toFixed(2)} SOL` : null;
+    const pumpUrl = `https://pump.fun/coin/${token.mint}`;
+
+    const links = [];
+    if (token.twitter) links.push(`[𝕏](${token.twitter})`);
+    if (token.telegram) links.push(`[TG](${token.telegram})`);
+    if (token.website) links.push(`[🌐](${token.website})`);
+
+    let msg = `🆕 *$${sym}* — ${name}\n`;
+    msg += `👶 Bonding curve Pump.fun\n`;
+    msg += `💰 Market cap: ${mcSol}`;
+    if (initialBuy) msg += `  |  🛒 Initial buy: ${initialBuy}`;
+    msg += `\n`;
+    if (links.length > 0) msg += `${links.join('  |  ')}\n`;
+    msg += `📍 \`${token.mint}\`\n`;
+    msg += `[🔗 Voir sur Pump.fun](${pumpUrl})`;
 
     return msg;
   }
@@ -142,9 +168,13 @@ class Bot {
       await ctx.reply(
         `📊 *Statut*\n\n` +
         `📡 Scanner: ${stats.isRunning ? '✅ Actif' : '❌ Arrêté'}\n` +
-        `🔄 Scans: ${stats.scanCount}\n` +
+        `🔄 Scans DexScreener: ${stats.scanCount}\n` +
         `👁 Tokens vus: ${stats.seenTokens}\n` +
-        `🤖 Auto\\-trade: ${this.autoTrade ? '✅ Activé' : '❌ Désactivé'}\n` +
+        `\n🐸 *Pump.fun* (PumpPortal WS)\n` +
+        `   ${stats.pumpFunConnected ? '✅ Connecté' : '❌ Déconnecté'}\n` +
+        `   Nouveaux tokens: ${stats.pumpNewTokens || 0}\n` +
+        `   Graduations: ${stats.pumpMigrations || 0}\n` +
+        `\n🤖 Auto\\-trade: ${this.autoTrade ? '✅ Activé' : '❌ Désactivé'}\n` +
         `💼 Positions: ${positions.length}\n` +
         `💰 Balance: ${balance}`,
         { parse_mode: 'MarkdownV2' }
@@ -320,6 +350,21 @@ class Bot {
   // ─── Événements du scanner ────────────────────────────────────────────────
 
   _listenToScanner() {
+    // Nouveaux tokens sur la bonding curve (seulement si liens sociaux présents)
+    this.scanner.on('pumpNew', async (token) => {
+      const hasSocials = token.twitter || token.telegram || token.website;
+      if (!hasSocials) return; // Filtre les tokens sans présence sociale
+
+      try {
+        await this._send(this._formatPumpNew(token), {
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true,
+        });
+      } catch (err) {
+        console.error('[Bot] Erreur alerte pumpNew:', err.message);
+      }
+    });
+
     this.scanner.on('debate', async (debate) => {
       try {
         await this._send(this._formatDebate(debate), { parse_mode: 'Markdown' });

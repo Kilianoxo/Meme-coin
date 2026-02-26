@@ -6,6 +6,9 @@
 const { EventEmitter } = require('events');
 const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
+const pumpFun = require('./pumpfun');
+
+const MIGRATION_DEXSCREENER_DELAY_MS = 8_000; // Attendre 8s pour que DexScreener indexe le pool
 
 const SCAN_INTERVAL_MS = 30_000; // 30 secondes
 
@@ -139,6 +142,8 @@ class Scanner extends EventEmitter {
     if (this.isRunning) return;
     this.isRunning = true;
     console.log(`[Scanner] Démarré — filtres: liq>${FILTERS.minLiquidityUsd}$, vol24h>${FILTERS.minVolume24hUsd}$`);
+    this._listenToPumpFun();
+    pumpFun.start();
     this.scan();
     this._interval = setInterval(() => this.scan(), SCAN_INTERVAL_MS);
   }
@@ -146,15 +151,61 @@ class Scanner extends EventEmitter {
   stop() {
     if (!this.isRunning) return;
     clearInterval(this._interval);
+    pumpFun.stop();
     this.isRunning = false;
     console.log('[Scanner] Arrêté.');
   }
 
+  /** Écoute les événements PumpPortal WebSocket */
+  _listenToPumpFun() {
+    // Nouveau token sur la bonding curve — on stocke le mint pour contexte
+    pumpFun.on('newToken', (token) => {
+      this.emit('pumpNew', token);
+    });
+
+    // Token gradué — maintenant tradeable via Jupiter, analyse immédiate
+    pumpFun.on('migration', async (migration) => {
+      const sym = migration.symbol || migration.mint?.slice(0, 8) || '???';
+
+      // DexScreener a besoin de quelques secondes pour indexer le nouveau pool
+      await new Promise((r) => setTimeout(r, MIGRATION_DEXSCREENER_DELAY_MS));
+
+      try {
+        const pairs = await dex.getTokenPairs('solana', migration.mint);
+        const pair = this._bestPair(pairs);
+
+        if (!pair) {
+          console.log(`[Scanner] Migration ${sym} — pas encore indexé sur DexScreener`);
+          return;
+        }
+
+        // Pour les graduations on bypass les filtres de volume/liquidité
+        // (le pool vient juste d'être créé, les métriques sont encore basses)
+        if (this.seenAddresses.has(migration.mint)) return;
+        this.seenAddresses.add(migration.mint);
+
+        console.log(`[Scanner] 🎓 Analyse de la graduation: ${sym}`);
+        runDebate(pair)
+          .then((debate) => {
+            debate.isGraduated = true;
+            this.emit('debate', debate);
+          })
+          .catch((err) => console.error('[Scanner] Erreur débat graduation:', err.message));
+      } catch (err) {
+        console.error('[Scanner] Erreur fetch graduation:', err.message);
+      }
+    });
+  }
+
   getStats() {
+    const pumpStats = pumpFun.getStats();
     return {
       scanCount: this.scanCount,
       seenTokens: this.seenAddresses.size,
       isRunning: this.isRunning,
+      pumpFunConnected: pumpStats.connected,
+      pumpNewTokens: pumpStats.newTokenCount,
+      pumpMigrations: pumpStats.migrationCount,
     };
   }
 
