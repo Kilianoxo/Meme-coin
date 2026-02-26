@@ -7,6 +7,7 @@ const { EventEmitter } = require('events');
 const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
 const pumpFun = require('./pumpfun');
+const birdeye = require('./birdeye');
 
 const MIGRATION_DEXSCREENER_DELAY_MS = 8_000; // Attendre 8s pour que DexScreener indexe le pool
 
@@ -131,11 +132,30 @@ class Scanner extends EventEmitter {
       // Émet immédiatement le candidat (pour l'alerte Telegram brute)
       this.emit('candidate', token);
 
-      // Lance le débat IA en arrière-plan
-      runDebate(token)
-        .then((debate) => this.emit('debate', debate))
-        .catch((err) => console.error('[Scanner] Erreur débat IA:', err.message));
+      // Lance le débat IA en arrière-plan (avec données Birdeye si dispo)
+      this._analyzeToken(token)
+        .catch((err) => console.error('[Scanner] Erreur analyse:', err.message));
     }
+  }
+
+  /**
+   * Récupère les données Birdeye, applique le hard filter, puis lance le débat IA
+   */
+  async _analyzeToken(token) {
+    const address = token.baseToken?.address;
+    const symbol = token.baseToken?.symbol || '???';
+
+    // Enrichissement Birdeye (optionnel — silencieux si pas de clé)
+    const { security } = await birdeye.getTokenData(address);
+
+    // Hard filter : token trop risqué on-chain → SKIP immédiat, pas de débat
+    if (birdeye.isHardBlocked(security)) {
+      console.log(`[Scanner] ⛔ ${symbol} bloqué (mint authority ou concentration holders)`);
+      return;
+    }
+
+    const debate = await runDebate(token, security);
+    this.emit('debate', debate);
   }
 
   start() {
@@ -185,7 +205,14 @@ class Scanner extends EventEmitter {
         this.seenAddresses.add(migration.mint);
 
         console.log(`[Scanner] 🎓 Analyse de la graduation: ${sym}`);
-        runDebate(pair)
+        const { security } = await birdeye.getTokenData(migration.mint);
+
+        if (birdeye.isHardBlocked(security)) {
+          console.log(`[Scanner] ⛔ Graduation ${sym} bloquée (sécurité insuffisante)`);
+          return;
+        }
+
+        runDebate(pair, security)
           .then((debate) => {
             debate.isGraduated = true;
             this.emit('debate', debate);

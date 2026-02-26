@@ -17,6 +17,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
+const { formatSecurity } = require('./birdeye');
 
 class Bot {
   constructor(trader, scanner) {
@@ -99,6 +100,14 @@ class Bot {
 
     msg += `\n🐻 *Bear* — ${bear.riskScore}/10  |  ${bear.verdict}\n`;
     (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${f}\n`));
+
+    // Données de sécurité Birdeye (si disponibles)
+    const sec = formatSecurity(debate.security);
+    if (sec) {
+      msg += `\n🔒 *Sécurité on-chain*\n`;
+      msg += `  Mint: ${sec.mint}  |  Freeze: ${sec.freeze}\n`;
+      msg += `  Top 10 holders: ${sec.top10}  |  Créateur: ${sec.creator}\n`;
+    }
 
     msg += `\n${decEmoji} *${decision.decision}*  —  confiance ${decision.confidence}/10\n`;
     if (decision.reasoning) msg += `_${decision.reasoning}_\n`;

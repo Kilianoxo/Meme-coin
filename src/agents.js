@@ -62,18 +62,32 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 
 /**
  * Agent BEAR — Pessimiste, cherche les risques
+ * @param {Object} token    - Données DexScreener
+ * @param {Object} security - Données Birdeye (optionnel)
  * Retourne: { riskScore: 0-10, redFlags: string[], verdict: "AVOID|CAUTION|OK" }
  */
-async function runBearAgent(token) {
+async function runBearAgent(token, security = null) {
   const system = `Tu es un analyste crypto PESSIMISTE spécialisé dans la détection de rug pulls et scams sur Solana.
 Tu cherches: liquidité trop basse, volume artificiel (txns faibles vs volume élevé), token trop récent,
 market cap vs fdv suspect, absence de holders, prix en chute libre.
+Si des données de sécurité on-chain sont fournies, utilise-les en priorité (mint authority, concentration holders).
 Sois factuel et concis. Ne dépasse pas 3 red flags.
 
 Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 {"riskScore": <0-10>, "redFlags": ["flag1", "flag2"], "verdict": "AVOID|CAUTION|OK"}`;
 
-  const text = await ask(system, `Analyse les risques de ce token:\n${formatTokenForAgents(token)}`, MODEL);
+  let content = `Analyse les risques de ce token:\n${formatTokenForAgents(token)}`;
+
+  if (security) {
+    content += `\n\nDonnées sécurité on-chain (Birdeye):
+- Mint authority: ${security.mintAuthority ? '⚠️ ACTIVE (peut créer de nouveaux tokens)' : '✅ Révoquée'}
+- Freeze authority: ${security.freezeAuthority ? '⚠️ ACTIVE (peut geler les wallets)' : '✅ Révoquée'}
+- Top 10 holders: ${security.top10HolderPercent?.toFixed(1) ?? '?'}% du supply
+- Part du créateur: ${security.creatorPercentage?.toFixed(1) ?? '?'}% du supply
+- Part de l'owner: ${security.ownerPercentage?.toFixed(1) ?? '?'}% du supply`;
+  }
+
+  const text = await ask(system, content, MODEL);
   return parseAgentJson(text, {
     riskScore: 8,
     redFlags: ['Impossible d\'analyser les risques correctement'],
@@ -123,23 +137,24 @@ ${JSON.stringify(bearAnalysis, null, 2)}`;
 
 /**
  * Lance le débat complet entre les 3 agents pour un token
- * @param {Object} token - Données de paire DexScreener
- * @returns {Promise<{bull, bear, decision, token}>}
+ * @param {Object} token    - Données de paire DexScreener
+ * @param {Object} security - Données de sécurité Birdeye (optionnel)
+ * @returns {Promise<{bull, bear, decision, token, security}>}
  */
-async function runDebate(token) {
+async function runDebate(token, security = null) {
   const symbol = token.baseToken?.symbol || '???';
-  console.log(`[Agents] Débat pour ${symbol}...`);
+  console.log(`[Agents] Débat pour ${symbol}${security ? ' (avec données Birdeye)' : ''}...`);
 
   const [bull, bear] = await Promise.all([
     runBullAgent(token),
-    runBearAgent(token),
+    runBearAgent(token, security),
   ]);
 
   const decision = await runRiskManager(token, bull, bear);
 
   console.log(`[Agents] ${symbol} → ${decision.decision} (confiance: ${decision.confidence}/10)`);
 
-  return { bull, bear, decision, token };
+  return { bull, bear, decision, token, security };
 }
 
 module.exports = { runDebate };
