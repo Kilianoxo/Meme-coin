@@ -80,23 +80,30 @@ class Bot {
   _formatDebate(debate) {
     const { bull, bear, decision, token } = debate;
     const sym = token.baseToken?.symbol || '???';
-    const emoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision.decision] || '⚪';
+    const name = token.baseToken?.name || '';
+    const price = parseFloat(token.priceUsd || 0);
+    const ch24 = token.priceChange?.h24 || 0;
+    const pairUrl = token.url || `https://dexscreener.com/solana/${token.pairAddress}`;
+    const arrow = ch24 >= 0 ? '🟢' : '🔴';
+    const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision.decision] || '⚪';
 
-    let msg = `🤖 *DÉBAT IA — ${sym}*\n\n`;
+    let msg = `━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🪙 *$${sym}* — ${name}\n`;
+    msg += `💰 $${price < 0.0001 ? price.toExponential(2) : price.toFixed(6)}  ${arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}%\n`;
+    msg += `[📊 Voir sur DexScreener](${pairUrl})\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    msg += `🐂 *Bull* (${bull.score}/10)\n`;
-    (bull.arguments || []).slice(0, 3).forEach((a) => (msg += `• ${a}\n`));
+    msg += `🐂 *Bull* — ${bull.score}/10\n`;
+    (bull.arguments || []).slice(0, 3).forEach((a) => (msg += `  → ${a}\n`));
 
-    msg += `\n🐻 *Bear* (risque ${bear.riskScore}/10 — ${bear.verdict})\n`;
-    (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `⚠️ ${f}\n`));
+    msg += `\n🐻 *Bear* — ${bear.riskScore}/10  |  ${bear.verdict}\n`;
+    (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${f}\n`));
 
-    msg += `\n${emoji} *Décision: ${decision.decision}*  (confiance: ${decision.confidence}/10)\n`;
+    msg += `\n${decEmoji} *${decision.decision}*  —  confiance ${decision.confidence}/10\n`;
     if (decision.reasoning) msg += `_${decision.reasoning}_\n`;
 
     if (decision.decision === 'BUY') {
-      msg += `\n💸 Taille suggérée: ${decision.suggestedAmountPct}% du portfolio\n`;
-      msg += `🛑 Stop-loss: -${decision.stopLossPct}%\n`;
-      msg += `🎯 Take-profit: +${decision.takeProfitPct}%`;
+      msg += `\n💸 Taille: ${decision.suggestedAmountPct}%  |  🛑 SL: -${decision.stopLossPct}%  |  🎯 TP: +${decision.takeProfitPct}%`;
     }
 
     return msg;
