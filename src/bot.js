@@ -109,6 +109,7 @@ class Bot {
 
     bot.command('start', async (ctx) => {
       await ctx.reply(
+        `👋 Bonjour\\! Bienvenue sur *Meme Coin Bot*\\!\n\n` +
         `🤖 *Meme Coin Bot* — Actif\\!\n\n` +
         `*Commandes disponibles:*\n` +
         `/status — État du bot\n` +
