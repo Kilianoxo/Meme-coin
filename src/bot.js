@@ -118,9 +118,9 @@ class Bot {
         `/positions — Positions ouvertes\n` +
         `/history — Historique des trades\n` +
         `/auto — Toggle auto\\-trade\n` +
-        `/analyse <adresse> — Analyser un token\n` +
-        `/buy <adresse> <sol> — Achat manuel\n` +
-        `/sell <adresse> \\[%\\] — Vente manuelle`,
+        `/analyse \\<adresse\\> — Analyser un token\n` +
+        `/buy \\<adresse\\> \\<sol\\> — Achat manuel\n` +
+        `/sell \\<adresse\\> \\[%\\] — Vente manuelle`,
         { parse_mode: 'MarkdownV2' }
       );
     });
