@@ -16,7 +16,9 @@ const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
 const bs58 = require('bs58');
 
 const JUPITER_URL = 'https://quote-api.jup.ag/v6';
+const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
 const WSOL = 'So11111111111111111111111111111111111111112';
+const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
 
 class Trader {
   constructor() {
@@ -27,6 +29,7 @@ class Trader {
     this.wallet = null;
     this.positions = new Map(); // tokenAddress → position
     this.history = [];
+    this._monitorTimer = null;
   }
 
   // ─── Wallet ──────────────────────────────────────────────────────────────
@@ -126,13 +129,39 @@ class Trader {
 
   // ─── Trading ──────────────────────────────────────────────────────────────
 
+  // ─── Prix actuel ──────────────────────────────────────────────────────────
+
+  /**
+   * Prix actuel en USD via Jupiter Price API v2
+   * @param {string} mintAddress
+   * @returns {Promise<number|null>}
+   */
+  async getCurrentPrice(mintAddress) {
+    try {
+      const res = await fetch(`${JUPITER_PRICE_URL}?ids=${mintAddress}`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      const price = json?.data?.[mintAddress]?.price;
+      return price ? parseFloat(price) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ─── Trading ──────────────────────────────────────────────────────────────
+
   /**
    * Achète un token avec des SOL
    * @param {string} tokenMint  - Adresse du token à acheter
    * @param {number} solAmount  - Montant en SOL
-   * @param {number} slippageBps
+   * @param {Object} opts       - { slippageBps, stopLossPct, takeProfitPct }
    */
-  async buy(tokenMint, solAmount, slippageBps = 300) {
+  async buy(tokenMint, solAmount, opts = {}) {
+    const {
+      slippageBps = 300,
+      stopLossPct = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT || '20'),
+      takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
+    } = opts;
     if (!this.wallet) throw new Error('Wallet non chargé');
 
     const balance = await this.getSolBalance();
@@ -144,6 +173,9 @@ class Trader {
     const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
     console.log(`[Trader] Achat: ${solAmount} SOL → ${tokenMint}`);
 
+    // Prix d'entrée en USD (best effort — n'empêche pas le trade si indispo)
+    const entryPriceUsd = await this.getCurrentPrice(tokenMint);
+
     const quote = await this.getQuote(WSOL, tokenMint, lamports, slippageBps);
     const txId = await this.executeSwap(quote);
 
@@ -153,6 +185,9 @@ class Trader {
       buyTxId: txId,
       entryTimestamp: Date.now(),
       outAmount: quote.outAmount,
+      entryPriceUsd,
+      stopLossPct,
+      takeProfitPct,
       status: 'open',
     };
     this.positions.set(tokenMint, position);
@@ -195,6 +230,63 @@ class Trader {
 
     console.log(`[Trader] ✅ Vente OK — tx: ${txId}`);
     return { txId, quote };
+  }
+
+  // ─── Moniteur Stop Loss / Take Profit ────────────────────────────────────
+
+  /**
+   * Démarre la surveillance automatique SL/TP
+   * @param {Function} notify - callback(message: string) pour alerter sur Telegram
+   */
+  startMonitor(notify) {
+    if (this._monitorTimer) return; // déjà actif
+
+    this._monitorTimer = setInterval(async () => {
+      if (this.positions.size === 0) return;
+      await this._checkPositions(notify);
+    }, MONITOR_INTERVAL_MS);
+
+    console.log('[Trader] Moniteur SL/TP démarré (intervalle: 30s)');
+  }
+
+  stopMonitor() {
+    if (this._monitorTimer) {
+      clearInterval(this._monitorTimer);
+      this._monitorTimer = null;
+    }
+  }
+
+  async _checkPositions(notify) {
+    for (const [tokenMint, pos] of this.positions) {
+      if (!pos.entryPriceUsd) continue; // pas de prix d'entrée → skip
+
+      const currentPrice = await this.getCurrentPrice(tokenMint);
+      if (!currentPrice) continue;
+
+      const changePct = ((currentPrice - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+      const shortMint = tokenMint.slice(0, 8) + '...';
+
+      let reason = null;
+
+      if (changePct <= -pos.stopLossPct) {
+        reason = `🛑 *STOP LOSS* déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
+      } else if (changePct >= pos.takeProfitPct) {
+        reason = `🎯 *TAKE PROFIT* déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
+      }
+
+      if (reason) {
+        try {
+          console.log(`[Trader] ${reason.replace(/\*/g, '')}`);
+          const { txId } = await this.sell(tokenMint, 100);
+          if (notify) {
+            notify(`${reason}\n[Voir la tx](https://solscan.io/tx/${txId})`);
+          }
+        } catch (err) {
+          console.error(`[Trader] Erreur vente SL/TP (${shortMint}): ${err.message}`);
+          if (notify) notify(`⚠️ Erreur vente SL/TP pour \`${shortMint}\`: ${err.message}`);
+        }
+      }
+    }
   }
 
   // ─── État ─────────────────────────────────────────────────────────────────

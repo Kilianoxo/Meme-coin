@@ -213,10 +213,23 @@ class Bot {
       const positions = this.trader.getPositions();
       if (positions.length === 0) return ctx.reply('📭 Aucune position ouverte.');
 
-      let msg = `📊 *Positions (${positions.length})*\n\n`;
+      let msg = `📊 *Positions ouvertes (${positions.length})*\n\n`;
       for (const p of positions) {
-        msg += `• \`${p.tokenMint.slice(0, 12)}...\` — ${p.solSpent} SOL\n`;
-        msg += `  [Solscan](https://solscan.io/tx/${p.buyTxId})\n\n`;
+        const shortMint = `\`${p.tokenMint.slice(0, 12)}...\``;
+        const age = Math.floor((Date.now() - p.entryTimestamp) / 60_000);
+        msg += `• ${shortMint} — ${p.solSpent} SOL\n`;
+
+        if (p.entryPriceUsd) {
+          const currentPrice = await this.trader.getCurrentPrice(p.tokenMint);
+          if (currentPrice) {
+            const pnlPct = ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100;
+            const arrow = pnlPct >= 0 ? '🟢' : '🔴';
+            msg += `  ${arrow} PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%\n`;
+          }
+          msg += `  🛑 SL: -${p.stopLossPct}%  |  🎯 TP: +${p.takeProfitPct}%\n`;
+        }
+
+        msg += `  ⏱ ${age}min  |  [Tx](https://solscan.io/tx/${p.buyTxId})\n\n`;
       }
       await ctx.reply(msg, { parse_mode: 'Markdown' });
     });
@@ -331,18 +344,21 @@ class Bot {
   // ─── Callbacks boutons inline ─────────────────────────────────────────────
 
   _setupCallbacks() {
-    this.bot.action(/^buy:(.+):(.+)$/, async (ctx) => {
+    // Format: buy:<address>:<sol>[:<stopLossPct>:<takeProfitPct>]
+    this.bot.action(/^buy:([^:]+):([^:]+)(?::(\d+):(\d+))?$/, async (ctx) => {
       await ctx.answerCbQuery('⏳ Achat en cours...');
-      const [, tokenAddress, solStr] = ctx.match;
+      const [, tokenAddress, solStr, slStr, tpStr] = ctx.match;
       const solAmount = parseFloat(solStr);
+      const stopLossPct = slStr ? parseInt(slStr, 10) : 20;
+      const takeProfitPct = tpStr ? parseInt(tpStr, 10) : 50;
 
       if (!this.trader.isReady()) {
         return ctx.reply('❌ Wallet non configuré.');
       }
       try {
-        const { txId } = await this.trader.buy(tokenAddress, solAmount);
+        const { txId } = await this.trader.buy(tokenAddress, solAmount, { stopLossPct, takeProfitPct });
         await ctx.reply(
-          `✅ *Achat réussi!* (${solAmount} SOL)\n[Voir la tx](https://solscan.io/tx/${txId})`,
+          `✅ *Achat réussi!* (${solAmount} SOL)\n🛑 SL: -${stopLossPct}%  |  🎯 TP: +${takeProfitPct}%\n[Voir la tx](https://solscan.io/tx/${txId})`,
           { parse_mode: 'Markdown' }
         );
       } catch (err) {
@@ -385,7 +401,11 @@ class Bot {
             try {
               const { txId } = await this.trader.buy(
                 debate.token.baseToken?.address,
-                solAmt
+                solAmt,
+                {
+                  stopLossPct: debate.decision.stopLossPct,
+                  takeProfitPct: debate.decision.takeProfitPct,
+                }
               );
               await this._send(
                 `🤖 *AUTO-TRADE EXÉCUTÉ*\nAchat: ${solAmt} SOL\n[Voir la tx](https://solscan.io/tx/${txId})`,
@@ -395,13 +415,15 @@ class Bot {
               await this._send(`❌ Auto-trade échoué: ${err.message}`);
             }
           } else {
+            const sl = debate.decision.stopLossPct || 20;
+            const tp = debate.decision.takeProfitPct || 50;
             await this.bot.telegram.sendMessage(
               this.adminId,
               '💡 Confirmer l\'achat?',
               Markup.inlineKeyboard([
                 Markup.button.callback(
                   `✅ Acheter (${solAmt.toFixed(3)} SOL)`,
-                  `buy:${debate.token.baseToken?.address}:${solAmt.toFixed(4)}`
+                  `buy:${debate.token.baseToken?.address}:${solAmt.toFixed(4)}:${sl}:${tp}`
                 ),
                 Markup.button.callback('❌ Passer', 'skip'),
               ])
@@ -423,6 +445,11 @@ class Bot {
   start() {
     this.bot.launch({ dropPendingUpdates: true });
     console.log('[Bot] Telegram bot démarré (polling).');
+
+    // Démarre la surveillance SL/TP si le wallet est chargé
+    if (this.trader.isReady()) {
+      this.trader.startMonitor((msg) => this._send(msg, { parse_mode: 'Markdown' }));
+    }
 
     process.once('SIGINT', () => this.bot.stop('SIGINT'));
     process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
