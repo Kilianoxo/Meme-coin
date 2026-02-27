@@ -54,9 +54,14 @@ class Bot {
     return Number(n).toFixed(2);
   }
 
+  /** Échappe les caractères spéciaux HTML dans du contenu dynamique */
+  _esc(text) {
+    return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
   _formatToken(pair) {
-    const sym = pair.baseToken?.symbol || '???';
-    const name = pair.baseToken?.name || '';
+    const sym = this._esc(pair.baseToken?.symbol || '???');
+    const name = this._esc(pair.baseToken?.name || '');
     const price = parseFloat(pair.priceUsd || 0);
     const ch24 = pair.priceChange?.h24 || 0;
     const vol24 = pair.volume?.h24 || 0;
@@ -66,22 +71,22 @@ class Bot {
     const pairUrl = pair.url || `https://dexscreener.com/solana/${pair.pairAddress}`;
 
     return (
-      `*${sym}* (${name})\n` +
+      `<b>${sym}</b> (${name})\n` +
       `💰 Prix: $${price < 0.0001 ? price.toExponential(4) : price.toFixed(6)}\n` +
       `${arrow} 24h: ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(2)}%\n` +
       `📊 Volume 24h: $${this._fmt(vol24)}\n` +
       `💧 Liquidité: $${this._fmt(liq)}\n` +
       `📈 Market Cap: $${this._fmt(mc)}\n` +
-      `🔗 DEX: ${pair.dexId}\n` +
-      `📍 \`${pair.baseToken?.address}\`\n` +
-      `[Voir sur DexScreener](${pairUrl})`
+      `🔗 DEX: ${this._esc(pair.dexId)}\n` +
+      `📍 <code>${this._esc(pair.baseToken?.address || '')}</code>\n` +
+      `<a href="${pairUrl}">Voir sur DexScreener</a>`
     );
   }
 
   _formatDebate(debate) {
     const { bull, bear, decision, token } = debate;
-    const sym = token.baseToken?.symbol || '???';
-    const name = token.baseToken?.name || '';
+    const sym = this._esc(token.baseToken?.symbol || '???');
+    const name = this._esc(token.baseToken?.name || '');
     const price = parseFloat(token.priceUsd || 0);
     const ch24 = token.priceChange?.h24 || 0;
     const pairUrl = token.url || `https://dexscreener.com/solana/${token.pairAddress}`;
@@ -89,28 +94,28 @@ class Bot {
     const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision.decision] || '⚪';
 
     let msg = `━━━━━━━━━━━━━━━━━━━\n`;
-    if (debate.isGraduated) msg += `🎓 *TOKEN GRADUÉ — vient de quitter Pump.fun*\n`;
-    msg += `🪙 *$${sym}* — ${name}\n`;
+    if (debate.isGraduated) msg += `🎓 <b>TOKEN GRADUÉ — vient de quitter Pump.fun</b>\n`;
+    msg += `🪙 <b>$${sym}</b> — ${name}\n`;
     msg += `💰 $${price < 0.0001 ? price.toExponential(2) : price.toFixed(6)}  ${arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}%\n`;
-    msg += `[📊 Voir sur DexScreener](${pairUrl})\n`;
+    msg += `<a href="${pairUrl}">📊 Voir sur DexScreener</a>\n`;
     msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    msg += `🐂 *Bull* — ${bull.score}/10\n`;
-    (bull.arguments || []).slice(0, 3).forEach((a) => (msg += `  → ${a}\n`));
+    msg += `🐂 <b>Bull</b> — ${bull.score}/10\n`;
+    (bull.arguments || []).slice(0, 3).forEach((a) => (msg += `  → ${this._esc(a)}\n`));
 
-    msg += `\n🐻 *Bear* — ${bear.riskScore}/10  |  ${bear.verdict}\n`;
-    (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${f}\n`));
+    msg += `\n🐻 <b>Bear</b> — ${bear.riskScore}/10  |  ${bear.verdict}\n`;
+    (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
 
     // Données de sécurité Birdeye (si disponibles)
     const sec = formatSecurity(debate.security);
     if (sec) {
-      msg += `\n🔒 *Sécurité on-chain*\n`;
+      msg += `\n🔒 <b>Sécurité on-chain</b>\n`;
       msg += `  Mint: ${sec.mint}  |  Freeze: ${sec.freeze}\n`;
       msg += `  Top 10 holders: ${sec.top10}  |  Créateur: ${sec.creator}\n`;
     }
 
-    msg += `\n${decEmoji} *${decision.decision}*  —  confiance ${decision.confidence}/10\n`;
-    if (decision.reasoning) msg += `_${decision.reasoning}_\n`;
+    msg += `\n${decEmoji} <b>${decision.decision}</b>  —  confiance ${decision.confidence}/10\n`;
+    if (decision.reasoning) msg += `<i>${this._esc(decision.reasoning)}</i>\n`;
 
     if (decision.decision === 'BUY') {
       msg += `\n💸 Taille: ${decision.suggestedAmountPct}%  |  🛑 SL: -${decision.stopLossPct}%  |  🎯 TP: +${decision.takeProfitPct}%`;
@@ -121,25 +126,25 @@ class Bot {
 
   /** Alerte légère pour un nouveau token sur la bonding curve Pump.fun */
   _formatPumpNew(token) {
-    const sym = token.symbol || '???';
-    const name = token.name || '';
+    const sym = this._esc(token.symbol || '???');
+    const name = this._esc(token.name || '');
     const mcSol = token.marketCapSol ? `~${parseFloat(token.marketCapSol).toFixed(1)} SOL` : '?';
     const initialBuy = token.initialBuy ? `${parseFloat(token.initialBuy).toFixed(2)} SOL` : null;
     const pumpUrl = `https://pump.fun/coin/${token.mint}`;
 
     const links = [];
-    if (token.twitter) links.push(`[𝕏](${token.twitter})`);
-    if (token.telegram) links.push(`[TG](${token.telegram})`);
-    if (token.website) links.push(`[🌐](${token.website})`);
+    if (token.twitter) links.push(`<a href="${token.twitter}">𝕏</a>`);
+    if (token.telegram) links.push(`<a href="${token.telegram}">TG</a>`);
+    if (token.website) links.push(`<a href="${token.website}">🌐</a>`);
 
-    let msg = `🆕 *$${sym}* — ${name}\n`;
+    let msg = `🆕 <b>$${sym}</b> — ${name}\n`;
     msg += `👶 Bonding curve Pump.fun\n`;
     msg += `💰 Market cap: ${mcSol}`;
     if (initialBuy) msg += `  |  🛒 Initial buy: ${initialBuy}`;
     msg += `\n`;
     if (links.length > 0) msg += `${links.join('  |  ')}\n`;
-    msg += `📍 \`${token.mint}\`\n`;
-    msg += `[🔗 Voir sur Pump.fun](${pumpUrl})`;
+    msg += `📍 <code>${this._esc(token.mint)}</code>\n`;
+    msg += `<a href="${pumpUrl}">🔗 Voir sur Pump.fun</a>`;
 
     return msg;
   }
@@ -276,11 +281,11 @@ class Bot {
         }
         const pair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
 
-        await ctx.reply(this._formatToken(pair), { parse_mode: 'Markdown', disable_web_page_preview: true });
+        await ctx.reply(this._formatToken(pair), { parse_mode: 'HTML', disable_web_page_preview: true });
         await ctx.reply('🤖 Débat IA en cours...');
 
         const debate = await runDebate(pair);
-        await ctx.reply(this._formatDebate(debate), { parse_mode: 'Markdown' });
+        await ctx.reply(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {
           const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
@@ -382,7 +387,7 @@ class Bot {
 
       try {
         await this._send(this._formatPumpNew(token), {
-          parse_mode: 'Markdown',
+          parse_mode: 'HTML',
           disable_web_page_preview: true,
         });
       } catch (err) {
@@ -392,7 +397,7 @@ class Bot {
 
     this.scanner.on('debate', async (debate) => {
       try {
-        await this._send(this._formatDebate(debate), { parse_mode: 'Markdown' });
+        await this._send(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {
           const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
