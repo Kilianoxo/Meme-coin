@@ -161,10 +161,13 @@ class Bot {
         `*Commandes disponibles:*\n` +
         `/status — État du bot\n` +
         `/balance — Balance SOL\n` +
+        `/pnl — Résumé PnL global\n` +
         `/scan — Scanner maintenant\n` +
         `/positions — Positions ouvertes\n` +
         `/history — Historique des trades\n` +
         `/auto — Toggle auto\\-trade\n` +
+        `/settings — Voir les paramètres\n` +
+        `/set \\<clé\\> \\<valeur\\> — Modifier un paramètre\n` +
         `/analyse \\<adresse\\> — Analyser un token\n` +
         `/buy \\<adresse\\> \\<sol\\> — Achat manuel\n` +
         `/sell \\<adresse\\> \\[%\\] — Vente manuelle`,
@@ -255,6 +258,87 @@ class Bot {
         msg += '\n';
       }
       await ctx.reply(msg, { parse_mode: 'Markdown' });
+    });
+
+    bot.command('pnl', async (ctx) => {
+      const positions = this.trader.getPositions();
+      const history = this.trader.getHistory(100);
+
+      // PnL réalisé (trades SELL avec entryPriceUsd connu)
+      let realizedSol = 0;
+      const sellTrades = history.filter((t) => t.action === 'SELL' && t.pnlSol != null);
+      for (const t of sellTrades) realizedSol += t.pnlSol;
+
+      // PnL non réalisé (positions ouvertes)
+      let unrealizedLines = '';
+      let hasUnrealized = false;
+      for (const p of positions) {
+        if (!p.entryPriceUsd) continue;
+        const currentPrice = await this.trader.getCurrentPrice(p.tokenMint);
+        if (!currentPrice) continue;
+        const pnlPct = ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100;
+        const pnlSol = p.solSpent * (pnlPct / 100);
+        const arrow = pnlPct >= 0 ? '🟢' : '🔴';
+        const shortMint = `\`${p.tokenMint.slice(0, 12)}...\``;
+        unrealizedLines += `${arrow} ${shortMint}: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% (${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n`;
+        hasUnrealized = true;
+      }
+
+      let msg = `📊 *PnL Global*\n\n`;
+      msg += `✅ *Réalisé:* ${realizedSol >= 0 ? '+' : ''}${realizedSol.toFixed(4)} SOL`;
+      msg += ` (${sellTrades.length} trades clôturés)\n\n`;
+      if (hasUnrealized) {
+        msg += `📈 *Non réalisé (positions ouvertes):*\n${unrealizedLines}`;
+      } else {
+        msg += `📭 Aucune position ouverte avec prix d'entrée.`;
+      }
+
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+    });
+
+    bot.command('settings', async (ctx) => {
+      const sl = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT || '20');
+      const tp = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50');
+      const maxSol = this.maxPositionSol;
+
+      const msg =
+        `⚙️ *Paramètres actuels*\n\n` +
+        `💰 Max position: \`${maxSol} SOL\`\n` +
+        `🛑 Stop Loss par défaut: \`${sl}%\`\n` +
+        `🎯 Take Profit par défaut: \`${tp}%\`\n\n` +
+        `Pour modifier, utilise:\n` +
+        `/set maxsol <valeur> — ex: /set maxsol 0.05\n` +
+        `/set sl <valeur> — ex: /set sl 15\n` +
+        `/set tp <valeur> — ex: /set tp 80`;
+
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+    });
+
+    bot.command('set', async (ctx) => {
+      const parts = ctx.message.text.trim().split(/\s+/);
+      if (parts.length < 3) {
+        return ctx.reply('Usage: /set <maxsol|sl|tp> <valeur>\nEx: /set sl 15');
+      }
+      const [, key, rawVal] = parts;
+      const val = parseFloat(rawVal);
+      if (isNaN(val) || val <= 0) return ctx.reply('❌ Valeur invalide (doit être > 0).');
+
+      switch (key.toLowerCase()) {
+        case 'maxsol':
+          this.maxPositionSol = val;
+          await ctx.reply(`✅ Max position mis à jour: *${val} SOL*`, { parse_mode: 'Markdown' });
+          break;
+        case 'sl':
+          process.env.DEFAULT_STOP_LOSS_PCT = String(val);
+          await ctx.reply(`✅ Stop Loss par défaut mis à jour: *${val}%*`, { parse_mode: 'Markdown' });
+          break;
+        case 'tp':
+          process.env.DEFAULT_TAKE_PROFIT_PCT = String(val);
+          await ctx.reply(`✅ Take Profit par défaut mis à jour: *${val}%*`, { parse_mode: 'Markdown' });
+          break;
+        default:
+          await ctx.reply('❌ Clé inconnue. Utilise: maxsol, sl, ou tp');
+      }
     });
 
     bot.command('auto', async (ctx) => {

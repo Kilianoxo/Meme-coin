@@ -14,6 +14,10 @@ const {
 } = require('@solana/web3.js');
 const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
 const bs58 = require('bs58');
+const fs = require('fs');
+const path = require('path');
+
+const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
 const JUPITER_URL = 'https://quote-api.jup.ag/v6';
 const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
@@ -30,6 +34,37 @@ class Trader {
     this.positions = new Map(); // tokenAddress → position
     this.history = [];
     this._monitorTimer = null;
+    this._load();
+  }
+
+  // ─── Persistance ──────────────────────────────────────────────────────────
+
+  _load() {
+    try {
+      if (!fs.existsSync(PERSIST_FILE)) return;
+      const raw = fs.readFileSync(PERSIST_FILE, 'utf8');
+      const { positions, history } = JSON.parse(raw);
+      if (Array.isArray(history)) this.history = history;
+      if (Array.isArray(positions)) {
+        for (const p of positions) this.positions.set(p.tokenMint, p);
+      }
+      console.log(`[Trader] Chargé: ${this.positions.size} position(s), ${this.history.length} trade(s) depuis le disque.`);
+    } catch (err) {
+      console.warn('[Trader] Impossible de charger positions.json:', err.message);
+    }
+  }
+
+  _save() {
+    try {
+      fs.mkdirSync(path.dirname(PERSIST_FILE), { recursive: true });
+      const data = {
+        positions: Array.from(this.positions.values()),
+        history: this.history,
+      };
+      fs.writeFileSync(PERSIST_FILE, JSON.stringify(data, null, 2));
+    } catch (err) {
+      console.warn('[Trader] Impossible de sauvegarder positions.json:', err.message);
+    }
   }
 
   // ─── Wallet ──────────────────────────────────────────────────────────────
@@ -188,10 +223,12 @@ class Trader {
       entryPriceUsd,
       stopLossPct,
       takeProfitPct,
+      highPriceUsd: entryPriceUsd, // Pour le trailing stop-loss
       status: 'open',
     };
     this.positions.set(tokenMint, position);
     this.history.push({ action: 'BUY', ...position });
+    this._save();
 
     console.log(`[Trader] ✅ Achat OK — tx: ${txId}`);
     return { txId, quote, position };
@@ -215,11 +252,14 @@ class Trader {
     const quote = await this.getQuote(tokenMint, WSOL, amount.toString(), slippageBps);
     const txId = await this.executeSwap(quote);
 
-    const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now() };
+    const pos = this.positions.get(tokenMint);
+    const pnlSol = pos?.entryPriceUsd && quote.outAmountInSol
+      ? parseFloat(quote.outAmountInSol) - pos.solSpent
+      : null;
+    const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol };
     this.history.push(trade);
 
     if (pct === 100) {
-      const pos = this.positions.get(tokenMint);
       if (pos) {
         pos.status = 'closed';
         pos.sellTxId = txId;
@@ -227,6 +267,7 @@ class Trader {
       }
       this.positions.delete(tokenMint);
     }
+    this._save();
 
     console.log(`[Trader] ✅ Vente OK — tx: ${txId}`);
     return { txId, quote };
@@ -263,12 +304,26 @@ class Trader {
       const currentPrice = await this.getCurrentPrice(tokenMint);
       if (!currentPrice) continue;
 
+      // Trailing stop-loss : met à jour le prix le plus haut atteint
+      if (currentPrice > (pos.highPriceUsd || pos.entryPriceUsd)) {
+        pos.highPriceUsd = currentPrice;
+        this._save();
+      }
+
       const changePct = ((currentPrice - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+      // Trailing SL : recul depuis le plus haut
+      const dropFromHigh = pos.highPriceUsd
+        ? ((pos.highPriceUsd - currentPrice) / pos.highPriceUsd) * 100
+        : 0;
       const shortMint = tokenMint.slice(0, 8) + '...';
 
       let reason = null;
 
-      if (changePct <= -pos.stopLossPct) {
+      // Trailing stop-loss activé seulement si le prix a monté > 20% depuis l'entrée
+      const gainFromEntry = ((pos.highPriceUsd || pos.entryPriceUsd) - pos.entryPriceUsd) / pos.entryPriceUsd * 100;
+      if (gainFromEntry >= 20 && dropFromHigh >= pos.stopLossPct) {
+        reason = `📉 <b>TRAILING STOP</b> déclenché\n${shortMint}\nHaut: $${pos.highPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nRecul: -${dropFromHigh.toFixed(1)}%  |  PnL global: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`;
+      } else if (changePct <= -pos.stopLossPct) {
         reason = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
       } else if (changePct >= pos.takeProfitPct) {
         reason = `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
