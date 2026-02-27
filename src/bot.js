@@ -453,7 +453,7 @@ class Bot {
 
     // Démarre la surveillance SL/TP si le wallet est chargé
     if (this.trader.isReady()) {
-      this.trader.startMonitor((msg) => this._send(msg, { parse_mode: 'Markdown' }));
+      this.trader.startMonitor((msg) => this._send(msg, { parse_mode: 'HTML' }));
     }
 
     process.once('SIGINT', () => this.bot.stop('SIGINT'));

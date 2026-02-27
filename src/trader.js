@@ -269,21 +269,21 @@ class Trader {
       let reason = null;
 
       if (changePct <= -pos.stopLossPct) {
-        reason = `🛑 *STOP LOSS* déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
+        reason = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
       } else if (changePct >= pos.takeProfitPct) {
-        reason = `🎯 *TAKE PROFIT* déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
+        reason = `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
       }
 
       if (reason) {
         try {
-          console.log(`[Trader] ${reason.replace(/\*/g, '')}`);
+          console.log(`[Trader] ${reason.replace(/<[^>]+>/g, '')}`);
           const { txId } = await this.sell(tokenMint, 100);
           if (notify) {
-            notify(`${reason}\n[Voir la tx](https://solscan.io/tx/${txId})`);
+            notify(`${reason}\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`);
           }
         } catch (err) {
           console.error(`[Trader] Erreur vente SL/TP (${shortMint}): ${err.message}`);
-          if (notify) notify(`⚠️ Erreur vente SL/TP pour \`${shortMint}\`: ${err.message}`);
+          if (notify) notify(`⚠️ Erreur vente SL/TP pour <code>${shortMint}</code>: ${err.message}`);
         }
       }
     }
