@@ -12,6 +12,7 @@ const MODEL = 'claude-haiku-4-5-20251001'; // Rapide + économique pour les déb
 
 function formatTokenForAgents(token) {
   return JSON.stringify({
+    analysisDate: new Date().toISOString(),
     symbol: token.baseToken?.symbol,
     name: token.baseToken?.name,
     address: token.baseToken?.address,
@@ -47,10 +48,17 @@ async function runBullAgent(token) {
   const system = `Tu es un analyste crypto OPTIMISTE spécialisé dans les meme coins Solana.
 Tu analyses les données de marché pour identifier les opportunités de trading à court terme.
 Tu te concentres sur: momentum des prix, volume croissant, liquidité suffisante, hype.
+
+IMPORTANT — Analyse du nom et de la narrative:
+Le champ "analysisDate" indique la date réelle d'analyse. Utilise ta connaissance des événements
+mondiaux récents (géopolitique, culture pop, tendances crypto) pour évaluer si le nom/symbole du token
+surfe sur une narrative d'actualité forte (ex: conflit géopolitique, personnalité virale, mème en vogue).
+Une narrative d'actualité forte = multiplicateur de hype à court terme.
+
 Sois factuel et concis. Ne dépasse pas 3 arguments.
 
 Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
-{"score": <0-10>, "arguments": ["arg1", "arg2", "arg3"], "entryReason": "raison principale"}`;
+{"score": <0-10>, "arguments": ["arg1", "arg2", "arg3"], "entryReason": "raison principale", "narrative": "contexte narratif détecté ou null"}`;
 
   const text = await ask(system, `Analyse ce token:\n${formatTokenForAgents(token)}`, MODEL);
   return parseAgentJson(text, {
@@ -71,6 +79,12 @@ async function runBearAgent(token, security = null) {
 Tu cherches: liquidité trop basse, volume artificiel (txns faibles vs volume élevé), token trop récent,
 market cap vs fdv suspect, absence de holders, prix en chute libre.
 Si des données de sécurité on-chain sont fournies, utilise-les en priorité (mint authority, concentration holders).
+
+IMPORTANT — Narrative du nom:
+Évalue aussi si le nom/symbole semble être un opportunisme narratif sans substance
+(ex: nom collé à une actu mais aucune communauté réelle derrière, copie d'un token existant déjà établi).
+Une narrative forcée ou déjà exploitée par d'autres tokens = red flag supplémentaire.
+
 Sois factuel et concis. Ne dépasse pas 3 red flags.
 
 Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
