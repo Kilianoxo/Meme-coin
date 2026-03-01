@@ -161,7 +161,10 @@ class Bot {
       if (rug.warns.length > 0) msg += `  ⚠️ ${rug.warns.map((w) => this._esc(w)).join(', ')}\n`;
     }
 
-    msg += `\n${decEmoji} <b>${decision.decision}</b>  —  confiance ${decision.confidence}/10\n`;
+    const scoreBar = decision.score != null
+      ? `  —  <b>${decision.score}/100</b>`
+      : '';
+    msg += `\n${decEmoji} <b>${decision.decision}</b>${scoreBar}  —  confiance ${decision.confidence}/10\n`;
     if (decision.reasoning) msg += `<i>${this._esc(decision.reasoning)}</i>\n`;
 
     if (decision.decision === 'BUY') {

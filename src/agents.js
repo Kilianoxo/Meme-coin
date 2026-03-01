@@ -306,62 +306,127 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// COORDINATEUR — Score 0-100 déterministe + LLM uniquement pour le reasoning
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Risk Manager — Décision finale basée sur Bull + Bear + Momentum + Whale
- * @param {Object} momentum - Résultat de runMomentumAgent (optionnel)
- * @param {Object} whale    - Résultat de runWhaleAgent (optionnel)
- * Retourne: { decision: "BUY|SKIP|WAIT", confidence: 0-10, suggestedAmountPct: number,
- *             stopLossPct: number, takeProfitPct: number, reasoning: string }
+ * Composante sécurité on-chain — 0 à 15 points, 100% déterministe (pas de LLM)
  */
-async function runRiskManager(token, bullAnalysis, bearAnalysis, momentum = null, whale = null) {
-  const system = `Tu es le gestionnaire de risque d'un bot de trading meme coins Solana.
-Tu reçois 4 analyses spécialisées et prends la décision finale.
+function calcSecurityScore(security, rugReport, lpLock) {
+  if (rugReport?.rugged) return 0; // token déjà rugpull → 0 pt sec
 
-Règles de base:
-- Si bear.riskScore >= 8                                        → toujours SKIP
-- Si bear.riskScore >= 6 ET bull.score <= 5                    → SKIP
-- Si whale.concentrationRisk = "CRITICAL"                      → toujours SKIP
-- Si whale.distributionSignal = "DISTRIBUTING"                 → SKIP ou WAIT
-- Si momentum.trend = "REVERSAL"                               → penché fortement vers SKIP
-- Si momentum.warning != null OU whale.warning != null         → red flag supplémentaire
-- Si liquidity < 10000 USD                                     → SKIP
-- Si volume 24h < 50000 USD                                    → WAIT ou SKIP
-- suggestedAmountPct: max 5% du portfolio, commence à 1% si incertain
-- stopLossPct: défaut 20%, takeProfitPct: défaut 50%
-- Si momentum.trend = "ACCELERATING" ET whale.holderHealth != "CRITICAL" ET bear.riskScore < 5
-  → augmenter takeProfitPct et confidence
+  let pts = 15;
 
-Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
-{"decision": "BUY|SKIP|WAIT", "confidence": <0-10>, "suggestedAmountPct": <1-5>,
- "stopLossPct": <5-50>, "takeProfitPct": <10-200>, "reasoning": "explication courte"}`;
+  if (security?.mintAuthority)   pts -= 6; // mint active = peut printer à l'infini
+  if (security?.freezeAuthority) pts -= 3; // freeze active = peut geler les wallets
 
-  let content = `Token: ${formatTokenForAgents(token)}
-
-Analyse BULL (score ${bullAnalysis.score}/10):
-${JSON.stringify(bullAnalysis, null, 2)}
-
-Analyse BEAR (risque ${bearAnalysis.riskScore}/10, verdict: ${bearAnalysis.verdict}):
-${JSON.stringify(bearAnalysis, null, 2)}`;
-
-  if (momentum) {
-    content += `\n\nAnalyse MOMENTUM (score ${momentum.score}/10, trend: ${momentum.trend}):
-${JSON.stringify(momentum, null, 2)}`;
+  if (lpLock != null) {
+    if (lpLock.lpLockedPct < 30)  pts -= 4; // LP quasi non verrouillée
+    else if (lpLock.lpLockedPct < 70) pts -= 2; // LP partiellement verrouillée
   }
 
-  if (whale) {
-    content += `\n\nAnalyse WHALE (score ${whale.score}/10, concentration: ${whale.concentrationRisk}, holders: ${whale.holderHealth}):
-${JSON.stringify(whale, null, 2)}`;
+  if (rugReport) {
+    if (rugReport.score > 700)      pts -= 5;
+    else if (rugReport.score > 400) pts -= 2;
+    else if (rugReport.score > 200) pts -= 1;
   }
 
-  const text = await ask(system, content, MODEL);
-  return parseAgentJson(text, {
-    decision: 'SKIP',
-    confidence: 0,
-    suggestedAmountPct: 0,
-    stopLossPct: 20,
-    takeProfitPct: 50,
-    reasoning: 'Erreur lors de la décision finale',
-  });
+  return Math.max(0, pts);
+}
+
+/**
+ * Calcule le score global 0-100 à partir des 4 analyses agents + sécurité
+ * Pondération: Momentum 25 | Bull 20 | Bear 25 (inversé) | Whale 15 | Sécurité 15
+ * @returns {{ score: number, breakdown: Object }}
+ */
+function calcGlobalScore(bull, bear, momentum, whale, security, rugReport, lpLock) {
+  // Hard blocks → score 0 immédiatement
+  if (rugReport?.rugged || security?.mintAuthority) {
+    return { score: 0, breakdown: { momentum: 0, bull: 0, bear: 0, whale: 0, security: 0 } };
+  }
+
+  const breakdown = {
+    momentum: (momentum.score / 10) * 25,
+    bull:     (bull.score / 10) * 20,
+    bear:     ((10 - bear.riskScore) / 10) * 25,
+    whale:    (whale.score / 10) * 15,
+    security: calcSecurityScore(security, rugReport, lpLock),
+  };
+
+  const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
+  return { score: Math.round(Math.min(100, Math.max(0, total))), breakdown };
+}
+
+/** Décision déterministe depuis le score + hard rules */
+function scoreToDecision(score, bear, whale) {
+  if (whale.concentrationRisk === 'CRITICAL') return 'SKIP';
+  if (bear.riskScore >= 9)                    return 'SKIP';
+  if (score >= 70) return 'BUY';
+  if (score >= 50) return 'WAIT';
+  return 'SKIP';
+}
+
+/** SL/TP/sizing depuis le score + ajustement momentum */
+function scoreToParams(score, momentum) {
+  let suggestedAmountPct, stopLossPct, takeProfitPct;
+
+  if (score >= 80)      { suggestedAmountPct = 4; stopLossPct = 15; takeProfitPct = 100; }
+  else if (score >= 70) { suggestedAmountPct = 3; stopLossPct = 20; takeProfitPct = 75;  }
+  else if (score >= 60) { suggestedAmountPct = 2; stopLossPct = 20; takeProfitPct = 50;  }
+  else                  { suggestedAmountPct = 1; stopLossPct = 25; takeProfitPct = 50;  }
+
+  if (momentum.trend === 'ACCELERATING') {
+    takeProfitPct = Math.round(takeProfitPct * 1.3);
+    stopLossPct   = Math.max(10, stopLossPct - 3); // SL plus serré pour protéger les gains rapides
+  } else if (momentum.trend === 'FADING') {
+    takeProfitPct = Math.round(takeProfitPct * 0.8);
+  }
+
+  return { suggestedAmountPct, stopLossPct, takeProfitPct };
+}
+
+/**
+ * Coordinateur (Round 3) — Agrège les 4 analyses en un score 0-100
+ * Score, décision et SL/TP sont 100% déterministes.
+ * Le LLM est appelé uniquement pour rédiger le reasoning (1 phrase).
+ *
+ * Retourne: { score: 0-100, breakdown, decision, confidence: 0-10,
+ *             suggestedAmountPct, stopLossPct, takeProfitPct, reasoning }
+ */
+async function runCoordinator(token, bull, bear, momentum, whale, security, rugReport, lpLock) {
+  const { score, breakdown } = calcGlobalScore(bull, bear, momentum, whale, security, rugReport, lpLock);
+  const decision             = scoreToDecision(score, bear, whale);
+  const params               = scoreToParams(score, momentum);
+  const confidence           = Math.round(score / 10);
+
+  // LLM uniquement pour le reasoning — texte brut, pas de JSON
+  const system = `Tu es le coordinateur d'un bot de trading meme coins Solana.
+Le score calculé est ${score}/100 → décision: ${decision}.
+Écris UNE seule phrase courte et précise qui cite les 1-2 facteurs principaux ayant déterminé cette décision.
+Texte brut uniquement, pas de JSON, pas de markdown.`;
+
+  const content =
+    `Bull ${bull.score}/10 | Bear risk ${bear.riskScore}/10 (${bear.verdict})` +
+    ` | Momentum ${momentum.score}/10 (${momentum.trend})` +
+    ` | Whale ${whale.score}/10 (${whale.concentrationRisk}, ${whale.holderHealth})\n` +
+    `Breakdown: Momentum ${breakdown.momentum.toFixed(1)}/25 | Bull ${breakdown.bull.toFixed(1)}/20` +
+    ` | Bear ${breakdown.bear.toFixed(1)}/25 | Whale ${breakdown.whale.toFixed(1)}/15 | Sécurité ${breakdown.security}/15\n` +
+    (bull.entryReason   ? `Entry: ${bull.entryReason}\n` : '') +
+    (bear.redFlags?.length ? `Red flags: ${bear.redFlags.slice(0, 2).join(' | ')}\n` : '') +
+    (momentum.warning   ? `⚠️ Momentum: ${momentum.warning}\n` : '') +
+    (whale.warning      ? `⚠️ Whale: ${whale.warning}\n` : '');
+
+  const reasoning = await ask(system, content, MODEL);
+
+  return {
+    score,
+    breakdown,
+    decision,
+    confidence,
+    ...params,
+    reasoning: reasoning.trim().slice(0, 250),
+  };
 }
 
 /**
@@ -369,7 +434,7 @@ ${JSON.stringify(whale, null, 2)}`;
  *
  * Round 1 (parallèle)  : Momentum + Whale — agents de données spécialisés
  * Round 2 (parallèle)  : Bull(momentum) + Bear(whale) — agents de débat enrichis
- * Round 3 (séquentiel) : Risk Manager — décision finale avec toutes les analyses
+ * Round 3 (séquentiel) : Coordinateur — score 0-100 déterministe + reasoning LLM
  *
  * @param {Object} token     - Données de paire DexScreener
  * @param {Object} security  - Données de sécurité Birdeye (optionnel)
@@ -401,11 +466,11 @@ async function runDebate(token, security = null, rugReport = null, overview = nu
     runBearAgent(token, security, rugReport, lpLock, whale),
   ]);
 
-  // Round 3: décision finale
-  const decision = await runRiskManager(token, bull, bear, momentum, whale);
+  // Round 3: Coordinateur — score déterministe + reasoning LLM
+  const decision = await runCoordinator(token, bull, bear, momentum, whale, security, rugReport, lpLock);
 
   console.log(
-    `[Agents] ${symbol} → ${decision.decision} | confiance ${decision.confidence}/10` +
+    `[Agents] ${symbol} → ${decision.decision} | score ${decision.score}/100 | confiance ${decision.confidence}/10` +
     ` | momentum ${momentum.score}/10 (${momentum.trend})` +
     ` | whale ${whale.score}/10 (${whale.concentrationRisk})`
   );
