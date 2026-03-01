@@ -30,6 +30,7 @@ function _rotate() {
 
 function _write(type, data) {
   try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
     _rotate();
     const line = JSON.stringify({ ts: new Date().toISOString(), type, ...data }) + '\n';
     fs.appendFileSync(LOG_FILE, line, 'utf8');
