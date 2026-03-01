@@ -468,6 +468,38 @@
       line-height: 1.8;
     }
     .empty-floor .big { font-size: 36px; margin-bottom: 12px; }
+
+    /* ── Recent analyses grid ─────────────────────────────────────────── */
+    .analyses-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 10px;
+      padding: 16px 20px;
+    }
+    .analysis-card {
+      background: var(--card2);
+      border-radius: 8px;
+      padding: 12px 14px;
+      border: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: transform .12s, box-shadow .12s;
+    }
+    .analysis-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.35); }
+    .analysis-card.ac-green  { border-color: var(--green);  box-shadow: 0 0 0 1px rgba(63,185,80,.25); }
+    .analysis-card.ac-orange { border-color: var(--orange); box-shadow: 0 0 0 1px rgba(240,136,62,.25); }
+    .analysis-card.ac-red    { border-color: var(--red);    box-shadow: 0 0 0 1px rgba(248,81,73,.25); }
+    .ac-symbol { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ac-score  { font-size: 22px; font-weight: 800; line-height: 1; }
+    .ac-score.ac-green  { color: var(--green); }
+    .ac-score.ac-orange { color: var(--orange); }
+    .ac-score.ac-red    { color: var(--red); }
+    .ac-decision { font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+    .ac-decision.ac-green  { color: var(--green); }
+    .ac-decision.ac-orange { color: var(--orange); }
+    .ac-decision.ac-red    { color: var(--red); }
+    .ac-time { font-size: 11px; color: var(--txt2); margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -641,6 +673,17 @@
             <tr><td colspan="6" class="empty">Aucun trade dans l'historique</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- ── 20 derniers tokens analysés ──────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>🔬 Derniers tokens analysés</h2>
+        <span class="c-muted" style="font-size:12px" id="analysesCount">—</span>
+      </div>
+      <div id="analysesGrid" class="analyses-grid">
+        <div class="empty" style="grid-column:1/-1">Aucune analyse pour l'instant</div>
       </div>
     </div>
 
@@ -883,6 +926,7 @@ function render(d) {
   renderWeekly(d.weekly);
   renderPositions(d.positions);
   renderHistory(d.history);
+  renderRecentAnalyses(d.recentAnalyses);
 }
 
 function renderStats(s, w) {
@@ -1020,6 +1064,32 @@ function renderHistory(history) {
         <td>${pnlStr}</td>
         <td>${result}</td>
       </tr>`;
+  }).join('');
+}
+
+function renderRecentAnalyses(analyses) {
+  const grid  = document.getElementById('analysesGrid');
+  const count = document.getElementById('analysesCount');
+  if (!analyses || analyses.length === 0) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1">Aucune analyse pour l\'instant</div>';
+    count.textContent = '—';
+    return;
+  }
+  count.textContent = analyses.length + ' / 20';
+  grid.innerHTML = analyses.map(a => {
+    const isBuy    = a.decision === 'BUY';
+    const isHot    = !isBuy && a.score != null && a.score > 50;
+    const cls      = isBuy ? 'ac-green' : isHot ? 'ac-orange' : 'ac-red';
+    const scoreStr = a.score != null ? a.score + '/100' : '—';
+    const timeStr  = a.timestamp ? fTime(a.timestamp) : '';
+    const dexUrl   = `https://dexscreener.com/solana/${a.mint}`;
+    const label    = isBuy ? '✅ VALIDÉ' : isHot ? '🔶 REFUSÉ' : '❌ REFUSÉ';
+    return `<a class="analysis-card ${cls}" href="${dexUrl}" target="_blank" title="${esc(a.mint)}">
+      <div class="ac-symbol">$${esc(a.symbol)}</div>
+      <div class="ac-score ${cls}">${scoreStr}</div>
+      <div class="ac-decision ${cls}">${label}</div>
+      <div class="ac-time">${timeStr}</div>
+    </a>`;
   }).join('');
 }
 

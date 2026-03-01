@@ -288,7 +288,8 @@ class Dashboard {
     const weekWins  = weekSells.filter(h => h.pnlSol > 0).length;
 
     return {
-      updatedAt: Date.now(),
+      updatedAt:       Date.now(),
+      recentAnalyses:  state.recentAnalyses,
       stats: {
         realizedPnl:   parseFloat(realizedPnl.toFixed(6)),
         winRate,
