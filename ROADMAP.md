@@ -15,7 +15,7 @@
 
 | # | Tâche | Priorité | Statut |
 |---|-------|----------|--------|
-| 7 | Détection rugpull / honeypot (RugCheck API) | Critique | ❌ À faire |
+| 7 | Détection rugpull / honeypot (RugCheck API) | Critique | ✅ Done |
 | 8 | Analyse on-chain : holders, top wallets, concentration | Critique | ⚠️ Partiel (mint/freeze/top10% via Birdeye, manque nb holders) |
 | 9 | Analyse liquidité : pool size, locked, slippage | Critique | ⚠️ Partiel (liquidité USD dispo, pas de "locked" vérification) |
 | 10 | Analyse social : Twitter/X, Telegram | Important | ⚠️ Partiel (présence de liens détectée, pas d'analyse réelle — narrative via LLM ✅) |

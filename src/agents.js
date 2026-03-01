@@ -70,11 +70,12 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 
 /**
  * Agent BEAR — Pessimiste, cherche les risques
- * @param {Object} token    - Données DexScreener
- * @param {Object} security - Données Birdeye (optionnel)
+ * @param {Object} token     - Données DexScreener
+ * @param {Object} security  - Données Birdeye (optionnel)
+ * @param {Object} rugReport - Résumé RugCheck (optionnel)
  * Retourne: { riskScore: 0-10, redFlags: string[], verdict: "AVOID|CAUTION|OK" }
  */
-async function runBearAgent(token, security = null) {
+async function runBearAgent(token, security = null, rugReport = null) {
   const system = `Tu es un analyste crypto PESSIMISTE spécialisé dans la détection de rug pulls et scams sur Solana.
 Tu cherches: liquidité trop basse, volume artificiel (txns faibles vs volume élevé), token trop récent,
 market cap vs fdv suspect, absence de holders, prix en chute libre.
@@ -99,6 +100,15 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 - Top 10 holders: ${security.top10HolderPercent?.toFixed(1) ?? '?'}% du supply
 - Part du créateur: ${security.creatorPercentage?.toFixed(1) ?? '?'}% du supply
 - Part de l'owner: ${security.ownerPercentage?.toFixed(1) ?? '?'}% du supply`;
+  }
+
+  if (rugReport) {
+    content += `\n\nAnalyse RugCheck:
+- Score de risque: ${rugReport.score}/1000 (${rugReport.riskLevel}) — plus haut = plus dangereux
+- Déjà rugpull: ${rugReport.rugged ? '🔴 OUI' : '✅ Non'}`;
+    if (rugReport.significantRisks.length > 0) {
+      content += `\n- Risques détectés:\n${rugReport.significantRisks.map((r) => `  • ${r}`).join('\n')}`;
+    }
   }
 
   const text = await ask(system, content, MODEL);
@@ -151,24 +161,27 @@ ${JSON.stringify(bearAnalysis, null, 2)}`;
 
 /**
  * Lance le débat complet entre les 3 agents pour un token
- * @param {Object} token    - Données de paire DexScreener
- * @param {Object} security - Données de sécurité Birdeye (optionnel)
- * @returns {Promise<{bull, bear, decision, token, security}>}
+ * @param {Object} token     - Données de paire DexScreener
+ * @param {Object} security  - Données de sécurité Birdeye (optionnel)
+ * @param {Object} rugReport - Résumé RugCheck (optionnel)
+ * @returns {Promise<{bull, bear, decision, token, security, rugReport}>}
  */
-async function runDebate(token, security = null) {
+async function runDebate(token, security = null, rugReport = null) {
   const symbol = token.baseToken?.symbol || '???';
-  console.log(`[Agents] Débat pour ${symbol}${security ? ' (avec données Birdeye)' : ''}...`);
+  const sources = [security ? 'Birdeye' : null, rugReport ? 'RugCheck' : null].filter(Boolean);
+  const sourceStr = sources.length > 0 ? ` (${sources.join(' + ')})` : '';
+  console.log(`[Agents] Débat pour ${symbol}${sourceStr}...`);
 
   const [bull, bear] = await Promise.all([
     runBullAgent(token),
-    runBearAgent(token, security),
+    runBearAgent(token, security, rugReport),
   ]);
 
   const decision = await runRiskManager(token, bull, bear);
 
   console.log(`[Agents] ${symbol} → ${decision.decision} (confiance: ${decision.confidence}/10)`);
 
-  return { bull, bear, decision, token, security };
+  return { bull, bear, decision, token, security, rugReport };
 }
 
 module.exports = { runDebate };

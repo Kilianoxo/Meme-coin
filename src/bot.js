@@ -18,6 +18,7 @@ const { Telegraf, Markup } = require('telegraf');
 const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
 const { formatSecurity } = require('./birdeye');
+const rugcheck = require('./rugcheck');
 
 class Bot {
   constructor(trader, scanner) {
@@ -112,6 +113,16 @@ class Bot {
       msg += `\n🔒 <b>Sécurité on-chain</b>\n`;
       msg += `  Mint: ${sec.mint}  |  Freeze: ${sec.freeze}\n`;
       msg += `  Top 10 holders: ${sec.top10}  |  Créateur: ${sec.creator}\n`;
+    }
+
+    // Score RugCheck (si disponible)
+    const rug = rugcheck.formatReport(debate.rugReport);
+    if (rug) {
+      msg += `\n${rug.scoreEmoji} <b>RugCheck</b> — Score: ${rug.score}/1000`;
+      if (rug.rugged) msg += `  🔴 <b>DÉJÀ RUGPULL</b>`;
+      msg += `\n`;
+      if (rug.dangers.length > 0) msg += `  🔴 ${rug.dangers.map((d) => this._esc(d)).join(', ')}\n`;
+      if (rug.warns.length > 0) msg += `  ⚠️ ${rug.warns.map((w) => this._esc(w)).join(', ')}\n`;
     }
 
     msg += `\n${decEmoji} <b>${decision.decision}</b>  —  confiance ${decision.confidence}/10\n`;
@@ -368,7 +379,8 @@ class Bot {
         await ctx.reply(this._formatToken(pair), { parse_mode: 'HTML', disable_web_page_preview: true });
         await ctx.reply('🤖 Débat IA en cours...');
 
-        const debate = await runDebate(pair);
+        const rugReport = await rugcheck.getTokenReport(pair.baseToken?.address);
+        const debate = await runDebate(pair, null, rugReport);
         await ctx.reply(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {
