@@ -87,86 +87,101 @@ class Bot {
 
   _formatDebate(debate) {
     const { bull, bear, momentum, whale, decision, token } = debate;
-    const sym = this._esc(token.baseToken?.symbol || '???');
-    const name = this._esc(token.baseToken?.name || '');
-    const price = parseFloat(token.priceUsd || 0);
-    const ch24 = token.priceChange?.h24 || 0;
-    const pairUrl = token.url || `https://dexscreener.com/solana/${token.pairAddress}`;
-    const arrow = ch24 >= 0 ? '🟢' : '🔴';
+    const sym      = this._esc(token.baseToken?.symbol || '???');
+    const name     = this._esc(token.baseToken?.name || '');
+    const price    = parseFloat(token.priceUsd || 0);
+    const ch24     = token.priceChange?.h24 || 0;
+    const ch1      = token.priceChange?.h1  || 0;
+    const pairUrl  = token.url || `https://dexscreener.com/solana/${token.pairAddress}`;
     const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision.decision] || '⚪';
+
+    // ─── Header ────────────────────────────────────────────────────────────
+    const priceStr  = price < 0.0001 ? price.toExponential(2) : price.toFixed(6);
+    const ch24Arrow = ch24 >= 0 ? '🟢' : '🔴';
+    const ch1Arrow  = ch1  >= 0 ? '▲'  : '▼';
 
     let msg = `━━━━━━━━━━━━━━━━━━━\n`;
     if (debate.isGraduated) msg += `🎓 <b>TOKEN GRADUÉ — vient de quitter Pump.fun</b>\n`;
     msg += `🪙 <b>$${sym}</b> — ${name}\n`;
-    msg += `💰 $${price < 0.0001 ? price.toExponential(2) : price.toFixed(6)}  ${arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}%\n`;
-    msg += `<a href="${pairUrl}">📊 Voir sur DexScreener</a>\n`;
+    msg += `💰 $${priceStr}  ${ch24Arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}% 24h`;
+    if (ch1 !== 0) msg += `  ${ch1Arrow} ${Math.abs(ch1).toFixed(1)}% 1h`;
+    msg += `\n<a href="${pairUrl}">📊 DexScreener</a>\n`;
     msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    msg += `🐂 <b>Bull</b> — ${bull.score}/10\n`;
-    (bull.arguments || []).slice(0, 3).forEach((a) => (msg += `  → ${this._esc(a)}\n`));
+    // ─── Verdict + Score (en premier) ──────────────────────────────────────
+    const scoreStr = decision.score != null ? `  —  <b>${decision.score}/100</b>` : '';
+    msg += `${decEmoji} <b>${decision.decision}</b>${scoreStr}  —  confiance ${decision.confidence}/10\n`;
+    if (decision.reasoning) msg += `<i>${this._esc(decision.reasoning)}</i>\n`;
 
-    msg += `\n🐻 <b>Bear</b> — ${bear.riskScore}/10  |  ${bear.verdict}\n`;
-    (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
-
-    // Momentum (si disponible)
+    // ─── Agent Momentum ────────────────────────────────────────────────────
     if (momentum) {
       const trendEmoji = { ACCELERATING: '🚀', STABLE: '➡️', FADING: '📉', REVERSAL: '🔄' }[momentum.trend] || '❓';
-      const volEmoji = { GROWING: '📈', STABLE: '➡️', DECLINING: '📉' }[momentum.volumeSignal] || '';
-      msg += `\n⚡ <b>Momentum</b> — ${momentum.score}/10  |  ${trendEmoji} ${this._esc(momentum.trend)}  |  Vol ${volEmoji}\n`;
+      const volEmoji   = { GROWING: '📈', STABLE: '➡️', DECLINING: '📉' }[momentum.volumeSignal] || '';
+      msg += `\n⚡ <b>Momentum</b> ${momentum.score}/10  |  ${trendEmoji} ${this._esc(momentum.trend)}  |  ${volEmoji} Vol\n`;
       (momentum.signals || []).slice(0, 2).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
       if (momentum.warning) msg += `  ⚠️ ${this._esc(momentum.warning)}\n`;
     }
 
-    // Whale / Structure de détention (si disponible)
+    // ─── Agent Bull ────────────────────────────────────────────────────────
+    msg += `\n🐂 <b>Bull</b> ${bull.score}/10`;
+    if (bull.narrative) msg += `  |  💬 ${this._esc(bull.narrative)}`;
+    msg += '\n';
+    (bull.arguments || []).slice(0, 2).forEach((a) => (msg += `  → ${this._esc(a)}\n`));
+
+    // ─── Agent Bear ────────────────────────────────────────────────────────
+    msg += `\n🐻 <b>Bear</b> ${bear.riskScore}/10  |  ${this._esc(bear.verdict)}\n`;
+    (bear.redFlags || []).slice(0, 2).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
+
+    // ─── Agent Whale ───────────────────────────────────────────────────────
     if (whale) {
       const concEmoji = { LOW: '✅', MEDIUM: '🟡', HIGH: '🟠', CRITICAL: '🔴' }[whale.concentrationRisk] || '❓';
       const distEmoji = { ACCUMULATING: '📥', NEUTRAL: '➡️', DISTRIBUTING: '📤' }[whale.distributionSignal] || '❓';
       const hlthEmoji = { HEALTHY: '✅', MODERATE: '🟡', THIN: '🟠', CRITICAL: '🔴' }[whale.holderHealth] || '❓';
-      msg += `\n🐋 <b>Whale</b> — ${whale.score}/10  |  ${concEmoji} Conc. ${this._esc(whale.concentrationRisk)}  |  ${distEmoji} ${this._esc(whale.distributionSignal)}\n`;
-      msg += `  ${hlthEmoji} Holders: ${this._esc(whale.holderHealth)}\n`;
-      (whale.signals || []).slice(0, 2).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
+      msg += `\n🐋 <b>Whale</b> ${whale.score}/10  |  ${concEmoji} ${this._esc(whale.concentrationRisk)}  |  ${distEmoji} ${this._esc(whale.distributionSignal)}  |  ${hlthEmoji} ${this._esc(whale.holderHealth)}\n`;
+      (whale.signals || []).slice(0, 1).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
       if (whale.warning) msg += `  ⚠️ ${this._esc(whale.warning)}\n`;
     }
 
-    // Données de sécurité Birdeye (si disponibles)
-    const sec = formatSecurity(debate.security, debate.overview);
-    if (sec) {
-      msg += `\n🔒 <b>Sécurité on-chain</b>\n`;
-      msg += `  Mint: ${sec.mint}  |  Freeze: ${sec.freeze}\n`;
-      msg += `  Top 10 holders: ${sec.top10}  |  Créateur: ${sec.creator}\n`;
-      if (sec.holders) {
-        const holdersEmoji = parseInt(sec.holders.replace(/\s/g, ''), 10) < 200 ? '⚠️' : '👥';
-        msg += `  ${holdersEmoji} Holders uniques: ${sec.holders}\n`;
+    // ─── Sécurité (condensée sur 2 lignes max) ─────────────────────────────
+    const sec    = formatSecurity(debate.security, debate.overview);
+    const rug    = rugcheck.formatReport(debate.rugReport);
+    const hasLp  = debate.lpLock != null;
+
+    if (sec || hasLp || rug) {
+      msg += '\n';
+
+      // Ligne 1 : Mint + Freeze + Holders (sans top10/creator — déjà dans Whale)
+      if (sec) {
+        msg += `🔒 Mint: ${sec.mint}  |  Freeze: ${sec.freeze}`;
+        if (sec.holders) {
+          const hNum = parseInt(sec.holders.replace(/\s/g, ''), 10);
+          msg += `  |  ${hNum < 200 ? '⚠️' : '👥'} ${sec.holders} holders`;
+        }
+        msg += '\n';
       }
+
+      // Ligne 2 : LP lock + RugCheck
+      const secLine2 = [];
+      if (hasLp) {
+        const pct    = debate.lpLock.lpLockedPct;
+        const usd    = debate.lpLock.lpLockedUSD;
+        const usdStr = usd >= 1000 ? `$${(usd / 1000).toFixed(1)}K` : `$${usd.toFixed(0)}`;
+        secLine2.push(`${pct >= 80 ? '🔐' : pct >= 50 ? '⚠️' : '🔓'} LP: ${pct.toFixed(0)}% (${usdStr})`);
+      }
+      if (rug) {
+        secLine2.push(rug.rugged ? `🔴 <b>RUGPULL DÉTECTÉ</b>` : `${rug.scoreEmoji} RC: ${rug.score}/1000`);
+      }
+      if (secLine2.length > 0) {
+        if (!sec) msg += '🔒 ';
+        msg += secLine2.join('  |  ') + '\n';
+      }
+
+      // Ligne 3 : Risques RugCheck détaillés (si présents)
+      if (rug?.dangers?.length > 0) msg += `  🔴 ${rug.dangers.map((d) => this._esc(d)).join(', ')}\n`;
+      if (rug?.warns?.length  > 0) msg += `  ⚠️ ${rug.warns.map((w) => this._esc(w)).join(', ')}\n`;
     }
 
-    // LP lock (si disponible)
-    if (debate.lpLock != null) {
-      const pct = debate.lpLock.lpLockedPct;
-      const usd = debate.lpLock.lpLockedUSD;
-      const usdStr = usd >= 1000 ? `$${(usd / 1000).toFixed(1)}K` : `$${usd.toFixed(0)}`;
-      const lpEmoji = pct >= 80 ? '🔐' : pct >= 50 ? '⚠️' : '🔓';
-      const lpLabel = pct >= 80 ? 'verrouillée' : pct > 0 ? 'partiellement verrouillée' : 'non verrouillée';
-      if (!sec) msg += `\n🔒 <b>Sécurité on-chain</b>\n`;
-      msg += `  ${lpEmoji} LP lock: ${pct.toFixed(1)}% (${usdStr}) — ${lpLabel}\n`;
-    }
-
-    // Score RugCheck (si disponible)
-    const rug = rugcheck.formatReport(debate.rugReport);
-    if (rug) {
-      msg += `\n${rug.scoreEmoji} <b>RugCheck</b> — Score: ${rug.score}/1000`;
-      if (rug.rugged) msg += `  🔴 <b>DÉJÀ RUGPULL</b>`;
-      msg += `\n`;
-      if (rug.dangers.length > 0) msg += `  🔴 ${rug.dangers.map((d) => this._esc(d)).join(', ')}\n`;
-      if (rug.warns.length > 0) msg += `  ⚠️ ${rug.warns.map((w) => this._esc(w)).join(', ')}\n`;
-    }
-
-    const scoreBar = decision.score != null
-      ? `  —  <b>${decision.score}/100</b>`
-      : '';
-    msg += `\n${decEmoji} <b>${decision.decision}</b>${scoreBar}  —  confiance ${decision.confidence}/10\n`;
-    if (decision.reasoning) msg += `<i>${this._esc(decision.reasoning)}</i>\n`;
-
+    // ─── SL/TP (uniquement si BUY) ────────────────────────────────────────
     if (decision.decision === 'BUY') {
       msg += `\n💸 Taille: ${decision.suggestedAmountPct}%  |  🛑 SL: -${decision.stopLossPct}%  |  🎯 TP: +${decision.takeProfitPct}%`;
     }
