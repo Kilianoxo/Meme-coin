@@ -93,16 +93,35 @@ class PaperTrader extends EventEmitter {
     const symbol  = token?.baseToken?.symbol || address?.slice(0, 6) || '???';
 
     if (!address || score == null) return;
-    if (score < this.state.config.minScore) return;
+    if (score < this.state.config.minScore) {
+      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — score ${score} < minScore ${this.state.config.minScore}`);
+      return;
+    }
     if (this.state.positions[address]) return;       // déjà en portefeuille
-    if (Object.keys(this.state.positions).length >= this.state.config.maxPositions) return;
+    if (Object.keys(this.state.positions).length >= this.state.config.maxPositions) {
+      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — max positions atteint (${this.state.config.maxPositions})`);
+      return;
+    }
 
     const { config } = this.state;
     const amountSol = (config.currentBalance * config.maxPositionPct) / 100;
-    if (amountSol < 0.001 || amountSol > config.currentBalance) return;
+    if (amountSol < 0.001 || amountSol > config.currentBalance) {
+      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — solde insuffisant (${config.currentBalance.toFixed(4)} ◎)`);
+      return;
+    }
 
-    const price = await this._fetchPrice(address);
-    if (!price || price <= 0) return;
+    // Jupiter Price API en priorité, fallback sur le prix DexScreener du token
+    let price = await this._fetchPrice(address);
+    if (!price || price <= 0) {
+      const dexPrice = token.priceUsd ? parseFloat(token.priceUsd) : null;
+      if (dexPrice && dexPrice > 0) {
+        price = dexPrice;
+        console.log(`[PaperTrader] ⚠️  $${symbol} — Jupiter sans prix, fallback DexScreener @ ${dexPrice}`);
+      } else {
+        console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — prix introuvable (Jupiter + DexScreener)`);
+        return;
+      }
+    }
 
     const tokensHeld = amountSol / price;
 
