@@ -2,7 +2,8 @@
  * Bot Telegram — Interface complète de contrôle
  *
  * Commandes:
- *   /start      — Bienvenue + liste des commandes
+ *   /start      — Bienvenue
+ *   /help       — Liste complète des commandes avec descriptions
  *   /status     — État général du bot
  *   /balance    — Balance SOL du wallet
  *   /scan       — Lancer un scan manuel
@@ -185,8 +186,44 @@ class Bot {
         `/set \\<clé\\> \\<valeur\\> — Modifier un paramètre\n` +
         `/analyse \\<adresse\\> — Analyser un token\n` +
         `/buy \\<adresse\\> \\<sol\\> — Achat manuel\n` +
-        `/sell \\<adresse\\> \\[%\\] — Vente manuelle`,
+        `/sell \\<adresse\\> \\[%\\] — Vente manuelle\n\n` +
+        `/help — Aide détaillée de toutes les commandes`,
         { parse_mode: 'MarkdownV2' }
+      );
+    });
+
+    bot.command('help', async (ctx) => {
+      await ctx.reply(
+        `📖 <b>Aide — Meme Coin Bot</b>\n\n` +
+
+        `<b>Infos générales</b>\n` +
+        `/start — Message de bienvenue\n` +
+        `/help — Cette aide\n` +
+        `/status — État du bot (scanner, positions, balance)\n` +
+        `/balance — Balance SOL du wallet\n\n` +
+
+        `<b>Trading</b>\n` +
+        `/auto — Activer/désactiver le trading automatique\n` +
+        `/scan — Lancer un scan manuel toutes sources\n` +
+        `/analyse &lt;adresse&gt; — Analyse complète d'un token\n` +
+        `  → Débat IA (Bull / Bear / Risk Manager)\n` +
+        `  → Sécurité on-chain (mint, freeze, holders)\n` +
+        `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel en SOL\n` +
+        `/sell &lt;adresse&gt; [%] — Vente manuelle (défaut: 100%)\n\n` +
+
+        `<b>Suivi</b>\n` +
+        `/positions — Positions ouvertes + PnL non réalisé\n` +
+        `/history — 10 derniers trades clôturés\n` +
+        `/pnl — PnL réalisé + non réalisé global\n\n` +
+
+        `<b>Paramètres</b>\n` +
+        `/settings — Afficher les paramètres actuels\n` +
+        `/set maxsol &lt;valeur&gt; — Mise max par trade en SOL\n` +
+        `/set sl &lt;valeur&gt; — Stop-loss en % (défaut: 20)\n` +
+        `/set tp &lt;valeur&gt; — Take-profit en % (défaut: 50)\n\n` +
+
+        `<i>Trailing stop activé automatiquement après +20% de gain.</i>`,
+        { parse_mode: 'HTML' }
       );
     });
 
