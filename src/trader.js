@@ -253,9 +253,8 @@ class Trader {
     const txId = await this.executeSwap(quote);
 
     const pos = this.positions.get(tokenMint);
-    const pnlSol = pos?.entryPriceUsd && quote.outAmountInSol
-      ? parseFloat(quote.outAmountInSol) - pos.solSpent
-      : null;
+    const solReceived = parseFloat(quote.outAmount) / LAMPORTS_PER_SOL;
+    const pnlSol = pos ? solReceived - pos.solSpent : null;
     const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol };
     this.history.push(trade);
 
