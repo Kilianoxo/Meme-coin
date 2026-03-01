@@ -469,6 +469,99 @@
     }
     .empty-floor .big { font-size: 36px; margin-bottom: 12px; }
 
+    /* ═══════════════════════════════════════════════════════════════════
+       PAPER TRADING
+    ══════════════════════════════════════════════════════════════════ */
+
+    /* ── Portfolio header ─────────────────────────────────────────────── */
+    .paper-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 0 18px;
+    }
+    .paper-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(227,179,65,.12);
+      border: 1px solid rgba(227,179,65,.3);
+      color: var(--yellow);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 20px;
+      letter-spacing: .4px;
+    }
+
+    /* ── Config panel ─────────────────────────────────────────────────── */
+    .config-panel {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      align-items: flex-end;
+    }
+    .config-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .config-label {
+      font-size: 11px;
+      color: var(--txt2);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .config-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--txt);
+      font-family: inherit;
+      font-size: 13px;
+      padding: 7px 11px;
+      width: 90px;
+      transition: border-color .15s;
+    }
+    .config-input:focus { outline: none; border-color: var(--yellow); }
+
+    .reset-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      margin-top: 6px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .btn-save {
+      background: rgba(227,179,65,.12);
+      border: 1px solid rgba(227,179,65,.35);
+      color: var(--yellow);
+    }
+    .btn-save:hover { background: rgba(227,179,65,.22); }
+    .btn-reset {
+      background: rgba(248,81,73,.08);
+      border: 1px solid rgba(248,81,73,.25);
+      color: var(--red);
+    }
+    .btn-reset:hover { background: rgba(248,81,73,.18); }
+    .btn-sell-paper {
+      background: rgba(248,81,73,.08);
+      border: 1px solid rgba(248,81,73,.22);
+      color: var(--red);
+      padding: 3px 10px;
+      font-size: 11px;
+    }
+    .btn-sell-paper:hover { background: rgba(248,81,73,.18); }
+
+    /* ── Paper PnL total card ─────────────────────────────────────────── */
+    .pnl-total-big {
+      font-size: 32px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
     /* ── Recent analyses grid ─────────────────────────────────────────── */
     .analyses-grid {
       display: grid;
@@ -520,6 +613,7 @@
 <nav class="tab-nav">
   <button class="tab-nav-btn active" data-page="dashboard">📊 Dashboard</button>
   <button class="tab-nav-btn"        data-page="floor">💬 Trading Floor</button>
+  <button class="tab-nav-btn"        data-page="paper">🧪 Paper Trading</button>
 </nav>
 
 <div class="main">
@@ -787,6 +881,202 @@
     </div>
 
   </div><!-- /page-floor -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : PAPER TRADING
+  ════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="page-paper">
+
+    <div class="paper-header">
+      <span class="paper-badge">🧪 SIMULATION — Aucun SOL réel</span>
+      <span class="c-muted" style="font-size:12px">Les analyses proviennent du vrai bot, les trades sont virtuels.</span>
+    </div>
+
+    <!-- ── Stat cards ─────────────────────────────────────────────────────── -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Portefeuille</div>
+        <div class="pnl-total-big" id="ppPortfolio">—</div>
+        <div class="card-sub" id="ppPortfolioSub">— SOL de départ</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL Total</div>
+        <div class="card-value" id="ppTotalPnl">—</div>
+        <div class="card-sub" id="ppTotalPct">—</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL Réalisé</div>
+        <div class="card-value" id="ppRealPnl">—</div>
+        <div class="card-sub" id="ppTrades">— trades</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value" id="ppWr">—</div>
+        <div class="card-sub" id="ppWrSub">— W / — L</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Positions ouvertes</div>
+        <div class="card-value" id="ppOpen">—</div>
+        <div class="card-sub" id="ppOpenSub">— SOL investi</div>
+      </div>
+    </div>
+
+    <!-- ── Paramètres ──────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:20px">
+      <div class="sec-head">
+        <h2>⚙️ Paramètres Paper Trading</h2>
+        <span class="c-muted" style="font-size:12px">Indépendants du vrai bot</span>
+      </div>
+      <div class="sec-body">
+
+        <div class="config-panel">
+          <div class="config-field">
+            <label class="config-label">Score min</label>
+            <input class="config-input" id="cfgMinScore"   type="number" min="0"   max="100" step="1"   placeholder="60">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Stop-Loss %</label>
+            <input class="config-input" id="cfgSl"         type="number" min="1"   max="90"  step="1"   placeholder="15">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Take-Profit %</label>
+            <input class="config-input" id="cfgTp"         type="number" min="5"   max="500" step="5"   placeholder="80">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Taille pos. %</label>
+            <input class="config-input" id="cfgPosPct"     type="number" min="1"   max="50"  step="1"   placeholder="5">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Max positions</label>
+            <input class="config-input" id="cfgMaxPos"     type="number" min="1"   max="20"  step="1"   placeholder="5">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Trailing activ. %</label>
+            <input class="config-input" id="cfgTrailAct"   type="number" min="5"   max="200" step="5"   placeholder="20">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Trailing dist. %</label>
+            <input class="config-input" id="cfgTrailDist"  type="number" min="2"   max="50"  step="1"   placeholder="10">
+          </div>
+          <div style="display:flex; align-items:flex-end">
+            <button class="btn btn-save" onclick="savePaperConfig()">💾 Sauvegarder</button>
+          </div>
+        </div>
+
+        <div class="reset-row">
+          <div class="config-field">
+            <label class="config-label">Portefeuille de départ (SOL)</label>
+            <input class="config-input" id="cfgResetBal" type="number" min="0.01" step="1" placeholder="10" style="width:120px">
+          </div>
+          <button class="btn btn-reset" onclick="resetPaper()">🔄 Reset portefeuille</button>
+          <span class="c-muted" style="font-size:12px; align-self:center">⚠️ Efface positions et historique</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── PnL Chart ────────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:20px">
+      <div class="sec-head"><h2>📈 PnL Cumulatif — Paper</h2></div>
+      <div class="sec-body">
+        <div class="chart-wrap"><canvas id="paperCumulChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- ── Two col: daily chart + stats week ──────────────────────────────── -->
+    <div class="two-col">
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head"><h2>📊 PnL journalier — 7j</h2></div>
+        <div class="sec-body">
+          <div class="chart-wrap"><canvas id="paperDailyChart"></canvas></div>
+        </div>
+      </div>
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head"><h2>📋 Résumé</h2></div>
+        <div class="sec-body">
+          <div class="week-grid" style="grid-template-columns:1fr 1fr">
+            <div class="week-stat">
+              <div class="week-val" id="ppSumPnl">—</div>
+              <div class="week-lbl">PnL réalisé (SOL)</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="ppSumWr">—</div>
+              <div class="week-lbl">Win Rate</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="ppSumW">—</div>
+              <div class="week-lbl">Gagnants</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val c-red" id="ppSumL">—</div>
+              <div class="week-lbl">Perdants</div>
+            </div>
+          </div>
+          <div style="margin-top:12px; font-size:12px; color:var(--txt2); line-height:1.7">
+            <strong style="color:var(--yellow)">Mode agressif</strong> : seuil d'entrée à <span id="ppMinScore">60</span>/100 (vs 70 pour le vrai bot).<br>
+            Utilise les mêmes analyses IA — seulement le seuil et les paramètres diffèrent.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Positions ouvertes ─────────────────────────────────────────────── -->
+    <div class="section" style="margin-top:20px">
+      <div class="sec-head">
+        <h2>📂 Positions Paper</h2>
+        <span class="c-muted" id="ppPosCount" style="font-size:13px">0 position</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Score</th>
+              <th>Entry</th>
+              <th>Prix actuel</th>
+              <th>PnL %</th>
+              <th>PnL SOL</th>
+              <th>Investi</th>
+              <th>SL</th>
+              <th>TP</th>
+              <th>Durée</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="ppPosBody">
+            <tr><td colspan="11" class="empty">Aucune position paper ouverte</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Historique ─────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-top:20px">
+      <div class="sec-head">
+        <h2>📋 Historique Paper</h2>
+        <span class="c-muted" id="ppHistCount" style="font-size:13px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Token</th>
+              <th>Score</th>
+              <th>PnL %</th>
+              <th>PnL SOL</th>
+              <th>Raison</th>
+              <th>Résultat</th>
+            </tr>
+          </thead>
+          <tbody id="ppHistBody">
+            <tr><td colspan="7" class="empty">Aucun trade paper fermé</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /page-paper -->
 
 </div><!-- /main -->
 
@@ -1402,11 +1692,258 @@ function esc(s) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PAPER TRADING
+// ═══════════════════════════════════════════════════════════════════════════
+let paperCumulChart, paperDailyChart;
+
+function initPaperCharts() {
+  const baseOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#1c2128', borderColor: '#21262d', borderWidth: 1,
+        titleColor: '#7d8590', bodyColor: '#e6edf3', padding: 10,
+      },
+    },
+  };
+  const gridColor = '#21262d';
+  const tickColor = '#7d8590';
+
+  paperCumulChart = new Chart(document.getElementById('paperCumulChart').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'PnL paper (SOL)', data: [],
+        borderColor: '#e3b341', backgroundColor: 'rgba(227,179,65,0.07)',
+        borderWidth: 2, pointRadius: 4, pointHoverRadius: 6,
+        pointBackgroundColor: '#e3b341', fill: true, tension: 0.3,
+      }],
+    },
+    options: {
+      ...baseOpts,
+      scales: {
+        x: { ticks: { color: tickColor, maxTicksLimit: 8, maxRotation: 0 }, grid: { color: gridColor } },
+        y: { ticks: { color: tickColor, callback: v => v.toFixed(3) + ' ◎' }, grid: { color: gridColor } },
+      },
+    },
+  });
+
+  paperDailyChart = new Chart(document.getElementById('paperDailyChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [{ label: 'PnL journalier paper (SOL)', data: [], backgroundColor: [], borderRadius: 5, borderSkipped: false }],
+    },
+    options: {
+      ...baseOpts,
+      scales: {
+        x: { ticks: { color: tickColor }, grid: { display: false } },
+        y: { ticks: { color: tickColor, callback: v => v.toFixed(3) + ' ◎' }, grid: { color: gridColor } },
+      },
+    },
+  });
+}
+
+async function fetchPaper() {
+  try {
+    const r = await fetch('/api/paper');
+    if (!r.ok) return;
+    const d = await r.json();
+    renderPaper(d);
+  } catch {}
+}
+
+function renderPaper(d) {
+  const { stats, config, positions, history, timeline, dailyPnl } = d;
+
+  // Cards
+  const portEl = document.getElementById('ppPortfolio');
+  portEl.textContent = fSol(stats.portfolioValue).replace('+', '');
+  portEl.className   = 'pnl-total-big ' + cClass(stats.totalPnlPct);
+  setText('ppPortfolioSub', config.startingBalance + ' SOL de départ');
+
+  const tpEl = document.getElementById('ppTotalPnl');
+  tpEl.textContent = (stats.totalPnlPct >= 0 ? '+' : '') + stats.totalPnlPct.toFixed(2) + '%';
+  tpEl.className   = 'card-value ' + cClass(stats.totalPnlPct);
+  setText('ppTotalPct', fSol(stats.portfolioValue - config.startingBalance) + ' vs départ');
+
+  const rpEl = document.getElementById('ppRealPnl');
+  rpEl.textContent = fSol(stats.realizedPnl);
+  rpEl.className   = 'card-value ' + cClass(stats.realizedPnl);
+  setText('ppTrades', stats.totalTrades + ' trades fermés');
+
+  const wrEl = document.getElementById('ppWr');
+  wrEl.textContent = stats.winRate != null ? stats.winRate + '%' : '—';
+  wrEl.className   = 'card-value ' + (stats.winRate >= 50 ? 'c-green' : stats.winRate != null ? 'c-red' : '');
+  setText('ppWrSub', stats.wins + ' W / ' + stats.losses + ' L');
+
+  const openEl = document.getElementById('ppOpen');
+  openEl.textContent = stats.openPositions;
+  setText('ppOpenSub', stats.totalInvested.toFixed(3) + ' SOL investi');
+
+  // Config inputs
+  document.getElementById('cfgMinScore').value   = config.minScore;
+  document.getElementById('cfgSl').value          = config.slPct;
+  document.getElementById('cfgTp').value          = config.tpPct;
+  document.getElementById('cfgPosPct').value      = config.maxPositionPct;
+  document.getElementById('cfgMaxPos').value      = config.maxPositions;
+  document.getElementById('cfgTrailAct').value    = config.trailingActivation;
+  document.getElementById('cfgTrailDist').value   = config.trailingDistance;
+  document.getElementById('cfgResetBal').value    = config.startingBalance;
+  setText('ppMinScore', config.minScore);
+
+  // Summary
+  const sumPnlEl = document.getElementById('ppSumPnl');
+  sumPnlEl.textContent = fSol(stats.realizedPnl);
+  sumPnlEl.className   = 'week-val ' + cClass(stats.realizedPnl);
+  const sumWrEl = document.getElementById('ppSumWr');
+  sumWrEl.textContent = stats.winRate != null ? stats.winRate + '%' : '—';
+  sumWrEl.className   = 'week-val ' + (stats.winRate >= 50 ? 'c-green' : stats.winRate != null ? 'c-red' : '');
+  setText('ppSumW', stats.wins);
+  setText('ppSumL', stats.losses);
+
+  // Charts
+  if (timeline && paperCumulChart) {
+    const pts = timeline.length === 0 ? [{ t: Date.now(), pnl: 0 }] : timeline;
+    const lastPnl = pts[pts.length - 1]?.pnl ?? 0;
+    paperCumulChart.data.labels           = pts.map(p => new Date(p.t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
+    paperCumulChart.data.datasets[0].data = pts.map(p => p.pnl);
+    paperCumulChart.data.datasets[0].borderColor     = lastPnl >= 0 ? '#e3b341' : '#f85149';
+    paperCumulChart.data.datasets[0].backgroundColor = lastPnl >= 0 ? 'rgba(227,179,65,0.07)' : 'rgba(248,81,73,0.07)';
+    paperCumulChart.update();
+  }
+  if (dailyPnl && paperDailyChart) {
+    paperDailyChart.data.labels                         = dailyPnl.map(d => d.label);
+    paperDailyChart.data.datasets[0].data               = dailyPnl.map(d => d.pnl);
+    paperDailyChart.data.datasets[0].backgroundColor    = dailyPnl.map(d => d.pnl >= 0 ? 'rgba(227,179,65,0.75)' : 'rgba(248,81,73,0.75)');
+    paperDailyChart.update();
+  }
+
+  // Positions
+  renderPaperPositions(positions || []);
+
+  // History
+  renderPaperHistory(history || []);
+}
+
+function renderPaperPositions(positions) {
+  setText('ppPosCount', positions.length + ' position' + (positions.length !== 1 ? 's' : ''));
+  const tbody = document.getElementById('ppPosBody');
+  if (positions.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="11" class="empty">Aucune position paper ouverte</td></tr>';
+    return;
+  }
+  tbody.innerHTML = positions.map(p => {
+    const dur = Date.now() - p.entryTime;
+    const graduated = p.isGraduated ? ' <span style="font-size:10px;color:var(--orange)">🎓</span>' : '';
+    return `<tr>
+      <td>
+        <strong class="c-yellow">$${esc(p.symbol)}</strong>${graduated}<br>
+        <a class="dex-link" href="https://dexscreener.com/solana/${esc(p.address)}" target="_blank">DexScreener ↗</a>
+      </td>
+      <td class="c-blue">${p.score ?? '—'}/100</td>
+      <td>${fPrice(p.entryPrice)}</td>
+      <td>${fPrice(p.currentPrice)}</td>
+      <td class="${cClass(p.pnlPct)}">${fPct(p.pnlPct)}</td>
+      <td class="${cClass(p.pnlSol)}">${fSol(p.pnlSol)}</td>
+      <td class="c-muted">${p.amountSolIn?.toFixed(3)} ◎</td>
+      <td class="c-red">−${p.slPct}%</td>
+      <td class="c-green">+${p.tpPct}%</td>
+      <td class="c-muted">${fDur(dur)}</td>
+      <td><button class="btn btn-sell-paper" onclick="paperSell('${esc(p.address)}', this)">Vendre</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPaperHistory(history) {
+  setText('ppHistCount', history.length + ' entrées');
+  const tbody = document.getElementById('ppHistBody');
+  if (history.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucun trade paper fermé</td></tr>';
+    return;
+  }
+  tbody.innerHTML = history.map(h => {
+    const dtStr  = new Date(h.exitTime).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const result = h.pnlSol > 0
+      ? '<span class="badge b-win">✅ WIN</span>'
+      : '<span class="badge b-loss">❌ LOSS</span>';
+    const reasonMap = { STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 Take-Profit', TRAILING_STOP: '📐 Trailing', MANUAL: '👆 Manuel' };
+    return `<tr>
+      <td class="c-muted">${dtStr}</td>
+      <td><strong class="c-yellow">$${esc(h.symbol)}</strong></td>
+      <td class="c-blue">${h.score ?? '—'}/100</td>
+      <td class="${cClass(h.pnlPct)}">${fPct(h.pnlPct)}</td>
+      <td class="${cClass(h.pnlSol)}">${fSol(h.pnlSol)}</td>
+      <td class="c-muted">${reasonMap[h.reason] || esc(h.reason || '—')}</td>
+      <td>${result}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function savePaperConfig() {
+  const params = {
+    minScore:           parseFloat(document.getElementById('cfgMinScore').value),
+    slPct:              parseFloat(document.getElementById('cfgSl').value),
+    tpPct:              parseFloat(document.getElementById('cfgTp').value),
+    maxPositionPct:     parseFloat(document.getElementById('cfgPosPct').value),
+    maxPositions:       parseFloat(document.getElementById('cfgMaxPos').value),
+    trailingActivation: parseFloat(document.getElementById('cfgTrailAct').value),
+    trailingDistance:   parseFloat(document.getElementById('cfgTrailDist').value),
+  };
+  try {
+    const r = await fetch('/api/paper/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const d = await r.json();
+    if (d.ok) { setText('ppMinScore', d.config.minScore); fetchPaper(); }
+  } catch {}
+}
+
+async function resetPaper() {
+  const bal = parseFloat(document.getElementById('cfgResetBal').value) || 10;
+  if (!confirm(`Réinitialiser le portefeuille paper à ${bal} SOL ?\nToutes les positions et l'historique seront effacés.`)) return;
+  try {
+    await fetch('/api/paper/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ balance: bal }),
+    });
+    fetchPaper();
+  } catch {}
+}
+
+async function paperSell(address, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/paper/sell/${address}`, { method: 'POST' });
+    fetchPaper();
+  } catch { btn.disabled = false; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // BOOT
 // ═══════════════════════════════════════════════════════════════════════════
 initCharts();
+initPaperCharts();
 fetchData();
 setInterval(fetchData, 15_000);
+
+// Charge le paper trading quand on clique sur l'onglet
+document.querySelector('[data-page="paper"]').addEventListener('click', () => {
+  fetchPaper();
+  // Refresh toutes les 15s quand l'onglet est actif
+  if (!window._paperInterval) {
+    window._paperInterval = setInterval(() => {
+      if (activePage === 'paper') fetchPaper();
+    }, 15_000);
+  }
+});
 </script>
 </body>
 </html>

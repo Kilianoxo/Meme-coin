@@ -28,8 +28,9 @@ const PUBLIC_DIR   = path.join(__dirname, 'public');
 const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
 
 class Dashboard {
-  constructor(trader) {
-    this.trader     = trader;
+  constructor(trader, paperTrader) {
+    this.trader      = trader;
+    this.paperTrader = paperTrader;
     this.port       = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
     this.server     = http.createServer((req, res) => this._handle(req, res));
 
@@ -112,6 +113,27 @@ class Dashboard {
     const suggestMatch = pathname.match(/^\/api\/suggestions\/([^/]+)\/(approve|reject)$/);
     if (suggestMatch && req.method === 'POST') {
       this._apiSuggestion(res, suggestMatch[1], suggestMatch[2]);
+      return;
+    }
+
+    if (pathname === '/api/paper' && req.method === 'GET') {
+      this._apiPaper(res);
+      return;
+    }
+
+    if (pathname === '/api/paper/reset' && req.method === 'POST') {
+      this._apiPaperReset(req, res);
+      return;
+    }
+
+    if (pathname === '/api/paper/config' && req.method === 'POST') {
+      this._apiPaperConfig(req, res);
+      return;
+    }
+
+    const paperSellMatch = pathname.match(/^\/api\/paper\/sell\/([^/]+)$/);
+    if (paperSellMatch && req.method === 'POST') {
+      this._apiPaperSell(res, paperSellMatch[1]);
       return;
     }
 
@@ -389,6 +411,74 @@ class Dashboard {
         res.on('data', c => (raw += c));
         res.on('end', () => { try { resolve(JSON.parse(raw)); } catch (e) { reject(e); } });
       }).on('error', reject);
+    });
+  }
+
+  // ─── API Paper Trading ────────────────────────────────────────────────────
+
+  async _apiPaper(res) {
+    if (!this.paperTrader) {
+      this._jsonOk(res, { error: 'Paper trader non initialisé' });
+      return;
+    }
+    try {
+      const data      = this.paperTrader.getStats();
+      const addresses = data.positions.map(p => p.address);
+      const prices    = addresses.length > 0 ? await this._fetchPrices(addresses) : {};
+
+      data.positions = data.positions.map(p => {
+        const currentPrice = prices[p.address] ?? null;
+        const pnlPct = currentPrice
+          ? ((currentPrice - p.entryPrice) / p.entryPrice) * 100
+          : null;
+        const pnlSol = pnlPct !== null ? p.amountSolIn * (pnlPct / 100) : null;
+        return { ...p, currentPrice, pnlPct, pnlSol };
+      });
+
+      this._jsonOk(res, data);
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  _apiPaperReset(req, res) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+    this._readBody(req, (body) => {
+      const { balance } = body;
+      const ok = this.paperTrader.reset(balance ?? 10);
+      this._jsonOk(res, { ok, config: this.paperTrader.state.config });
+    });
+  }
+
+  _apiPaperConfig(req, res) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+    this._readBody(req, (body) => {
+      const config = this.paperTrader.updateConfig(body);
+      this._jsonOk(res, { ok: true, config });
+    });
+  }
+
+  async _apiPaperSell(res, address) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+    await this.paperTrader.manualSell(address);
+    this._jsonOk(res, { ok: true });
+  }
+
+  _jsonOk(res, data) {
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':               'no-cache',
+    });
+    res.end(JSON.stringify(data));
+  }
+
+  _readBody(req, cb) {
+    let raw = '';
+    req.on('data', c => (raw += c));
+    req.on('end', () => {
+      try { cb(JSON.parse(raw)); } catch { cb({}); }
     });
   }
 }
