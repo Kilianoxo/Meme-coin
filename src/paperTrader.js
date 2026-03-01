@@ -33,7 +33,7 @@ class PaperTrader extends EventEmitter {
         slPct:              15,   // Stop-loss %
         tpPct:              80,   // Take-profit %
         maxPositionPct:      5,   // % du portefeuille par trade
-        minScore:           60,   // Seuil d'entrée (vs 70 pour le vrai bot)
+        minScore:           50,   // Seuil d'entrée — couvre WAIT (50-69) + BUY (70+)
         maxPositions:        5,   // Positions simultanées max
         trailingActivation: 20,   // % de gain pour activer le trailing stop
         trailingDistance:   10,   // % de recul depuis le plus haut pour déclencher
