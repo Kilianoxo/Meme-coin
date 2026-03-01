@@ -3,6 +3,15 @@
  *
  * Accès : http://localhost:3000 (ou DASHBOARD_PORT dans .env)
  * Aucune dépendance externe — HTTP natif Node.js uniquement.
+ *
+ * Routes :
+ *   GET  /              → HTML statique
+ *   GET  /api/data      → Stats trading (positions, PnL, historique)
+ *   GET  /api/floor     → Trading Floor (chatLog, agentsEnabled, mémoire, suggestions)
+ *   GET  /api/events    → SSE — push temps réel des messages agents
+ *   POST /api/agents/toggle    → Active/désactive les débats IA
+ *   POST /api/suggestions/:id/approve
+ *   POST /api/suggestions/:id/reject
  */
 
 const http  = require('http');
@@ -11,13 +20,27 @@ const fs    = require('fs');
 const path  = require('path');
 const url   = require('url');
 
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const state       = require('./state');
+const agentMemory = require('./agentMemory');
+const { agentBus } = require('./agents');
+
+const PUBLIC_DIR   = path.join(__dirname, 'public');
+const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
 
 class Dashboard {
   constructor(trader) {
-    this.trader = trader;
-    this.port   = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
-    this.server = http.createServer((req, res) => this._handle(req, res));
+    this.trader     = trader;
+    this.port       = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
+    this.server     = http.createServer((req, res) => this._handle(req, res));
+
+    // Trading Floor — log des messages agents (in-memory, max 120)
+    this.chatLog    = [];
+    // SSE — liste des clients connectés à /api/events
+    this.sseClients = [];
+
+    // Écoute le bus des agents → alimente le chatLog et les SSE
+    agentBus.on('message', (msg) => this._onAgentMessage(msg));
+    agentBus.on('system',  (msg) => this._onSystemMessage(msg));
   }
 
   start() {
@@ -26,21 +49,77 @@ class Dashboard {
     });
   }
 
+  // ─── Bus agents → chatLog + SSE ─────────────────────────────────────────────
+
+  _onAgentMessage(msg) {
+    const entry = { type: 'agent', ...msg };
+    this._pushChat(entry);
+  }
+
+  _onSystemMessage(msg) {
+    const entry = { type: 'system', ...msg };
+    this._pushChat(entry);
+  }
+
+  _pushChat(entry) {
+    this.chatLog.push(entry);
+    if (this.chatLog.length > MAX_CHAT_LOG) {
+      this.chatLog = this.chatLog.slice(-MAX_CHAT_LOG);
+    }
+    this._broadcastSSE(entry);
+  }
+
+  _broadcastSSE(data) {
+    const payload = `data: ${JSON.stringify(data)}\n\n`;
+    this.sseClients = this.sseClients.filter(({ res }) => {
+      try {
+        res.write(payload);
+        return true;
+      } catch {
+        return false; // client déconnecté
+      }
+    });
+  }
+
   // ─── Routing ──────────────────────────────────────────────────────────────
 
   _handle(req, res) {
-    const { pathname } = url.parse(req.url);
+    const parsed   = url.parse(req.url);
+    const pathname = parsed.pathname;
 
-    if (pathname === '/api/data') {
+    // ── API ──────────────────────────────────────────────────────────────────
+
+    if (pathname === '/api/data' && req.method === 'GET') {
       this._apiData(res);
       return;
     }
 
-    // Fichiers statiques depuis src/public/
+    if (pathname === '/api/floor' && req.method === 'GET') {
+      this._apiFloor(res);
+      return;
+    }
+
+    if (pathname === '/api/events' && req.method === 'GET') {
+      this._apiEvents(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agents/toggle' && req.method === 'POST') {
+      this._apiToggleAgents(res);
+      return;
+    }
+
+    const suggestMatch = pathname.match(/^\/api\/suggestions\/([^/]+)\/(approve|reject)$/);
+    if (suggestMatch && req.method === 'POST') {
+      this._apiSuggestion(res, suggestMatch[1], suggestMatch[2]);
+      return;
+    }
+
+    // ── Fichiers statiques depuis src/public/ ─────────────────────────────
+
     const filePath = pathname === '/' ? '/index.html' : pathname;
     const full = path.resolve(PUBLIC_DIR, '.' + filePath);
 
-    // Sécurité: empêcher la traversée de dossier
     if (!full.startsWith(PUBLIC_DIR)) {
       res.writeHead(403); res.end(); return;
     }
@@ -54,13 +133,15 @@ class Dashboard {
     });
   }
 
+  // ─── API /api/data ────────────────────────────────────────────────────────
+
   async _apiData(res) {
     try {
       const data = await this._buildData();
       res.writeHead(200, {
-        'Content-Type': 'application/json',
+        'Content-Type':                'application/json',
         'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache',
+        'Cache-Control':               'no-cache',
       });
       res.end(JSON.stringify(data));
     } catch (err) {
@@ -69,7 +150,99 @@ class Dashboard {
     }
   }
 
-  // ─── Construction des données ─────────────────────────────────────────────
+  // ─── API /api/floor ──────────────────────────────────────────────────────
+
+  _apiFloor(res) {
+    const data = {
+      agentsEnabled: state.agentsEnabled,
+      chatLog:       this.chatLog,
+      lessons:       agentMemory.getLessons(20),
+      agentStats:    agentMemory.getStats(),
+      suggestions:   agentMemory.getSuggestions(),
+    };
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':               'no-cache',
+    });
+    res.end(JSON.stringify(data));
+  }
+
+  // ─── API /api/events — Server-Sent Events ────────────────────────────────
+
+  _apiEvents(req, res) {
+    res.writeHead(200, {
+      'Content-Type':                'text/event-stream',
+      'Cache-Control':               'no-cache',
+      'Connection':                  'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.write(': connected\n\n');
+
+    // Heartbeat toutes les 25s pour garder la connexion vivante
+    const hb = setInterval(() => {
+      try { res.write(': ping\n\n'); } catch { clearInterval(hb); }
+    }, 25_000);
+
+    this.sseClients.push({ res });
+
+    req.on('close', () => {
+      clearInterval(hb);
+      this.sseClients = this.sseClients.filter(c => c.res !== res);
+    });
+  }
+
+  // ─── API /api/agents/toggle ──────────────────────────────────────────────
+
+  _apiToggleAgents(res) {
+    state.agentsEnabled = !state.agentsEnabled;
+    const status = state.agentsEnabled ? 'activés' : 'désactivés';
+    console.log(`[Dashboard] Débats IA ${status}`);
+
+    // Notifie le Trading Floor
+    this._pushChat({
+      type:      'system',
+      content:   state.agentsEnabled
+        ? '✅ Débats IA activés — les agents vont analyser les prochains tokens.'
+        : '⏸️ Débats IA désactivés — aucun crédit API consommé.',
+      timestamp: Date.now(),
+    });
+
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ agentsEnabled: state.agentsEnabled }));
+  }
+
+  // ─── API /api/suggestions/:id/(approve|reject) ──────────────────────────
+
+  _apiSuggestion(res, id, action) {
+    const ok = action === 'approve'
+      ? agentMemory.approveSuggestion(id)
+      : agentMemory.rejectSuggestion(id);
+
+    if (!ok) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Suggestion introuvable' }));
+      return;
+    }
+
+    const label = action === 'approve' ? 'approuvée' : 'rejetée';
+    this._pushChat({
+      type:      'system',
+      content:   `${action === 'approve' ? '✅' : '❌'} Suggestion ${label} par l'utilisateur.`,
+      timestamp: Date.now(),
+    });
+
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ ok: true, action, id }));
+  }
+
+  // ─── Construction des données /api/data ──────────────────────────────────
 
   async _buildData() {
     const positions = Array.from(this.trader.positions.values());
@@ -94,7 +267,7 @@ class Dashboard {
     const wins        = sells.filter(h => h.pnlSol > 0).length;
     const winRate     = sells.length > 0 ? Math.round((wins / sells.length) * 100) : null;
 
-    // Timeline PnL cumulatif (pour le graphique)
+    // Timeline PnL cumulatif
     const pnlTimeline = [];
     let cum = 0;
     sells
@@ -169,29 +342,24 @@ class Dashboard {
       return alerts;
     }
 
-    // Win rate faible
     const wr = Math.round((weekSells.filter(h => h.pnlSol > 0).length / weekSells.length) * 100);
     if (wr < 40 && weekSells.length >= 3)
       alerts.push({ type: 'warn', msg: `Win rate faible cette semaine : ${wr}%` });
 
-    // SL consécutifs (sur les 5 derniers trades)
     const recent = allSells.slice(-5).reverse();
     const streak = recent.findIndex(h => h.pnlSol > 0);
     const consecutiveLosses = streak === -1 ? recent.length : streak;
     if (consecutiveLosses >= 3)
       alerts.push({ type: 'warn', msg: `${consecutiveLosses} stop-loss consécutifs récents` });
 
-    // Meilleur trade de la semaine
     const best = weekSells.reduce((b, h) => h.pnlSol > (b?.pnlSol ?? -Infinity) ? h : b, null);
     if (best?.pnlSol > 0)
       alerts.push({ type: 'good', msg: `Meilleur trade : +${best.pnlSol.toFixed(4)} SOL (${best.tokenMint.slice(0, 6)}…)` });
 
-    // Pire trade de la semaine
     const worst = weekSells.reduce((w, h) => h.pnlSol < (w?.pnlSol ?? Infinity) ? h : w, null);
     if (worst?.pnlSol < 0)
       alerts.push({ type: 'bad', msg: `Pire trade : ${worst.pnlSol.toFixed(4)} SOL (${worst.tokenMint.slice(0, 6)}…)` });
 
-    // PnL semaine positif
     const weekTotal = weekSells.reduce((s, h) => s + h.pnlSol, 0);
     if (weekTotal > 0 && consecutiveLosses < 3 && wr >= 40)
       alerts.push({ type: 'good', msg: `Bonne semaine : ${weekSells.length} trades, ${wr}% win rate` });

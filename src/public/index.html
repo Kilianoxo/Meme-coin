@@ -20,6 +20,7 @@
       --blue:    #58a6ff;
       --yellow:  #e3b341;
       --purple:  #bc8cff;
+      --orange:  #f0883e;
     }
 
     /* ── Base ─────────────────────────────────────────────────────────── */
@@ -57,8 +58,33 @@
     }
     @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 
+    /* ── Tab navigation ──────────────────────────────────────────────── */
+    .tab-nav {
+      display: flex;
+      gap: 0;
+      padding: 0 28px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-nav-btn {
+      padding: 10px 22px;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      color: var(--txt2);
+      border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-nav-btn:hover  { color: var(--txt); }
+    .tab-nav-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+
     /* ── Layout ──────────────────────────────────────────────────────── */
     .main  { padding: 24px 28px; max-width: 1440px; margin: 0 auto; }
+    .tab-page { display: none; }
+    .tab-page.active { display: block; }
 
     /* ── Stat cards ──────────────────────────────────────────────────── */
     .cards {
@@ -188,6 +214,8 @@
     .c-red    { color: var(--red); }
     .c-yellow { color: var(--yellow); }
     .c-blue   { color: var(--blue); }
+    .c-purple { color: var(--purple); }
+    .c-orange { color: var(--orange); }
     .c-muted  { color: var(--txt2); }
 
     /* ── Misc ────────────────────────────────────────────────────────── */
@@ -220,6 +248,226 @@
       border-radius: 4px;
       height: 22px;
     }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       TRADING FLOOR
+    ══════════════════════════════════════════════════════════════════ */
+
+    /* ── Toggle switch ───────────────────────────────────────────────── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .toggle-label { font-size: 13px; color: var(--txt2); }
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 44px; height: 24px;
+      cursor: pointer;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 24px;
+      transition: background .2s;
+    }
+    .toggle-switch input:checked + .toggle-track { background: var(--green); }
+    .toggle-thumb {
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 18px; height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform .2s;
+    }
+    .toggle-switch input:checked ~ .toggle-thumb { transform: translateX(20px); }
+    .toggle-status {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 4px;
+    }
+    .toggle-status.on  { background: rgba(63,185,80,.15);  color: var(--green); }
+    .toggle-status.off { background: rgba(248,81,73,.15);  color: var(--red); }
+
+    /* ── Chat feed ───────────────────────────────────────────────────── */
+    .chat-feed {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding: 16px;
+      background: var(--bg);
+      border-radius: 8px;
+      scroll-behavior: smooth;
+    }
+    .chat-feed::-webkit-scrollbar { width: 6px; }
+    .chat-feed::-webkit-scrollbar-track { background: transparent; }
+    .chat-feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .chat-msg {
+      display: flex;
+      gap: 10px;
+      animation: fadeIn .25s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .chat-avatar {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .chat-avatar.Momentum     { background: rgba(88,166,255,.18); }
+    .chat-avatar.Whale        { background: rgba(188,140,255,.18); }
+    .chat-avatar.Bull         { background: rgba(63,185,80,.18); }
+    .chat-avatar.Bear         { background: rgba(248,81,73,.18); }
+    .chat-avatar.Coordinateur { background: rgba(227,179,65,.18); }
+    .chat-avatar.system       { background: rgba(120,120,120,.12); }
+
+    .chat-body { flex: 1; min-width: 0; }
+    .chat-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .chat-name {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .chat-name.Momentum     { color: var(--blue); }
+    .chat-name.Whale        { color: var(--purple); }
+    .chat-name.Bull         { color: var(--green); }
+    .chat-name.Bear         { color: var(--red); }
+    .chat-name.Coordinateur { color: var(--yellow); }
+    .chat-name.system       { color: var(--txt2); }
+
+    .chat-token {
+      font-size: 11px;
+      color: var(--txt2);
+      background: var(--card2);
+      padding: 1px 7px;
+      border-radius: 10px;
+    }
+    .chat-round {
+      font-size: 10px;
+      color: var(--txt2);
+      margin-left: auto;
+    }
+    .chat-time {
+      font-size: 11px;
+      color: var(--txt2);
+    }
+    .chat-content {
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--txt);
+      background: var(--card);
+      padding: 9px 13px;
+      border-radius: 0 8px 8px 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .chat-msg.system .chat-content {
+      background: rgba(120,120,120,.08);
+      color: var(--txt2);
+      font-style: italic;
+      border-radius: 8px;
+    }
+
+    /* ── Agent stats grid ────────────────────────────────────────────── */
+    .agent-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+    }
+    .agent-stat-card {
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 13px 16px;
+      text-align: center;
+    }
+    .agent-icon { font-size: 22px; margin-bottom: 6px; }
+    .agent-name { font-size: 11px; color: var(--txt2); text-transform: uppercase; letter-spacing: .5px; }
+    .agent-acc  { font-size: 24px; font-weight: 700; margin: 4px 0; }
+    .agent-sub  { font-size: 11px; color: var(--txt2); }
+
+    /* ── Lessons table compact ───────────────────────────────────────── */
+    .lesson-row td { padding: 8px 12px; font-size: 12px; }
+    .outcome-win  { color: var(--green); font-weight: 600; }
+    .outcome-loss { color: var(--red);   font-weight: 600; }
+    .outcome-run  { color: var(--txt2); }
+
+    /* ── Suggestions ─────────────────────────────────────────────────── */
+    .suggestion-card {
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .suggestion-card.approved { border-left: 3px solid var(--green); }
+    .suggestion-card.rejected { border-left: 3px solid var(--red); opacity: .6; }
+    .suggestion-card.pending  { border-left: 3px solid var(--yellow); }
+
+    .sugg-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+      color: var(--txt2);
+    }
+    .sugg-agent {
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+    .sugg-text { font-size: 13px; line-height: 1.55; }
+    .sugg-actions { display: flex; gap: 8px; }
+    .btn {
+      padding: 5px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all .15s;
+      font-weight: 500;
+    }
+    .btn-approve {
+      background: rgba(63,185,80,.1);
+      border-color: rgba(63,185,80,.3);
+      color: var(--green);
+    }
+    .btn-approve:hover { background: rgba(63,185,80,.2); }
+    .btn-reject {
+      background: rgba(248,81,73,.08);
+      border-color: rgba(248,81,73,.25);
+      color: var(--red);
+    }
+    .btn-reject:hover { background: rgba(248,81,73,.18); }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    .empty-floor {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--txt2);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+    .empty-floor .big { font-size: 36px; margin-bottom: 12px; }
   </style>
 </head>
 <body>
@@ -236,168 +484,302 @@
   </div>
 </header>
 
+<!-- ── Tab navigation ──────────────────────────────────────────────────── -->
+<nav class="tab-nav">
+  <button class="tab-nav-btn active" data-page="dashboard">📊 Dashboard</button>
+  <button class="tab-nav-btn"        data-page="floor">💬 Trading Floor</button>
+</nav>
+
 <div class="main">
 
-  <!-- ── Stat cards ────────────────────────────────────────────────────── -->
-  <div class="cards">
-    <div class="card">
-      <div class="card-label">Positions ouvertes</div>
-      <div class="card-value" id="cPos">—</div>
-      <div class="card-sub">tokens actifs</div>
-    </div>
-    <div class="card">
-      <div class="card-label">PnL réalisé (total)</div>
-      <div class="card-value" id="cPnl">—</div>
-      <div class="card-sub" id="cTrades">— trades fermés</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Win Rate</div>
-      <div class="card-value" id="cWr">—</div>
-      <div class="card-sub">trades gagnants / total</div>
-    </div>
-    <div class="card">
-      <div class="card-label">PnL — cette semaine</div>
-      <div class="card-value" id="cWkPnl">—</div>
-      <div class="card-sub" id="cWkTrades">— trades</div>
-    </div>
-  </div>
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : DASHBOARD
+  ════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page active" id="page-dashboard">
 
-  <!-- ── PnL cumulatif ─────────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>📈 PnL Cumulatif</h2>
-      <div class="tabs" id="rangeTabs">
-        <button class="tab" data-range="1">24h</button>
-        <button class="tab" data-range="7">7j</button>
-        <button class="tab" data-range="30">30j</button>
-        <button class="tab active" data-range="0">Tout</button>
+    <!-- ── Stat cards ────────────────────────────────────────────────────── -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Positions ouvertes</div>
+        <div class="card-value" id="cPos">—</div>
+        <div class="card-sub">tokens actifs</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL réalisé (total)</div>
+        <div class="card-value" id="cPnl">—</div>
+        <div class="card-sub" id="cTrades">— trades fermés</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value" id="cWr">—</div>
+        <div class="card-sub">trades gagnants / total</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL — cette semaine</div>
+        <div class="card-value" id="cWkPnl">—</div>
+        <div class="card-sub" id="cWkTrades">— trades</div>
       </div>
     </div>
-    <div class="sec-body">
-      <div class="chart-wrap"><canvas id="cumulChart"></canvas></div>
-    </div>
-  </div>
 
-  <!-- ── Weekly + Daily ────────────────────────────────────────────────── -->
-  <div class="two-col">
-
-    <!-- Résumé semaine -->
+    <!-- ── PnL cumulatif ─────────────────────────────────────────────────── -->
     <div class="section">
-      <div class="sec-head"><h2>📅 Résumé de la semaine</h2></div>
+      <div class="sec-head">
+        <h2>📈 PnL Cumulatif</h2>
+        <div class="tabs" id="rangeTabs">
+          <button class="tab" data-range="1">24h</button>
+          <button class="tab" data-range="7">7j</button>
+          <button class="tab" data-range="30">30j</button>
+          <button class="tab active" data-range="0">Tout</button>
+        </div>
+      </div>
       <div class="sec-body">
-        <div class="week-grid">
-          <div class="week-stat">
-            <div class="week-val" id="wPnl">—</div>
-            <div class="week-lbl">PnL en SOL</div>
+        <div class="chart-wrap"><canvas id="cumulChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- ── Weekly + Daily ────────────────────────────────────────────────── -->
+    <div class="two-col">
+
+      <div class="section">
+        <div class="sec-head"><h2>📅 Résumé de la semaine</h2></div>
+        <div class="sec-body">
+          <div class="week-grid">
+            <div class="week-stat">
+              <div class="week-val" id="wPnl">—</div>
+              <div class="week-lbl">PnL en SOL</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="wWr">—</div>
+              <div class="week-lbl">Win Rate</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="wTrades">—</div>
+              <div class="week-lbl">Trades</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val c-green" id="wWins">—</div>
+              <div class="week-lbl">Gagnants</div>
+            </div>
           </div>
-          <div class="week-stat">
-            <div class="week-val" id="wWr">—</div>
-            <div class="week-lbl">Win Rate</div>
-          </div>
-          <div class="week-stat">
-            <div class="week-val" id="wTrades">—</div>
-            <div class="week-lbl">Trades</div>
-          </div>
-          <div class="week-stat">
-            <div class="week-val c-green" id="wWins">—</div>
-            <div class="week-lbl">Gagnants</div>
+          <ul class="alert-list" id="alertList">
+            <li class="alert-item info"><span>Chargement…</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="sec-head"><h2>📊 PnL journalier — 7 derniers jours</h2></div>
+        <div class="sec-body">
+          <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Positions actuelles ───────────────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>📂 Positions Actuelles</h2>
+        <span class="c-muted" id="posCount" style="font-size:13px">0 position</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Entry USD</th>
+              <th>Prix actuel</th>
+              <th>PnL %</th>
+              <th>PnL SOL</th>
+              <th>Investi</th>
+              <th>SL</th>
+              <th>TP</th>
+              <th>Durée</th>
+            </tr>
+          </thead>
+          <tbody id="posBody">
+            <tr><td colspan="9" class="empty">Aucune position ouverte</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Évolution holders ─────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head"><h2>👥 Évolution des Holders</h2></div>
+      <div class="sec-body">
+        <div class="holder-ph">
+          <div class="icon">📡</div>
+          <strong>Tracking continu des holders</strong><br>
+          Le bot enregistre le nombre de holders au moment de chaque scan.<br>
+          Les données s'afficheront ici au fil des positions ouvertes.<br>
+          <br>
+          <span style="font-size:12px">Requiert <code>BIRDEYE_API_KEY</code> — sécurité on-chain activée.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Historique trades ─────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>📋 Historique des Trades</h2>
+        <span class="c-muted" id="histCount" style="font-size:13px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Token</th>
+              <th>Action</th>
+              <th>SOL</th>
+              <th>PnL</th>
+              <th>Résultat</th>
+            </tr>
+          </thead>
+          <tbody id="histBody">
+            <tr><td colspan="6" class="empty">Aucun trade dans l'historique</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /page-dashboard -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : TRADING FLOOR
+  ════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="page-floor">
+
+    <!-- ── Toggle + état des agents ─────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:16px">
+      <div class="sec-head">
+        <h2>⚙️ Contrôle des débats IA</h2>
+        <div class="toggle-row">
+          <span class="toggle-label">Débats LLM :</span>
+          <label class="toggle-switch" title="Active/désactive les appels Claude API">
+            <input type="checkbox" id="agentToggle" onchange="toggleAgents(this.checked)">
+            <span class="toggle-track"></span>
+            <span class="toggle-thumb"></span>
+          </label>
+          <span class="toggle-status off" id="toggleStatus">OFF</span>
+        </div>
+      </div>
+      <div class="sec-body" style="padding: 12px 20px; font-size:13px; color: var(--txt2); line-height:1.7">
+        <strong style="color:var(--txt)">ON</strong> — Les agents analysent chaque token scanné via Claude API (consomme des crédits).<br>
+        <strong style="color:var(--txt)">OFF</strong> — Le scanner continue de tourner mais aucun débat n'est lancé. Économise les crédits.
+      </div>
+    </div>
+
+    <!-- ── Live chat + stats agents ─────────────────────────────────────── -->
+    <div class="two-col" style="margin-bottom:16px">
+
+      <!-- Chat -->
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head">
+          <h2>💬 Fil des agents</h2>
+          <span class="c-muted" style="font-size:12px" id="chatCount">0 message</span>
+        </div>
+        <div id="chatFeed" class="chat-feed">
+          <div class="empty-floor">
+            <div class="big">🤖</div>
+            En attente des agents…<br>
+            <span style="font-size:12px">Les messages apparaîtront ici lors des prochains débats.</span>
           </div>
         </div>
-        <ul class="alert-list" id="alertList">
-          <li class="alert-item info"><span>Chargement…</span></li>
-        </ul>
+      </div>
+
+      <!-- Stats agents -->
+      <div style="display:flex; flex-direction:column; gap:16px">
+
+        <!-- Précision agents -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>🧠 Précision des agents</h2></div>
+          <div class="sec-body">
+            <div class="agent-stats-grid" id="agentStatsGrid">
+              <div class="agent-stat-card"><div class="agent-icon">📈</div><div class="agent-name">Momentum</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+              <div class="agent-stat-card"><div class="agent-icon">🐳</div><div class="agent-name">Whale</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+              <div class="agent-stat-card"><div class="agent-icon">🐂</div><div class="agent-name">Bull</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+              <div class="agent-stat-card"><div class="agent-icon">🐻</div><div class="agent-name">Bear</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mémoire — derniers trades analysés -->
+        <div class="section" style="margin-bottom:0; flex:1">
+          <div class="sec-head"><h2>🗂️ Mémoire — débats récents</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Score</th>
+                  <th>Décision</th>
+                  <th>Outcome</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="lessonsBody">
+                <tr><td colspan="5" class="empty">Aucun débat enregistré</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </div>
     </div>
 
-    <!-- PnL journalier -->
+    <!-- ── Suggestions d'amélioration ──────────────────────────────────── -->
     <div class="section">
-      <div class="sec-head"><h2>📊 PnL journalier — 7 derniers jours</h2></div>
-      <div class="sec-body">
-        <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+      <div class="sec-head">
+        <h2>💡 Suggestions des agents</h2>
+        <span class="c-muted" style="font-size:12px" id="suggCount">—</span>
+      </div>
+      <div class="sec-body" id="suggBody">
+        <div class="empty-floor" style="padding:28px">
+          <div class="big" style="font-size:28px">💡</div>
+          Les agents proposeront des améliorations ici<br>après suffisamment de trades analysés.
+        </div>
       </div>
     </div>
 
-  </div>
-
-  <!-- ── Positions actuelles ───────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>📂 Positions Actuelles</h2>
-      <span class="c-muted" id="posCount" style="font-size:13px">0 position</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Token</th>
-            <th>Entry USD</th>
-            <th>Prix actuel</th>
-            <th>PnL %</th>
-            <th>PnL SOL</th>
-            <th>Investi</th>
-            <th>SL</th>
-            <th>TP</th>
-            <th>Durée</th>
-          </tr>
-        </thead>
-        <tbody id="posBody">
-          <tr><td colspan="9" class="empty">Aucune position ouverte</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ── Évolution holders ─────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>👥 Évolution des Holders</h2>
-    </div>
-    <div class="sec-body">
-      <div class="holder-ph">
-        <div class="icon">📡</div>
-        <strong>Tracking continu des holders</strong><br>
-        Le bot enregistre le nombre de holders au moment de chaque scan.<br>
-        Les données s'afficheront ici au fil des positions ouvertes.<br>
-        <br>
-        <span style="font-size:12px">Requiert <code>BIRDEYE_API_KEY</code> — sécurité on-chain activée.</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Historique trades ─────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>📋 Historique des Trades</h2>
-      <span class="c-muted" id="histCount" style="font-size:13px">—</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Token</th>
-            <th>Action</th>
-            <th>SOL</th>
-            <th>PnL</th>
-            <th>Résultat</th>
-          </tr>
-        </thead>
-        <tbody id="histBody">
-          <tr><td colspan="6" class="empty">Aucun trade dans l'historique</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+  </div><!-- /page-floor -->
 
 </div><!-- /main -->
 
 <script>
-// ── State ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════
 let cumulChart, dailyChart;
-let allTimeline = [];
-let chartRange  = 0;   // 0 = tout
+let allTimeline  = [];
+let chartRange   = 0;
+let activePage   = 'dashboard';
+let chatMessages = [];
+let sseSource    = null;
 
-// ── Chart init ───────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB NAVIGATION
+// ═══════════════════════════════════════════════════════════════════════════
+document.querySelectorAll('.tab-nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const page = btn.dataset.page;
+    document.querySelectorAll('.tab-nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + page).classList.add('active');
+    activePage = page;
+
+    if (page === 'floor') {
+      fetchFloor();
+      startSSE();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHART INIT
+// ═══════════════════════════════════════════════════════════════════════════
 function initCharts() {
   const baseOpts = {
     responsive: true,
@@ -476,7 +858,9 @@ function initCharts() {
   });
 }
 
-// ── Fetch ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// DASHBOARD DATA
+// ═══════════════════════════════════════════════════════════════════════════
 async function fetchData() {
   try {
     const r = await fetch('/api/data');
@@ -492,7 +876,6 @@ async function fetchData() {
   }
 }
 
-// ── Render ───────────────────────────────────────────────────────────────
 function render(d) {
   renderStats(d.stats, d.weekly);
   renderCumulChart(d.pnlTimeline);
@@ -502,7 +885,6 @@ function render(d) {
   renderHistory(d.history);
 }
 
-// ── Stats cards ──────────────────────────────────────────────────────────
 function renderStats(s, w) {
   setText('cPos', s.openPositions);
 
@@ -521,7 +903,6 @@ function renderStats(s, w) {
   setText('cWkTrades', w.trades + ' trade(s) cette semaine');
 }
 
-// ── PnL cumulatif ────────────────────────────────────────────────────────
 function renderCumulChart(timeline) {
   allTimeline = timeline || [];
   drawCumul();
@@ -546,7 +927,6 @@ function drawCumul() {
   cumulChart.update();
 }
 
-// ── PnL journalier ───────────────────────────────────────────────────────
 function renderDailyChart(daily) {
   if (!daily) return;
   dailyChart.data.labels                         = daily.map(d => d.label);
@@ -557,7 +937,6 @@ function renderDailyChart(daily) {
   dailyChart.update();
 }
 
-// ── Résumé semaine ───────────────────────────────────────────────────────
 function renderWeekly(w) {
   const pEl = document.getElementById('wPnl');
   pEl.textContent = fSol(w.pnl);
@@ -576,7 +955,6 @@ function renderWeekly(w) {
     .join('') || '<li class="alert-item info"><span>Aucune alerte.</span></li>';
 }
 
-// ── Positions ────────────────────────────────────────────────────────────
 function renderPositions(positions) {
   document.getElementById('posCount').textContent =
     positions.length + ' position' + (positions.length !== 1 ? 's' : '');
@@ -607,7 +985,6 @@ function renderPositions(positions) {
   }).join('');
 }
 
-// ── Historique ───────────────────────────────────────────────────────────
 function renderHistory(history) {
   document.getElementById('histCount').textContent = history.length + ' entrées';
 
@@ -646,7 +1023,6 @@ function renderHistory(history) {
   }).join('');
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab[data-range]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab[data-range]').forEach(b => b.classList.remove('active'));
@@ -656,7 +1032,272 @@ document.querySelectorAll('.tab[data-range]').forEach(btn => {
   });
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// TRADING FLOOR
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function fetchFloor() {
+  try {
+    const r = await fetch('/api/floor');
+    if (!r.ok) return;
+    const d = await r.json();
+
+    // Toggle state
+    const cb = document.getElementById('agentToggle');
+    cb.checked = d.agentsEnabled;
+    updateToggleUI(d.agentsEnabled);
+
+    // Chat log (historique)
+    chatMessages = d.chatLog || [];
+    renderChatLog();
+
+    // Stats agents
+    renderAgentStats(d.agentStats);
+
+    // Lessons
+    renderLessons(d.lessons);
+
+    // Suggestions
+    renderSuggestions(d.suggestions);
+
+  } catch (err) {
+    console.error('fetchFloor error:', err);
+  }
+}
+
+// ─── Toggle ────────────────────────────────────────────────────────────────
+
+async function toggleAgents(enabled) {
+  try {
+    const r = await fetch('/api/agents/toggle', { method: 'POST' });
+    const d = await r.json();
+    updateToggleUI(d.agentsEnabled);
+    // Resync checkbox au cas où
+    document.getElementById('agentToggle').checked = d.agentsEnabled;
+  } catch {
+    // Revert checkbox si erreur réseau
+    document.getElementById('agentToggle').checked = !enabled;
+  }
+}
+
+function updateToggleUI(enabled) {
+  const el = document.getElementById('toggleStatus');
+  el.textContent  = enabled ? 'ON' : 'OFF';
+  el.className    = 'toggle-status ' + (enabled ? 'on' : 'off');
+}
+
+// ─── Chat ──────────────────────────────────────────────────────────────────
+
+const AGENT_ICONS = {
+  Momentum: '📈', Whale: '🐳', Bull: '🐂', Bear: '🐻', Coordinateur: '🎯', system: '🤖',
+};
+
+function renderChatLog() {
+  const feed = document.getElementById('chatFeed');
+  if (chatMessages.length === 0) {
+    feed.innerHTML = `<div class="empty-floor"><div class="big">🤖</div>En attente des agents…<br><span style="font-size:12px">Les messages apparaîtront lors des prochains débats.</span></div>`;
+    return;
+  }
+  feed.innerHTML = chatMessages.map(m => buildChatBubble(m)).join('');
+  setText('chatCount', chatMessages.length + ' message' + (chatMessages.length > 1 ? 's' : ''));
+  scrollChatToBottom();
+}
+
+function buildChatBubble(m) {
+  if (m.type === 'system') {
+    return `<div class="chat-msg system">
+      <div class="chat-avatar system">🤖</div>
+      <div class="chat-body">
+        <div class="chat-header">
+          <span class="chat-name system">Système</span>
+          <span class="chat-time">${fTime(m.timestamp)}</span>
+        </div>
+        <div class="chat-content">${esc(m.content)}</div>
+      </div>
+    </div>`;
+  }
+
+  const icon = AGENT_ICONS[m.agent] || '🤖';
+  const roundLabel = m.round ? `R${m.round}` : '';
+  return `<div class="chat-msg">
+    <div class="chat-avatar ${esc(m.agent)}">${icon}</div>
+    <div class="chat-body">
+      <div class="chat-header">
+        <span class="chat-name ${esc(m.agent)}">${icon} ${esc(m.agent)}</span>
+        ${m.token ? `<span class="chat-token">$${esc(m.token)}</span>` : ''}
+        ${roundLabel ? `<span class="chat-round">Round ${m.round}</span>` : ''}
+        <span class="chat-time">${fTime(m.timestamp)}</span>
+      </div>
+      <div class="chat-content">${esc(m.content)}</div>
+    </div>
+  </div>`;
+}
+
+function appendChatMessage(m) {
+  chatMessages.push(m);
+  if (chatMessages.length > 120) chatMessages = chatMessages.slice(-120);
+
+  const feed = document.getElementById('chatFeed');
+  // Enlève le placeholder si présent
+  if (feed.querySelector('.empty-floor')) feed.innerHTML = '';
+
+  const div = document.createElement('div');
+  div.innerHTML = buildChatBubble(m);
+  feed.appendChild(div.firstElementChild);
+
+  setText('chatCount', chatMessages.length + ' message' + (chatMessages.length > 1 ? 's' : ''));
+  scrollChatToBottom();
+}
+
+function scrollChatToBottom() {
+  const feed = document.getElementById('chatFeed');
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ─── SSE ───────────────────────────────────────────────────────────────────
+
+function startSSE() {
+  if (sseSource) return; // déjà connecté
+  sseSource = new EventSource('/api/events');
+  sseSource.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (activePage === 'floor') {
+        appendChatMessage(msg);
+        // Met aussi à jour les sections si un débat vient de finir
+        if (msg.agent === 'Coordinateur') {
+          fetchFloor(); // refresh stats + lessons
+        }
+      }
+    } catch {}
+  };
+  sseSource.onerror = () => {
+    sseSource.close();
+    sseSource = null;
+    // Reconnexion automatique dans 5s
+    setTimeout(() => { if (activePage === 'floor') startSSE(); }, 5000);
+  };
+}
+
+// ─── Agent stats ──────────────────────────────────────────────────────────
+
+const AGENT_DEFS = [
+  { key: 'momentum', icon: '📈', name: 'Momentum', colorClass: 'c-blue' },
+  { key: 'whale',    icon: '🐳', name: 'Whale',    colorClass: 'c-purple' },
+  { key: 'bull',     icon: '🐂', name: 'Bull',     colorClass: 'c-green' },
+  { key: 'bear',     icon: '🐻', name: 'Bear',     colorClass: 'c-red' },
+];
+
+function renderAgentStats(stats) {
+  if (!stats) return;
+  const grid = document.getElementById('agentStatsGrid');
+  grid.innerHTML = AGENT_DEFS.map(a => {
+    const s   = stats[a.key] || { accuracy: null, total: 0, correct: 0 };
+    const acc = s.accuracy != null ? s.accuracy + '%' : '—';
+    const cl  = s.accuracy == null ? 'c-muted' : s.accuracy >= 60 ? 'c-green' : s.accuracy >= 40 ? 'c-yellow' : 'c-red';
+    return `<div class="agent-stat-card">
+      <div class="agent-icon">${a.icon}</div>
+      <div class="agent-name">${a.name}</div>
+      <div class="agent-acc ${cl}">${acc}</div>
+      <div class="agent-sub">${s.total} signal${s.total !== 1 ? 's' : ''} · ${s.correct} ✓</div>
+    </div>`;
+  }).join('');
+}
+
+// ─── Lessons ───────────────────────────────────────────────────────────────
+
+function renderLessons(lessons) {
+  const tbody = document.getElementById('lessonsBody');
+  if (!lessons || lessons.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Aucun débat enregistré</td></tr>';
+    return;
+  }
+  tbody.innerHTML = lessons.slice(0, 15).map(l => {
+    const outcomeHtml = l.outcome === 'WIN'
+      ? `<span class="outcome-win">✅ WIN</span>`
+      : l.outcome === 'LOSS'
+      ? `<span class="outcome-loss">❌ LOSS</span>`
+      : `<span class="outcome-run">⏳ en cours</span>`;
+    const pnlHtml = l.pnlPct != null
+      ? `<span class="${cClass(l.pnlPct)}">${l.pnlPct >= 0 ? '+' : ''}${l.pnlPct.toFixed(1)}%</span>`
+      : '—';
+    const decClass = l.decision === 'BUY' ? 'c-green' : l.decision === 'SKIP' ? 'c-red' : 'c-yellow';
+    return `<tr class="lesson-row">
+      <td><strong>$${esc(l.symbol)}</strong></td>
+      <td class="c-blue">${l.score ?? '—'}/100</td>
+      <td class="${decClass}">${l.decision}</td>
+      <td>${outcomeHtml}</td>
+      <td>${pnlHtml}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── Suggestions ──────────────────────────────────────────────────────────
+
+const AGENT_LABEL = { bull: '🐂 Bull', bear: '🐻 Bear', momentum: '📈 Momentum', whale: '🐳 Whale', coordinator: '🎯 Coordinateur', risk: '⚠️ Risk' };
+
+function renderSuggestions(suggestions) {
+  const body = document.getElementById('suggBody');
+  const count = document.getElementById('suggCount');
+
+  if (!suggestions || suggestions.length === 0) {
+    body.innerHTML = `<div class="empty-floor" style="padding:28px"><div class="big" style="font-size:28px">💡</div>Les agents proposeront des améliorations ici<br>après suffisamment de trades analysés.</div>`;
+    count.textContent = '—';
+    return;
+  }
+
+  const pending = suggestions.filter(s => s.status === 'pending').length;
+  count.textContent = `${pending} en attente · ${suggestions.length} total`;
+
+  body.innerHTML = suggestions.map(s => {
+    const agentLabel = AGENT_LABEL[s.agent] || s.agent;
+    const isPending  = s.status === 'pending';
+    const dateStr    = new Date(s.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const statusBadge = s.status === 'approved'
+      ? `<span class="c-green" style="font-size:11px">✅ Approuvée</span>`
+      : s.status === 'rejected'
+      ? `<span class="c-red" style="font-size:11px">❌ Rejetée</span>`
+      : `<span class="c-yellow" style="font-size:11px">⏳ En attente</span>`;
+
+    const actionBtns = isPending
+      ? `<div class="sugg-actions">
+          <button class="btn btn-approve" onclick="approveSugg('${esc(s.id)}', this)">✅ Appliquer</button>
+          <button class="btn btn-reject"  onclick="rejectSugg('${esc(s.id)}', this)">❌ Ignorer</button>
+        </div>`
+      : '';
+
+    return `<div class="suggestion-card ${esc(s.status)}" id="sugg-${esc(s.id)}">
+      <div class="sugg-meta">
+        <span class="sugg-agent">${agentLabel}</span>
+        <span>·</span>
+        <span>${dateStr}</span>
+        <span style="margin-left:auto">${statusBadge}</span>
+      </div>
+      <div class="sugg-text">${esc(s.suggestion)}</div>
+      ${actionBtns}
+    </div>`;
+  }).join('');
+}
+
+async function approveSugg(id, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/suggestions/${id}/approve`, { method: 'POST' });
+    fetchFloor();
+  } catch { btn.disabled = false; }
+}
+
+async function rejectSugg(id, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/suggestions/${id}/reject`, { method: 'POST' });
+    fetchFloor();
+  } catch { btn.disabled = false; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
 function fSol(v) {
   if (v == null) return '—';
   return (v >= 0 ? '+' : '') + v.toFixed(4) + ' ◎';
@@ -675,17 +1316,24 @@ function fDur(ms) {
   if (h < 24)   return h + 'h' + (m % 60 ? (m % 60) + 'm' : '');
   return Math.floor(h / 24) + 'j';
 }
+function fTime(ts) {
+  if (!ts) return '';
+  return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 function mintShort(m) { return m ? m.slice(0, 4) + '…' + m.slice(-4) : '—'; }
 function cClass(v)    { return v > 0 ? 'c-green' : v < 0 ? 'c-red' : ''; }
-function setText(id, v) { document.getElementById(id).textContent = v; }
+function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
 function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-// ── Boot ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════════════════════════════════
 initCharts();
 fetchData();
 setInterval(fetchData, 15_000);

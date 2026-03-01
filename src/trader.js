@@ -13,9 +13,10 @@ const {
   LAMPORTS_PER_SOL,
 } = require('@solana/web3.js');
 const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
-const bs58 = require('bs58');
-const fs = require('fs');
-const path = require('path');
+const bs58        = require('bs58');
+const fs          = require('fs');
+const path        = require('path');
+const agentMemory = require('./agentMemory');
 
 const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
@@ -240,7 +241,14 @@ class Trader {
    * @param {number} pct        - Pourcentage à vendre (1-100)
    * @param {number} slippageBps
    */
-  async sell(tokenMint, pct = 100, slippageBps = 300) {
+  /**
+   * Vend un pourcentage d'un token en SOL
+   * @param {string} tokenMint
+   * @param {number} pct        - Pourcentage à vendre (1-100)
+   * @param {number} slippageBps
+   * @param {string} exitReason - Raison de clôture pour la mémoire agents
+   */
+  async sell(tokenMint, pct = 100, slippageBps = 300, exitReason = 'MANUAL') {
     if (!this.wallet) throw new Error('Wallet non chargé');
 
     const balance = await this.getTokenBalance(tokenMint);
@@ -265,6 +273,12 @@ class Trader {
         pos.closeTimestamp = Date.now();
       }
       this.positions.delete(tokenMint);
+
+      // Enregistre l'outcome dans la mémoire des agents (pour apprentissage)
+      if (pos && pnlSol != null) {
+        const pnlPct = (pnlSol / pos.solSpent) * 100;
+        agentMemory.recordOutcome(tokenMint, pnlPct, exitReason);
+      }
     }
     this._save();
 
@@ -317,21 +331,25 @@ class Trader {
       const shortMint = tokenMint.slice(0, 8) + '...';
 
       let reason = null;
+      let exitReason = null;
 
       // Trailing stop-loss activé seulement si le prix a monté > 20% depuis l'entrée
       const gainFromEntry = ((pos.highPriceUsd || pos.entryPriceUsd) - pos.entryPriceUsd) / pos.entryPriceUsd * 100;
       if (gainFromEntry >= 20 && dropFromHigh >= pos.stopLossPct) {
-        reason = `📉 <b>TRAILING STOP</b> déclenché\n${shortMint}\nHaut: $${pos.highPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nRecul: -${dropFromHigh.toFixed(1)}%  |  PnL global: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`;
+        reason     = `📉 <b>TRAILING STOP</b> déclenché\n${shortMint}\nHaut: $${pos.highPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nRecul: -${dropFromHigh.toFixed(1)}%  |  PnL global: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`;
+        exitReason = 'TRAILING_STOP';
       } else if (changePct <= -pos.stopLossPct) {
-        reason = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
+        reason     = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
+        exitReason = 'STOP_LOSS';
       } else if (changePct >= pos.takeProfitPct) {
-        reason = `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
+        reason     = `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
+        exitReason = 'TAKE_PROFIT';
       }
 
       if (reason) {
         try {
           console.log(`[Trader] ${reason.replace(/<[^>]+>/g, '')}`);
-          const { txId } = await this.sell(tokenMint, 100);
+          const { txId } = await this.sell(tokenMint, 100, 300, exitReason);
           if (notify) {
             notify(`${reason}\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`);
           }

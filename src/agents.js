@@ -6,9 +6,23 @@
  * Round 3 (séquentiel): Risk Manager — décision finale pondérée
  */
 
-const { ask } = require('./anthropic');
+const EventEmitter = require('events');
+const { ask }      = require('./anthropic');
+const state        = require('./state');
+const agentMemory  = require('./agentMemory');
 
 const MODEL = 'claude-haiku-4-5-20251001'; // Rapide + économique pour les débats
+
+/**
+ * Bus d'événements des agents — permet au dashboard d'écouter
+ * les messages du Trading Floor en temps réel (SSE).
+ *
+ * Événements émis :
+ *  - 'message'  : { agent, icon, token, round, content, timestamp }
+ *  - 'system'   : { content, timestamp }
+ */
+const agentBus = new EventEmitter();
+agentBus.setMaxListeners(20);
 
 function formatTokenForAgents(token) {
   return JSON.stringify({
@@ -195,7 +209,7 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
  * @param {Object} momentum - Résultat de runMomentumAgent (optionnel)
  * Retourne: { score: 0-10, arguments: string[], entryReason: string, narrative: string|null }
  */
-async function runBullAgent(token, momentum = null) {
+async function runBullAgent(token, momentum = null, memCtx = null) {
   const system = `Tu es un analyste crypto OPTIMISTE spécialisé dans les meme coins Solana.
 Tu analyses les données de marché pour identifier les opportunités de trading à court terme.
 
@@ -225,6 +239,8 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 - Signaux: ${JSON.stringify(momentum.signals)}${momentum.warning ? `\n- ⚠️ Warning: ${momentum.warning}` : ''}`;
   }
 
+  if (memCtx) content += `\n\n${memCtx}`;
+
   const text = await ask(system, content, MODEL);
   return parseAgentJson(text, {
     score: 5,
@@ -244,7 +260,7 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
  * @param {Object} whale     - Résultat de runWhaleAgent (optionnel)
  * Retourne: { riskScore: 0-10, redFlags: string[], verdict: "AVOID|CAUTION|OK" }
  */
-async function runBearAgent(token, security = null, rugReport = null, lpLock = null, whale = null) {
+async function runBearAgent(token, security = null, rugReport = null, lpLock = null, whale = null, memCtx = null) {
   const system = `Tu es un analyste crypto PESSIMISTE spécialisé dans la détection de rug pulls et scams sur Solana.
 
 TON PÉRIMÈTRE (ne pas déborder hors de ces sujets):
@@ -297,6 +313,8 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
     content += `\n\nVerdiet Whale (pré-calculé):
 - Concentration: ${whale.concentrationRisk}  |  Holders: ${whale.holderHealth}  |  Distribution: ${whale.distributionSignal}${whale.warning ? `\n- ⚠️ ${whale.warning}` : ''}`;
   }
+
+  if (memCtx) content += `\n\n${memCtx}`;
 
   const text = await ask(system, content, MODEL);
   return parseAgentJson(text, {
@@ -429,6 +447,47 @@ Texte brut uniquement, pas de JSON, pas de markdown.`;
   };
 }
 
+// ─── Helpers émission ─────────────────────────────────────────────────────────
+
+function emitMsg(agent, icon, token, round, content) {
+  agentBus.emit('message', {
+    agent,
+    icon,
+    token,
+    round,
+    content,
+    timestamp: Date.now(),
+  });
+}
+
+function formatMomentumMsg(symbol, m) {
+  const warn = m.warning ? `\n⚠️ ${m.warning}` : '';
+  return `Score ${m.score}/10 | Tendance: ${m.trend} | Buy pressure: ${m.buyPressure}/10 | Volume: ${m.volumeSignal}\n${m.signals.join(' • ')}${warn}`;
+}
+
+function formatWhaleMsg(symbol, w) {
+  const warn = w.warning ? `\n⚠️ ${w.warning}` : '';
+  return `Score ${w.score}/10 | Concentration: ${w.concentrationRisk} | Holders: ${w.holderHealth} | Distribution: ${w.distributionSignal}\n${w.signals.join(' • ')}${warn}`;
+}
+
+function formatBullMsg(symbol, b) {
+  const nar = b.narrative ? `\nNarrative: ${b.narrative}` : '';
+  return `Score ${b.score}/10 — ${b.entryReason}\n${b.arguments.join(' • ')}${nar}`;
+}
+
+function formatBearMsg(symbol, b) {
+  return `Risk ${b.riskScore}/10 — Verdict: ${b.verdict}\n${b.redFlags.join(' • ')}`;
+}
+
+function formatCoordMsg(symbol, d) {
+  const bk = d.breakdown;
+  return `Score ${d.score}/100 → DÉCISION: ${d.decision} (confiance ${d.confidence}/10)\n` +
+    `${d.reasoning}\n` +
+    `Breakdown — M:${bk.momentum.toFixed(0)}/25 | Bull:${bk.bull.toFixed(0)}/20 | Bear:${bk.bear.toFixed(0)}/25 | Whale:${bk.whale.toFixed(0)}/15 | Sécu:${bk.security}/15`;
+}
+
+// ─── Débat principal ──────────────────────────────────────────────────────────
+
 /**
  * Lance le débat complet entre les agents pour un token
  *
@@ -441,33 +500,54 @@ Texte brut uniquement, pas de JSON, pas de markdown.`;
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
  * @param {Object} overview  - Données Birdeye overview — holder count (optionnel)
  * @param {Object} lpLock    - Données LP lock — { lpLockedPct, lpLockedUSD, isLocked } (optionnel)
- * @returns {Promise<{bull, bear, momentum, whale, decision, token, security, rugReport, overview, lpLock}>}
+ * @returns {Promise<{bull, bear, momentum, whale, decision, token, security, rugReport, overview, lpLock}|null>}
  */
 async function runDebate(token, security = null, rugReport = null, overview = null, lpLock = null) {
-  const symbol = token.baseToken?.symbol || '???';
+  const symbol  = token.baseToken?.symbol  || '???';
+  const address = token.baseToken?.address || null;
+
+  // ── Toggle économie de crédits ──────────────────────────────────────────
+  if (!state.agentsEnabled) {
+    agentBus.emit('system', {
+      content:   `⏸️ Débats IA désactivés (mode économie). Token ignoré: ${symbol}`,
+      timestamp: Date.now(),
+    });
+    return null; // scanner traitera null comme SKIP
+  }
+
   const sources = [
-    security ? 'Birdeye' : null,
-    overview ? `${overview.holder ?? '?'} holders` : null,
+    security  ? 'Birdeye'                          : null,
+    overview  ? `${overview.holder ?? '?'} holders` : null,
     lpLock != null ? `LP ${lpLock.lpLockedPct.toFixed(0)}%` : null,
-    rugReport ? 'RugCheck' : null,
+    rugReport ? 'RugCheck'                          : null,
   ].filter(Boolean);
   const sourceStr = sources.length > 0 ? ` (${sources.join(' | ')})` : '';
   console.log(`[Agents] Débat pour ${symbol}${sourceStr}...`);
 
-  // Round 1: agents de données en parallèle
+  // Contexte mémoire — injecté dans les agents de Round 2
+  const memCtx = agentMemory.getContextSummary();
+
+  // ── Round 1: agents de données en parallèle ─────────────────────────────
+  agentBus.emit('system', { content: `🔍 Analyse de $${symbol}${sourceStr} — Round 1 en cours…`, timestamp: Date.now() });
   const [momentum, whale] = await Promise.all([
     runMomentumAgent(token),
     runWhaleAgent(token, security, overview),
   ]);
+  emitMsg('Momentum', '📈', symbol, 1, formatMomentumMsg(symbol, momentum));
+  emitMsg('Whale',    '🐳', symbol, 1, formatWhaleMsg(symbol, whale));
 
-  // Round 2: agents de débat enrichis par Round 1 (en parallèle)
+  // ── Round 2: agents de débat enrichis (en parallèle) ────────────────────
+  agentBus.emit('system', { content: `⚡ $${symbol} — Round 2: Bull vs Bear…`, timestamp: Date.now() });
   const [bull, bear] = await Promise.all([
-    runBullAgent(token, momentum),
-    runBearAgent(token, security, rugReport, lpLock, whale),
+    runBullAgent(token, momentum, memCtx),
+    runBearAgent(token, security, rugReport, lpLock, whale, memCtx),
   ]);
+  emitMsg('Bull', '🐂', symbol, 2, formatBullMsg(symbol, bull));
+  emitMsg('Bear', '🐻', symbol, 2, formatBearMsg(symbol, bear));
 
-  // Round 3: Coordinateur — score déterministe + reasoning LLM
+  // ── Round 3: Coordinateur — score déterministe + reasoning LLM ──────────
   const decision = await runCoordinator(token, bull, bear, momentum, whale, security, rugReport, lpLock);
+  emitMsg('Coordinateur', '🎯', symbol, 3, formatCoordMsg(symbol, decision));
 
   console.log(
     `[Agents] ${symbol} → ${decision.decision} | score ${decision.score}/100 | confiance ${decision.confidence}/10` +
@@ -475,7 +555,14 @@ async function runDebate(token, security = null, rugReport = null, overview = nu
     ` | whale ${whale.score}/10 (${whale.concentrationRisk})`
   );
 
-  return { bull, bear, momentum, whale, decision, token, security, rugReport, overview, lpLock };
+  const result = { bull, bear, momentum, whale, decision, token, security, rugReport, overview, lpLock };
+
+  // Enregistre le débat en mémoire (outcome sera mis à jour à la clôture du trade)
+  if (decision.decision === 'BUY') {
+    agentMemory.recordDebate(address, symbol, result);
+  }
+
+  return result;
 }
 
-module.exports = { runDebate, runMomentumAgent, runWhaleAgent };
+module.exports = { runDebate, runMomentumAgent, runWhaleAgent, agentBus };
