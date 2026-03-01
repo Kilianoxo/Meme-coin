@@ -4,6 +4,7 @@ const Trader    = require('./src/trader');
 const Scanner   = require('./src/scanner');
 const Bot       = require('./src/bot');
 const Dashboard = require('./src/dashboard');
+const Watchdog  = require('./src/watchdog');
 const logger    = require('./src/logger');
 
 // Vérifications de base au démarrage
@@ -38,6 +39,9 @@ async function main() {
   bot.start();
   scanner.start();
   new Dashboard(trader).start();
+
+  const watchdog = new Watchdog(scanner, (msg) => bot._send(msg, { parse_mode: 'HTML' }));
+  watchdog.start();
 
   console.log('✅ Bot opérationnel.');
 }
