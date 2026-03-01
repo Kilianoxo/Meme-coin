@@ -187,14 +187,15 @@ class Scanner extends EventEmitter {
     const symbol = token.baseToken?.symbol || '???';
 
     // Enrichissement Birdeye + RugCheck en parallèle
-    const [{ security }, rugReport] = await Promise.all([
+    const [{ security, overview }, rugReport] = await Promise.all([
       birdeye.getTokenData(address),
       rugcheck.getTokenReport(address),
     ]);
 
-    // Hard filter Birdeye (mint authority, concentration holders)
-    if (birdeye.isHardBlocked(security)) {
-      console.log(`[Scanner] ⛔ ${symbol} bloqué Birdeye (mint authority ou concentration holders)`);
+    // Hard filter Birdeye (mint authority, concentration holders, holders < 50)
+    if (birdeye.isHardBlocked(security, overview)) {
+      const holders = overview?.holder ?? '?';
+      console.log(`[Scanner] ⛔ ${symbol} bloqué Birdeye (mint/concentration/holders: ${holders})`);
       return;
     }
 
@@ -205,7 +206,7 @@ class Scanner extends EventEmitter {
       return;
     }
 
-    const debate = await runDebate(token, security, rugReport);
+    const debate = await runDebate(token, security, rugReport, overview);
     this.emit('debate', debate);
   }
 
@@ -256,12 +257,12 @@ class Scanner extends EventEmitter {
         this.seenAddresses.add(migration.mint);
 
         console.log(`[Scanner] 🎓 Analyse de la graduation: ${sym}`);
-        const [{ security }, rugReport] = await Promise.all([
+        const [{ security, overview }, rugReport] = await Promise.all([
           birdeye.getTokenData(migration.mint),
           rugcheck.getTokenReport(migration.mint),
         ]);
 
-        if (birdeye.isHardBlocked(security)) {
+        if (birdeye.isHardBlocked(security, overview)) {
           console.log(`[Scanner] ⛔ Graduation ${sym} bloquée Birdeye`);
           return;
         }
@@ -271,7 +272,7 @@ class Scanner extends EventEmitter {
           return;
         }
 
-        runDebate(pair, security, rugReport)
+        runDebate(pair, security, rugReport, overview)
           .then((debate) => {
             debate.isGraduated = true;
             this.emit('debate', debate);

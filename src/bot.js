@@ -108,11 +108,15 @@ class Bot {
     (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
 
     // Données de sécurité Birdeye (si disponibles)
-    const sec = formatSecurity(debate.security);
+    const sec = formatSecurity(debate.security, debate.overview);
     if (sec) {
       msg += `\n🔒 <b>Sécurité on-chain</b>\n`;
       msg += `  Mint: ${sec.mint}  |  Freeze: ${sec.freeze}\n`;
       msg += `  Top 10 holders: ${sec.top10}  |  Créateur: ${sec.creator}\n`;
+      if (sec.holders) {
+        const holdersEmoji = parseInt(sec.holders.replace(/\s/g, ''), 10) < 200 ? '⚠️' : '👥';
+        msg += `  ${holdersEmoji} Holders uniques: ${sec.holders}\n`;
+      }
     }
 
     // Score RugCheck (si disponible)
@@ -379,8 +383,12 @@ class Bot {
         await ctx.reply(this._formatToken(pair), { parse_mode: 'HTML', disable_web_page_preview: true });
         await ctx.reply('🤖 Débat IA en cours...');
 
-        const rugReport = await rugcheck.getTokenReport(pair.baseToken?.address);
-        const debate = await runDebate(pair, null, rugReport);
+        const birdeye = require('./birdeye');
+        const [{ security, overview }, rugReport] = await Promise.all([
+          birdeye.getTokenData(pair.baseToken?.address),
+          rugcheck.getTokenReport(pair.baseToken?.address),
+        ]);
+        const debate = await runDebate(pair, security, rugReport, overview);
         await ctx.reply(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {

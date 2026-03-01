@@ -71,11 +71,12 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 /**
  * Agent BEAR — Pessimiste, cherche les risques
  * @param {Object} token     - Données DexScreener
- * @param {Object} security  - Données Birdeye (optionnel)
+ * @param {Object} security  - Données Birdeye security (optionnel)
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
+ * @param {Object} overview  - Données Birdeye overview (optionnel) — holder count, volume enrichi
  * Retourne: { riskScore: 0-10, redFlags: string[], verdict: "AVOID|CAUTION|OK" }
  */
-async function runBearAgent(token, security = null, rugReport = null) {
+async function runBearAgent(token, security = null, rugReport = null, overview = null) {
   const system = `Tu es un analyste crypto PESSIMISTE spécialisé dans la détection de rug pulls et scams sur Solana.
 Tu cherches: liquidité trop basse, volume artificiel (txns faibles vs volume élevé), token trop récent,
 market cap vs fdv suspect, absence de holders, prix en chute libre.
@@ -100,6 +101,14 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 - Top 10 holders: ${security.top10HolderPercent?.toFixed(1) ?? '?'}% du supply
 - Part du créateur: ${security.creatorPercentage?.toFixed(1) ?? '?'}% du supply
 - Part de l'owner: ${security.ownerPercentage?.toFixed(1) ?? '?'}% du supply`;
+  }
+
+  if (overview && overview.holder != null) {
+    content += `\n\nDonnées holders (Birdeye overview):
+- Nombre de holders uniques: ${overview.holder}`;
+    if (overview.holder < 200) {
+      content += ` ⚠️ Très peu de holders — risque de manipulation du prix élevé`;
+    }
   }
 
   if (rugReport) {
@@ -164,24 +173,29 @@ ${JSON.stringify(bearAnalysis, null, 2)}`;
  * @param {Object} token     - Données de paire DexScreener
  * @param {Object} security  - Données de sécurité Birdeye (optionnel)
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
- * @returns {Promise<{bull, bear, decision, token, security, rugReport}>}
+ * @param {Object} overview  - Données Birdeye overview — holder count (optionnel)
+ * @returns {Promise<{bull, bear, decision, token, security, rugReport, overview}>}
  */
-async function runDebate(token, security = null, rugReport = null) {
+async function runDebate(token, security = null, rugReport = null, overview = null) {
   const symbol = token.baseToken?.symbol || '???';
-  const sources = [security ? 'Birdeye' : null, rugReport ? 'RugCheck' : null].filter(Boolean);
-  const sourceStr = sources.length > 0 ? ` (${sources.join(' + ')})` : '';
+  const sources = [
+    security ? 'Birdeye' : null,
+    overview ? `${overview.holder ?? '?'} holders` : null,
+    rugReport ? 'RugCheck' : null,
+  ].filter(Boolean);
+  const sourceStr = sources.length > 0 ? ` (${sources.join(' | ')})` : '';
   console.log(`[Agents] Débat pour ${symbol}${sourceStr}...`);
 
   const [bull, bear] = await Promise.all([
     runBullAgent(token),
-    runBearAgent(token, security, rugReport),
+    runBearAgent(token, security, rugReport, overview),
   ]);
 
   const decision = await runRiskManager(token, bull, bear);
 
   console.log(`[Agents] ${symbol} → ${decision.decision} (confiance: ${decision.confidence}/10)`);
 
-  return { bull, bear, decision, token, security, rugReport };
+  return { bull, bear, decision, token, security, rugReport, overview };
 }
 
 module.exports = { runDebate };

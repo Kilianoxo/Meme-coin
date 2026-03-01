@@ -90,35 +90,44 @@ async function getTokenData(tokenAddress) {
  *   - Mint authority encore active → peut printer des tokens à l'infini → DANGER
  *   - Créateur détient > 20% du supply → risque de dump → DANGER
  *   - Top 10 holders > 90% du supply → manipulation évidente → DANGER
+ *   - Moins de 50 holders uniques → volume quasi-certainement wash tradé → DANGER
  */
-function isHardBlocked(security) {
-  if (!security) return false; // Pas de données = on laisse passer
+function isHardBlocked(security, overview = null) {
+  if (!security && !overview) return false; // Pas de données = on laisse passer
 
-  if (security.mintAuthority !== null && security.mintAuthority !== undefined) {
-    return true; // Mint authority active
+  if (security) {
+    if (security.mintAuthority !== null && security.mintAuthority !== undefined) {
+      return true; // Mint authority active
+    }
+    if ((security.creatorPercentage || 0) > 20) {
+      return true; // Créateur tient trop de tokens
+    }
+    if ((security.top10HolderPercent || 0) > 90) {
+      return true; // Concentration extrême
+    }
   }
-  if ((security.creatorPercentage || 0) > 20) {
-    return true; // Créateur tient trop de tokens
-  }
-  if ((security.top10HolderPercent || 0) > 90) {
-    return true; // Concentration extrême
+
+  if (overview && overview.holder != null && overview.holder < 50) {
+    return true; // Trop peu de holders → wash trading probable
   }
 
   return false;
 }
 
 /** Formate le résumé sécurité pour l'affichage Telegram */
-function formatSecurity(security) {
-  if (!security) return null;
+function formatSecurity(security, overview = null) {
+  if (!security && !overview) return null;
 
-  const mint = security.mintAuthority ? '🔴 Active' : '✅ Révoquée';
-  const freeze = security.freezeAuthority ? '🔴 Active' : '✅ Révoquée';
-  const top10 = security.top10HolderPercent != null
+  const mint = security?.mintAuthority ? '🔴 Active' : '✅ Révoquée';
+  const freeze = security?.freezeAuthority ? '🔴 Active' : '✅ Révoquée';
+  const top10 = security?.top10HolderPercent != null
     ? `${security.top10HolderPercent.toFixed(1)}%` : '?';
-  const creator = security.creatorPercentage != null
+  const creator = security?.creatorPercentage != null
     ? `${security.creatorPercentage.toFixed(1)}%` : '?';
+  const holders = overview?.holder != null
+    ? overview.holder.toLocaleString('fr-FR') : null;
 
-  return { mint, freeze, top10, creator };
+  return { mint, freeze, top10, creator, holders };
 }
 
 module.exports = { getTokenSecurity, getTokenOverview, getTokenData, isHardBlocked, formatSecurity };
