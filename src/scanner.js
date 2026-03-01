@@ -21,7 +21,7 @@ const FILTERS = {
   minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD || '10000'),
   minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD || '50000'),
   minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD || '100000'),
-  maxAgeHours: parseFloat(process.env.MAX_TOKEN_AGE_HOURS || '24'),
+  maxAgeHours: parseFloat(process.env.MAX_TOKEN_AGE_HOURS || '72'),
 };
 
 class Scanner extends EventEmitter {
