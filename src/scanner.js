@@ -11,8 +11,8 @@ const birdeye = require('./birdeye');
 const gecko = require('./geckoterminal');
 const rugcheck = require('./rugcheck');
 
-const MIGRATION_DEXSCREENER_RETRY_ATTEMPTS = 6;
-const MIGRATION_DEXSCREENER_RETRY_DELAY_MS = 10_000; // 10s entre chaque tentative (max 60s)
+const MIGRATION_DEXSCREENER_RETRY_ATTEMPTS = 2;
+const MIGRATION_DEXSCREENER_RETRY_DELAY_MS = 30_000; // 30s entre chaque tentative (max 60s)
 
 const SCAN_INTERVAL_MS = 30_000; // 30 secondes
 
