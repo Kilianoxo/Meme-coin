@@ -30,6 +30,30 @@ function formatTokenForAgents(token) {
   }, null, 2);
 }
 
+function formatWhaleData(token, security, overview) {
+  const tx = token.txns || {};
+  const vol = token.volume || {};
+
+  return JSON.stringify({
+    holders: {
+      unique:     overview?.holder               ?? null,
+      top10Pct:   security?.top10HolderPercent   ?? null,
+      creatorPct: security?.creatorPercentage    ?? null,
+      ownerPct:   security?.ownerPercentage      ?? null,
+    },
+    activity: {
+      txns: {
+        h1:  { buys: tx.h1?.buys  ?? 0, sells: tx.h1?.sells  ?? 0 },
+        h6:  { buys: tx.h6?.buys  ?? 0, sells: tx.h6?.sells  ?? 0 },
+        h24: { buys: tx.h24?.buys ?? 0, sells: tx.h24?.sells ?? 0 },
+      },
+      volume: { h1: vol.h1 ?? 0, h24: vol.h24 ?? 0 },
+    },
+    marketCap: token.marketCap?.usd ?? null,
+    liquidity:  token.liquidity?.usd ?? null,
+  }, null, 2);
+}
+
 function formatMomentumData(token) {
   const pc = token.priceChange || {};
   const vol = token.volume || {};
@@ -99,6 +123,68 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
     buyPressure: 5.0,
     volumeSignal: 'STABLE',
     signals: ['Données insuffisantes pour l\'analyse momentum'],
+    warning: null,
+  });
+}
+
+/**
+ * Agent WHALE — Analyse la structure de détention et détecte les manipulations (Round 1)
+ * Données: top10/créateur/owner %, holder count, cross-check activité vs concentration
+ * Retourne: { score: 0-10, concentrationRisk: string, distributionSignal: string,
+ *             holderHealth: string, signals: string[], warning: string|null }
+ */
+async function runWhaleAgent(token, security = null, overview = null) {
+  // Sans données Birdeye, score neutre — pas la peine de solliciter le LLM
+  if (!security && !overview) {
+    return {
+      score: 5,
+      concentrationRisk: 'MEDIUM',
+      distributionSignal: 'NEUTRAL',
+      holderHealth: 'MODERATE',
+      signals: ['Données de holders indisponibles (clé Birdeye manquante)'],
+      warning: null,
+    };
+  }
+
+  const system = `Tu es un agent spécialisé dans l'analyse de la structure de détention des tokens Solana.
+Tu évalues la santé distributionnelle du token et détectes les schémas de manipulation par gros wallets.
+
+ANALYSE DES DONNÉES:
+1. Concentration (top10Pct, creatorPct, ownerPct):
+   - top10Pct > 80% → CRITICAL | 60-80% → HIGH | 40-60% → MEDIUM | < 40% → LOW
+   - creatorPct > 15% → flag majeur (risque de dump créateur)
+   - ownerPct > 10% → flag supplémentaire
+
+2. Santé du réseau (unique holders):
+   - < 100 → CRITICAL | 100-500 → THIN | 500-2000 → MODERATE | > 2000 → HEALTHY
+
+3. Signal de distribution (cross-check activité h24 + concentration):
+   - buys > 65% des txns h24 ET holders > 500 → ACCUMULATING (positif)
+   - buys < 35% des txns h24                  → DISTRIBUTING (négatif, whales sortent)
+   - Sinon                                     → NEUTRAL
+
+4. Patterns de manipulation (warning si détecté):
+   - Volume h1 élevé + holders < 200 → probable wash trading
+   - buy ratio > 80% h1 mais holders < 300 → pump coordonné suspect
+   - creatorPct > 20% + prix en hausse → précondition dump classique
+
+Calcule score 0-10:
+  Base 10, puis:
+  - concentrationRisk: CRITICAL -5 | HIGH -3 | MEDIUM -1 | LOW 0
+  - holderHealth: HEALTHY +1 | MODERATE 0 | THIN -1 | CRITICAL -2
+  - distributionSignal: ACCUMULATING +1 | NEUTRAL 0 | DISTRIBUTING -2
+  Clamp entre 0 et 10.
+
+Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
+{"score": <0-10>, "concentrationRisk": "LOW|MEDIUM|HIGH|CRITICAL", "distributionSignal": "ACCUMULATING|NEUTRAL|DISTRIBUTING", "holderHealth": "HEALTHY|MODERATE|THIN|CRITICAL", "signals": ["signal court 1", "signal court 2"], "warning": <"texte" ou null>}`;
+
+  const text = await ask(system, `Analyse la structure de détention:\n${formatWhaleData(token, security, overview)}`, MODEL);
+  return parseAgentJson(text, {
+    score: 5,
+    concentrationRisk: 'MEDIUM',
+    distributionSignal: 'NEUTRAL',
+    holderHealth: 'MODERATE',
+    signals: ['Données insuffisantes pour l\'analyse whale'],
     warning: null,
   });
 }
@@ -205,25 +291,29 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 }
 
 /**
- * Risk Manager — Décision finale basée sur Bull + Bear + Momentum
+ * Risk Manager — Décision finale basée sur Bull + Bear + Momentum + Whale
  * @param {Object} momentum - Résultat de runMomentumAgent (optionnel)
+ * @param {Object} whale    - Résultat de runWhaleAgent (optionnel)
  * Retourne: { decision: "BUY|SKIP|WAIT", confidence: 0-10, suggestedAmountPct: number,
  *             stopLossPct: number, takeProfitPct: number, reasoning: string }
  */
-async function runRiskManager(token, bullAnalysis, bearAnalysis, momentum = null) {
+async function runRiskManager(token, bullAnalysis, bearAnalysis, momentum = null, whale = null) {
   const system = `Tu es le gestionnaire de risque d'un bot de trading meme coins Solana.
-Tu reçois l'analyse du Bull (opportunités), du Bear (risques), et du Momentum (vitesse marché).
+Tu reçois 4 analyses spécialisées et prends la décision finale.
 
 Règles de base:
-- Si riskScore bear >= 8: toujours SKIP
-- Si riskScore bear >= 6 ET score bull <= 5: SKIP
-- Si momentum.trend = "REVERSAL": penché fortement vers SKIP
-- Si momentum.warning != null: traiter comme red flag supplémentaire
-- Si liquidity < 10000 USD: SKIP
-- Si volume 24h < 50000 USD: WAIT ou SKIP
+- Si bear.riskScore >= 8                                        → toujours SKIP
+- Si bear.riskScore >= 6 ET bull.score <= 5                    → SKIP
+- Si whale.concentrationRisk = "CRITICAL"                      → toujours SKIP
+- Si whale.distributionSignal = "DISTRIBUTING"                 → SKIP ou WAIT
+- Si momentum.trend = "REVERSAL"                               → penché fortement vers SKIP
+- Si momentum.warning != null OU whale.warning != null         → red flag supplémentaire
+- Si liquidity < 10000 USD                                     → SKIP
+- Si volume 24h < 50000 USD                                    → WAIT ou SKIP
 - suggestedAmountPct: max 5% du portfolio, commence à 1% si incertain
 - stopLossPct: défaut 20%, takeProfitPct: défaut 50%
-- Si momentum.trend = "ACCELERATING" ET bear.riskScore < 5: augmenter takeProfitPct et confidence
+- Si momentum.trend = "ACCELERATING" ET whale.holderHealth != "CRITICAL" ET bear.riskScore < 5
+  → augmenter takeProfitPct et confidence
 
 Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 {"decision": "BUY|SKIP|WAIT", "confidence": <0-10>, "suggestedAmountPct": <1-5>,
@@ -240,6 +330,11 @@ ${JSON.stringify(bearAnalysis, null, 2)}`;
   if (momentum) {
     content += `\n\nAnalyse MOMENTUM (score ${momentum.score}/10, trend: ${momentum.trend}):
 ${JSON.stringify(momentum, null, 2)}`;
+  }
+
+  if (whale) {
+    content += `\n\nAnalyse WHALE (score ${whale.score}/10, concentration: ${whale.concentrationRisk}, holders: ${whale.holderHealth}):
+${JSON.stringify(whale, null, 2)}`;
   }
 
   const text = await ask(system, content, MODEL);
@@ -277,19 +372,24 @@ async function runDebate(token, security = null, rugReport = null, overview = nu
   const sourceStr = sources.length > 0 ? ` (${sources.join(' | ')})` : '';
   console.log(`[Agents] Débat pour ${symbol}${sourceStr}...`);
 
-  // Round 1: 3 agents spécialisés en parallèle
-  const [momentum, bull, bear] = await Promise.all([
+  // Round 1: 4 agents spécialisés en parallèle
+  const [momentum, whale, bull, bear] = await Promise.all([
     runMomentumAgent(token),
+    runWhaleAgent(token, security, overview),
     runBullAgent(token),
     runBearAgent(token, security, rugReport, overview, lpLock),
   ]);
 
   // Round 2: Risk Manager avec toutes les données
-  const decision = await runRiskManager(token, bull, bear, momentum);
+  const decision = await runRiskManager(token, bull, bear, momentum, whale);
 
-  console.log(`[Agents] ${symbol} → ${decision.decision} | confiance ${decision.confidence}/10 | momentum ${momentum.score}/10 (${momentum.trend})`);
+  console.log(
+    `[Agents] ${symbol} → ${decision.decision} | confiance ${decision.confidence}/10` +
+    ` | momentum ${momentum.score}/10 (${momentum.trend})` +
+    ` | whale ${whale.score}/10 (${whale.concentrationRisk})`
+  );
 
-  return { bull, bear, momentum, decision, token, security, rugReport, overview, lpLock };
+  return { bull, bear, momentum, whale, decision, token, security, rugReport, overview, lpLock };
 }
 
-module.exports = { runDebate, runMomentumAgent };
+module.exports = { runDebate, runMomentumAgent, runWhaleAgent };
