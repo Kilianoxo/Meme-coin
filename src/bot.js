@@ -2,7 +2,8 @@
  * Bot Telegram — Interface complète de contrôle
  *
  * Commandes:
- *   /start      — Bienvenue + liste des commandes
+ *   /start      — Bienvenue
+ *   /help       — Liste complète des commandes avec descriptions
  *   /status     — État général du bot
  *   /balance    — Balance SOL du wallet
  *   /scan       — Lancer un scan manuel
@@ -18,6 +19,7 @@ const { Telegraf, Markup } = require('telegraf');
 const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
 const { formatSecurity } = require('./birdeye');
+const rugcheck = require('./rugcheck');
 
 class Bot {
   constructor(trader, scanner) {
@@ -84,39 +86,102 @@ class Bot {
   }
 
   _formatDebate(debate) {
-    const { bull, bear, decision, token } = debate;
-    const sym = this._esc(token.baseToken?.symbol || '???');
-    const name = this._esc(token.baseToken?.name || '');
-    const price = parseFloat(token.priceUsd || 0);
-    const ch24 = token.priceChange?.h24 || 0;
-    const pairUrl = token.url || `https://dexscreener.com/solana/${token.pairAddress}`;
-    const arrow = ch24 >= 0 ? '🟢' : '🔴';
+    const { bull, bear, momentum, whale, decision, token } = debate;
+    const sym      = this._esc(token.baseToken?.symbol || '???');
+    const name     = this._esc(token.baseToken?.name || '');
+    const price    = parseFloat(token.priceUsd || 0);
+    const ch24     = token.priceChange?.h24 || 0;
+    const ch1      = token.priceChange?.h1  || 0;
+    const pairUrl  = token.url || `https://dexscreener.com/solana/${token.pairAddress}`;
     const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision.decision] || '⚪';
+
+    // ─── Header ────────────────────────────────────────────────────────────
+    const priceStr  = price < 0.0001 ? price.toExponential(2) : price.toFixed(6);
+    const ch24Arrow = ch24 >= 0 ? '🟢' : '🔴';
+    const ch1Arrow  = ch1  >= 0 ? '▲'  : '▼';
 
     let msg = `━━━━━━━━━━━━━━━━━━━\n`;
     if (debate.isGraduated) msg += `🎓 <b>TOKEN GRADUÉ — vient de quitter Pump.fun</b>\n`;
     msg += `🪙 <b>$${sym}</b> — ${name}\n`;
-    msg += `💰 $${price < 0.0001 ? price.toExponential(2) : price.toFixed(6)}  ${arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}%\n`;
-    msg += `<a href="${pairUrl}">📊 Voir sur DexScreener</a>\n`;
+    msg += `💰 $${priceStr}  ${ch24Arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}% 24h`;
+    if (ch1 !== 0) msg += `  ${ch1Arrow} ${Math.abs(ch1).toFixed(1)}% 1h`;
+    msg += `\n<a href="${pairUrl}">📊 DexScreener</a>\n`;
     msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    msg += `🐂 <b>Bull</b> — ${bull.score}/10\n`;
-    (bull.arguments || []).slice(0, 3).forEach((a) => (msg += `  → ${this._esc(a)}\n`));
-
-    msg += `\n🐻 <b>Bear</b> — ${bear.riskScore}/10  |  ${bear.verdict}\n`;
-    (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
-
-    // Données de sécurité Birdeye (si disponibles)
-    const sec = formatSecurity(debate.security);
-    if (sec) {
-      msg += `\n🔒 <b>Sécurité on-chain</b>\n`;
-      msg += `  Mint: ${sec.mint}  |  Freeze: ${sec.freeze}\n`;
-      msg += `  Top 10 holders: ${sec.top10}  |  Créateur: ${sec.creator}\n`;
-    }
-
-    msg += `\n${decEmoji} <b>${decision.decision}</b>  —  confiance ${decision.confidence}/10\n`;
+    // ─── Verdict + Score (en premier) ──────────────────────────────────────
+    const scoreStr = decision.score != null ? `  —  <b>${decision.score}/100</b>` : '';
+    msg += `${decEmoji} <b>${decision.decision}</b>${scoreStr}  —  confiance ${decision.confidence}/10\n`;
     if (decision.reasoning) msg += `<i>${this._esc(decision.reasoning)}</i>\n`;
 
+    // ─── Agent Momentum ────────────────────────────────────────────────────
+    if (momentum) {
+      const trendEmoji = { ACCELERATING: '🚀', STABLE: '➡️', FADING: '📉', REVERSAL: '🔄' }[momentum.trend] || '❓';
+      const volEmoji   = { GROWING: '📈', STABLE: '➡️', DECLINING: '📉' }[momentum.volumeSignal] || '';
+      msg += `\n⚡ <b>Momentum</b> ${momentum.score}/10  |  ${trendEmoji} ${this._esc(momentum.trend)}  |  ${volEmoji} Vol\n`;
+      (momentum.signals || []).slice(0, 2).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
+      if (momentum.warning) msg += `  ⚠️ ${this._esc(momentum.warning)}\n`;
+    }
+
+    // ─── Agent Bull ────────────────────────────────────────────────────────
+    msg += `\n🐂 <b>Bull</b> ${bull.score}/10`;
+    if (bull.narrative) msg += `  |  💬 ${this._esc(bull.narrative)}`;
+    msg += '\n';
+    (bull.arguments || []).slice(0, 2).forEach((a) => (msg += `  → ${this._esc(a)}\n`));
+
+    // ─── Agent Bear ────────────────────────────────────────────────────────
+    msg += `\n🐻 <b>Bear</b> ${bear.riskScore}/10  |  ${this._esc(bear.verdict)}\n`;
+    (bear.redFlags || []).slice(0, 2).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
+
+    // ─── Agent Whale ───────────────────────────────────────────────────────
+    if (whale) {
+      const concEmoji = { LOW: '✅', MEDIUM: '🟡', HIGH: '🟠', CRITICAL: '🔴' }[whale.concentrationRisk] || '❓';
+      const distEmoji = { ACCUMULATING: '📥', NEUTRAL: '➡️', DISTRIBUTING: '📤' }[whale.distributionSignal] || '❓';
+      const hlthEmoji = { HEALTHY: '✅', MODERATE: '🟡', THIN: '🟠', CRITICAL: '🔴' }[whale.holderHealth] || '❓';
+      msg += `\n🐋 <b>Whale</b> ${whale.score}/10  |  ${concEmoji} ${this._esc(whale.concentrationRisk)}  |  ${distEmoji} ${this._esc(whale.distributionSignal)}  |  ${hlthEmoji} ${this._esc(whale.holderHealth)}\n`;
+      (whale.signals || []).slice(0, 1).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
+      if (whale.warning) msg += `  ⚠️ ${this._esc(whale.warning)}\n`;
+    }
+
+    // ─── Sécurité (condensée sur 2 lignes max) ─────────────────────────────
+    const sec    = formatSecurity(debate.security, debate.overview);
+    const rug    = rugcheck.formatReport(debate.rugReport);
+    const hasLp  = debate.lpLock != null;
+
+    if (sec || hasLp || rug) {
+      msg += '\n';
+
+      // Ligne 1 : Mint + Freeze + Holders (sans top10/creator — déjà dans Whale)
+      if (sec) {
+        msg += `🔒 Mint: ${sec.mint}  |  Freeze: ${sec.freeze}`;
+        if (sec.holders) {
+          const hNum = parseInt(sec.holders.replace(/\s/g, ''), 10);
+          msg += `  |  ${hNum < 200 ? '⚠️' : '👥'} ${sec.holders} holders`;
+        }
+        msg += '\n';
+      }
+
+      // Ligne 2 : LP lock + RugCheck
+      const secLine2 = [];
+      if (hasLp) {
+        const pct    = debate.lpLock.lpLockedPct;
+        const usd    = debate.lpLock.lpLockedUSD;
+        const usdStr = usd >= 1000 ? `$${(usd / 1000).toFixed(1)}K` : `$${usd.toFixed(0)}`;
+        secLine2.push(`${pct >= 80 ? '🔐' : pct >= 50 ? '⚠️' : '🔓'} LP: ${pct.toFixed(0)}% (${usdStr})`);
+      }
+      if (rug) {
+        secLine2.push(rug.rugged ? `🔴 <b>RUGPULL DÉTECTÉ</b>` : `${rug.scoreEmoji} RC: ${rug.score}/1000`);
+      }
+      if (secLine2.length > 0) {
+        if (!sec) msg += '🔒 ';
+        msg += secLine2.join('  |  ') + '\n';
+      }
+
+      // Ligne 3 : Risques RugCheck détaillés (si présents)
+      if (rug?.dangers?.length > 0) msg += `  🔴 ${rug.dangers.map((d) => this._esc(d)).join(', ')}\n`;
+      if (rug?.warns?.length  > 0) msg += `  ⚠️ ${rug.warns.map((w) => this._esc(w)).join(', ')}\n`;
+    }
+
+    // ─── SL/TP (uniquement si BUY) ────────────────────────────────────────
     if (decision.decision === 'BUY') {
       msg += `\n💸 Taille: ${decision.suggestedAmountPct}%  |  🛑 SL: -${decision.stopLossPct}%  |  🎯 TP: +${decision.takeProfitPct}%`;
     }
@@ -170,8 +235,44 @@ class Bot {
         `/set \\<clé\\> \\<valeur\\> — Modifier un paramètre\n` +
         `/analyse \\<adresse\\> — Analyser un token\n` +
         `/buy \\<adresse\\> \\<sol\\> — Achat manuel\n` +
-        `/sell \\<adresse\\> \\[%\\] — Vente manuelle`,
+        `/sell \\<adresse\\> \\[%\\] — Vente manuelle\n\n` +
+        `/help — Aide détaillée de toutes les commandes`,
         { parse_mode: 'MarkdownV2' }
+      );
+    });
+
+    bot.command('help', async (ctx) => {
+      await ctx.reply(
+        `📖 <b>Aide — Meme Coin Bot</b>\n\n` +
+
+        `<b>Infos générales</b>\n` +
+        `/start — Message de bienvenue\n` +
+        `/help — Cette aide\n` +
+        `/status — État du bot (scanner, positions, balance)\n` +
+        `/balance — Balance SOL du wallet\n\n` +
+
+        `<b>Trading</b>\n` +
+        `/auto — Activer/désactiver le trading automatique\n` +
+        `/scan — Lancer un scan manuel toutes sources\n` +
+        `/analyse &lt;adresse&gt; — Analyse complète d'un token\n` +
+        `  → Débat IA (Bull / Bear / Risk Manager)\n` +
+        `  → Sécurité on-chain (mint, freeze, holders)\n` +
+        `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel en SOL\n` +
+        `/sell &lt;adresse&gt; [%] — Vente manuelle (défaut: 100%)\n\n` +
+
+        `<b>Suivi</b>\n` +
+        `/positions — Positions ouvertes + PnL non réalisé\n` +
+        `/history — 10 derniers trades clôturés\n` +
+        `/pnl — PnL réalisé + non réalisé global\n\n` +
+
+        `<b>Paramètres</b>\n` +
+        `/settings — Afficher les paramètres actuels\n` +
+        `/set maxsol &lt;valeur&gt; — Mise max par trade en SOL\n` +
+        `/set sl &lt;valeur&gt; — Stop-loss en % (défaut: 20)\n` +
+        `/set tp &lt;valeur&gt; — Take-profit en % (défaut: 50)\n\n` +
+
+        `<i>Trailing stop activé automatiquement après +20% de gain.</i>`,
+        { parse_mode: 'HTML' }
       );
     });
 
@@ -368,7 +469,14 @@ class Bot {
         await ctx.reply(this._formatToken(pair), { parse_mode: 'HTML', disable_web_page_preview: true });
         await ctx.reply('🤖 Débat IA en cours...');
 
-        const debate = await runDebate(pair);
+        const birdeye = require('./birdeye');
+        const addr = pair.baseToken?.address;
+        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
+          birdeye.getTokenData(addr),
+          rugcheck.getTokenReport(addr),
+          rugcheck.getLpLockData(addr),
+        ]);
+        const debate = await runDebate(pair, security, rugReport, overview, lpLock);
         await ctx.reply(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {

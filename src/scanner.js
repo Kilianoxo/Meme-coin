@@ -9,6 +9,7 @@ const { runDebate } = require('./agents');
 const pumpFun = require('./pumpfun');
 const birdeye = require('./birdeye');
 const gecko = require('./geckoterminal');
+const rugcheck = require('./rugcheck');
 
 const MIGRATION_DEXSCREENER_DELAY_MS = 8_000; // Attendre 8s pour que DexScreener indexe le pool
 
@@ -185,16 +186,31 @@ class Scanner extends EventEmitter {
     const address = token.baseToken?.address;
     const symbol = token.baseToken?.symbol || '???';
 
-    // Enrichissement Birdeye (optionnel — silencieux si pas de clé)
-    const { security } = await birdeye.getTokenData(address);
+    // Enrichissement Birdeye + RugCheck (summary + LP lock) en parallèle
+    const [{ security, overview }, rugReport, lpLock] = await Promise.all([
+      birdeye.getTokenData(address),
+      rugcheck.getTokenReport(address),
+      rugcheck.getLpLockData(address),
+    ]);
 
-    // Hard filter : token trop risqué on-chain → SKIP immédiat, pas de débat
-    if (birdeye.isHardBlocked(security)) {
-      console.log(`[Scanner] ⛔ ${symbol} bloqué (mint authority ou concentration holders)`);
+    // Hard filter Birdeye (mint authority, concentration holders, holders < 50)
+    if (birdeye.isHardBlocked(security, overview)) {
+      const holders = overview?.holder ?? '?';
+      console.log(`[Scanner] ⛔ ${symbol} bloqué Birdeye (mint/concentration/holders: ${holders})`);
       return;
     }
 
-    const debate = await runDebate(token, security);
+    // Hard filter RugCheck (rugpull détecté, score > 800, risque "danger")
+    if (rugcheck.isHardBlocked(rugReport)) {
+      const score = rugReport?.score ?? '?';
+      console.log(`[Scanner] ⛔ ${symbol} bloqué RugCheck (score: ${score})`);
+      return;
+    }
+
+    const lpPct = lpLock ? `${lpLock.lpLockedPct.toFixed(0)}% LP lock` : 'LP lock: ?';
+    console.log(`[Scanner] ✅ ${symbol} passe les filtres — ${lpPct}`);
+
+    const debate = await runDebate(token, security, rugReport, overview, lpLock);
     this.emit('debate', debate);
   }
 
@@ -245,14 +261,23 @@ class Scanner extends EventEmitter {
         this.seenAddresses.add(migration.mint);
 
         console.log(`[Scanner] 🎓 Analyse de la graduation: ${sym}`);
-        const { security } = await birdeye.getTokenData(migration.mint);
+        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
+          birdeye.getTokenData(migration.mint),
+          rugcheck.getTokenReport(migration.mint),
+          rugcheck.getLpLockData(migration.mint),
+        ]);
 
-        if (birdeye.isHardBlocked(security)) {
-          console.log(`[Scanner] ⛔ Graduation ${sym} bloquée (sécurité insuffisante)`);
+        if (birdeye.isHardBlocked(security, overview)) {
+          console.log(`[Scanner] ⛔ Graduation ${sym} bloquée Birdeye`);
           return;
         }
 
-        runDebate(pair, security)
+        if (rugcheck.isHardBlocked(rugReport)) {
+          console.log(`[Scanner] ⛔ Graduation ${sym} bloquée RugCheck (score: ${rugReport?.score ?? '?'})`);
+          return;
+        }
+
+        runDebate(pair, security, rugReport, overview, lpLock)
           .then((debate) => {
             debate.isGraduated = true;
             this.emit('debate', debate);
