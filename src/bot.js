@@ -221,23 +221,23 @@ class Bot {
 
     bot.command('start', async (ctx) => {
       await ctx.reply(
-        `👋 Bonjour\\! Bienvenue sur *Meme Coin Bot*\\!\n\n` +
-        `🤖 *Meme Coin Bot* — Actif\\!\n\n` +
-        `*Commandes disponibles:*\n` +
+        `👋 Bonjour! Bienvenue sur <b>Meme Coin Bot</b>!\n\n` +
+        `🤖 <b>Meme Coin Bot</b> — Actif!\n\n` +
+        `<b>Commandes disponibles:</b>\n` +
         `/status — État du bot\n` +
         `/balance — Balance SOL\n` +
         `/pnl — Résumé PnL global\n` +
         `/scan — Scanner maintenant\n` +
         `/positions — Positions ouvertes\n` +
         `/history — Historique des trades\n` +
-        `/auto — Toggle auto\\-trade\n` +
+        `/auto — Toggle auto-trade\n` +
         `/settings — Voir les paramètres\n` +
-        `/set \\<clé\\> \\<valeur\\> — Modifier un paramètre\n` +
-        `/analyse \\<adresse\\> — Analyser un token\n` +
-        `/buy \\<adresse\\> \\<sol\\> — Achat manuel\n` +
-        `/sell \\<adresse\\> \\[%\\] — Vente manuelle\n\n` +
+        `/set &lt;clé&gt; &lt;valeur&gt; — Modifier un paramètre\n` +
+        `/analyse &lt;adresse&gt; — Analyser un token\n` +
+        `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel\n` +
+        `/sell &lt;adresse&gt; [%] — Vente manuelle\n\n` +
         `/help — Aide détaillée de toutes les commandes`,
-        { parse_mode: 'MarkdownV2' }
+        { parse_mode: 'HTML' }
       );
     });
 
@@ -284,30 +284,30 @@ class Bot {
         balance = `${(await this.trader.getSolBalance()).toFixed(4)} SOL`;
       }
       await ctx.reply(
-        `📊 *Statut*\n\n` +
+        `📊 <b>Statut</b>\n\n` +
         `📡 Scanner: ${stats.isRunning ? '✅ Actif' : '❌ Arrêté'}\n` +
         `🔄 Scans DexScreener: ${stats.scanCount}\n` +
         `👁 Tokens vus: ${stats.seenTokens}\n` +
-        `\n🐸 *Pump.fun* (PumpPortal WS)\n` +
+        `\n🐸 <b>Pump.fun</b> (PumpPortal WS)\n` +
         `   ${stats.pumpFunConnected ? '✅ Connecté' : '❌ Déconnecté'}\n` +
         `   Nouveaux tokens: ${stats.pumpNewTokens || 0}\n` +
         `   Graduations: ${stats.pumpMigrations || 0}\n` +
-        `\n🤖 Auto\\-trade: ${this.autoTrade ? '✅ Activé' : '❌ Désactivé'}\n` +
+        `\n🤖 Auto-trade: ${this.autoTrade ? '✅ Activé' : '❌ Désactivé'}\n` +
         `💼 Positions: ${positions.length}\n` +
         `💰 Balance: ${balance}`,
-        { parse_mode: 'MarkdownV2' }
+        { parse_mode: 'HTML' }
       );
     });
 
     bot.command('balance', async (ctx) => {
       if (!this.trader.isReady()) {
-        return ctx.reply('❌ Wallet non configuré (WALLET\\_PRIVATE\\_KEY dans .env)', { parse_mode: 'MarkdownV2' });
+        return ctx.reply('❌ Wallet non configuré (WALLET_PRIVATE_KEY dans .env)', { parse_mode: 'HTML' });
       }
       const balance = await this.trader.getSolBalance();
       const addr = this.trader.walletAddress;
       await ctx.reply(
-        `💰 *Balance*\n\n${balance.toFixed(6)} SOL\n\`${addr}\``,
-        { parse_mode: 'Markdown' }
+        `💰 <b>Balance</b>\n\n${balance.toFixed(6)} SOL\n<code>${addr}</code>`,
+        { parse_mode: 'HTML' }
       );
     });
 
@@ -322,9 +322,9 @@ class Bot {
       const positions = this.trader.getPositions();
       if (positions.length === 0) return ctx.reply('📭 Aucune position ouverte.');
 
-      let msg = `📊 *Positions ouvertes (${positions.length})*\n\n`;
+      let msg = `📊 <b>Positions ouvertes (${positions.length})</b>\n\n`;
       for (const p of positions) {
-        const shortMint = `\`${p.tokenMint.slice(0, 12)}...\``;
+        const shortMint = `<code>${p.tokenMint.slice(0, 12)}...</code>`;
         const age = Math.floor((Date.now() - p.entryTimestamp) / 60_000);
         msg += `• ${shortMint} — ${p.solSpent} SOL\n`;
 
@@ -338,27 +338,27 @@ class Bot {
           msg += `  🛑 SL: -${p.stopLossPct}%  |  🎯 TP: +${p.takeProfitPct}%\n`;
         }
 
-        msg += `  ⏱ ${age}min  |  [Tx](https://solscan.io/tx/${p.buyTxId})\n\n`;
+        msg += `  ⏱ ${age}min  |  <a href="https://solscan.io/tx/${p.buyTxId}">Tx</a>\n\n`;
       }
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML', disable_web_page_preview: true });
     });
 
     bot.command('history', async (ctx) => {
       const trades = this.trader.getHistory(10);
       if (trades.length === 0) return ctx.reply('📭 Aucun trade effectué.');
 
-      let msg = `📜 *Derniers trades*\n\n`;
+      let msg = `📜 <b>Derniers trades</b>\n\n`;
       for (const t of trades) {
         const emoji = t.action === 'BUY' ? '🟢' : '🔴';
         const date = new Date(t.entryTimestamp || t.timestamp).toLocaleString('fr-FR');
         msg += `${emoji} ${t.action} — ${date}\n`;
-        msg += `\`${t.tokenMint.slice(0, 16)}...\`\n`;
+        msg += `<code>${t.tokenMint.slice(0, 16)}...</code>\n`;
         if (t.buyTxId || t.txId) {
-          msg += `[Tx](https://solscan.io/tx/${t.buyTxId || t.txId})\n`;
+          msg += `<a href="https://solscan.io/tx/${t.buyTxId || t.txId}">Tx</a>\n`;
         }
         msg += '\n';
       }
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML', disable_web_page_preview: true });
     });
 
     bot.command('pnl', async (ctx) => {
@@ -385,16 +385,16 @@ class Bot {
         hasUnrealized = true;
       }
 
-      let msg = `📊 *PnL Global*\n\n`;
-      msg += `✅ *Réalisé:* ${realizedSol >= 0 ? '+' : ''}${realizedSol.toFixed(4)} SOL`;
+      let msg = `📊 <b>PnL Global</b>\n\n`;
+      msg += `✅ <b>Réalisé:</b> ${realizedSol >= 0 ? '+' : ''}${realizedSol.toFixed(4)} SOL`;
       msg += ` (${sellTrades.length} trades clôturés)\n\n`;
       if (hasUnrealized) {
-        msg += `📈 *Non réalisé (positions ouvertes):*\n${unrealizedLines}`;
+        msg += `📈 <b>Non réalisé (positions ouvertes):</b>\n${unrealizedLines}`;
       } else {
         msg += `📭 Aucune position ouverte avec prix d'entrée.`;
       }
 
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.command('settings', async (ctx) => {
@@ -403,16 +403,16 @@ class Bot {
       const maxSol = this.maxPositionSol;
 
       const msg =
-        `⚙️ *Paramètres actuels*\n\n` +
-        `💰 Max position: \`${maxSol} SOL\`\n` +
-        `🛑 Stop Loss par défaut: \`${sl}%\`\n` +
-        `🎯 Take Profit par défaut: \`${tp}%\`\n\n` +
+        `⚙️ <b>Paramètres actuels</b>\n\n` +
+        `💰 Max position: <code>${maxSol} SOL</code>\n` +
+        `🛑 Stop Loss par défaut: <code>${sl}%</code>\n` +
+        `🎯 Take Profit par défaut: <code>${tp}%</code>\n\n` +
         `Pour modifier, utilise:\n` +
-        `/set maxsol <valeur> — ex: /set maxsol 0.05\n` +
-        `/set sl <valeur> — ex: /set sl 15\n` +
-        `/set tp <valeur> — ex: /set tp 80`;
+        `/set maxsol &lt;valeur&gt; — ex: /set maxsol 0.05\n` +
+        `/set sl &lt;valeur&gt; — ex: /set sl 15\n` +
+        `/set tp &lt;valeur&gt; — ex: /set tp 80`;
 
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.command('set', async (ctx) => {
@@ -427,15 +427,15 @@ class Bot {
       switch (key.toLowerCase()) {
         case 'maxsol':
           this.maxPositionSol = val;
-          await ctx.reply(`✅ Max position mis à jour: *${val} SOL*`, { parse_mode: 'Markdown' });
+          await ctx.reply(`✅ Max position mis à jour: <b>${val} SOL</b>`, { parse_mode: 'HTML' });
           break;
         case 'sl':
           process.env.DEFAULT_STOP_LOSS_PCT = String(val);
-          await ctx.reply(`✅ Stop Loss par défaut mis à jour: *${val}%*`, { parse_mode: 'Markdown' });
+          await ctx.reply(`✅ Stop Loss par défaut mis à jour: <b>${val}%</b>`, { parse_mode: 'HTML' });
           break;
         case 'tp':
           process.env.DEFAULT_TAKE_PROFIT_PCT = String(val);
-          await ctx.reply(`✅ Take Profit par défaut mis à jour: *${val}%*`, { parse_mode: 'Markdown' });
+          await ctx.reply(`✅ Take Profit par défaut mis à jour: <b>${val}%</b>`, { parse_mode: 'HTML' });
           break;
         default:
           await ctx.reply('❌ Clé inconnue. Utilise: maxsol, sl, ou tp');
@@ -446,9 +446,9 @@ class Bot {
       this.autoTrade = !this.autoTrade;
       await ctx.reply(
         this.autoTrade
-          ? `🤖 Auto-trade *ACTIVÉ*\n⚠️ Le bot va exécuter les BUY automatiquement.`
-          : `🤖 Auto-trade *DÉSACTIVÉ*\nLes trades devront être confirmés manuellement.`,
-        { parse_mode: 'Markdown' }
+          ? `🤖 Auto-trade <b>ACTIVÉ</b>\n⚠️ Le bot va exécuter les BUY automatiquement.`
+          : `🤖 Auto-trade <b>DÉSACTIVÉ</b>\nLes trades devront être confirmés manuellement.`,
+        { parse_mode: 'HTML' }
       );
     });
 
@@ -508,8 +508,8 @@ class Bot {
       try {
         const { txId } = await this.trader.buy(tokenAddress, solAmount);
         await ctx.reply(
-          `✅ *Achat réussi!*\n[Voir la tx](https://solscan.io/tx/${txId})`,
-          { parse_mode: 'Markdown' }
+          `✅ <b>Achat réussi!</b>\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true }
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
@@ -529,8 +529,8 @@ class Bot {
       try {
         const { txId } = await this.trader.sell(tokenAddress, pct);
         await ctx.reply(
-          `✅ *Vente réussie!*\n[Voir la tx](https://solscan.io/tx/${txId})`,
-          { parse_mode: 'Markdown' }
+          `✅ <b>Vente réussie!</b>\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true }
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
@@ -555,8 +555,8 @@ class Bot {
       try {
         const { txId } = await this.trader.buy(tokenAddress, solAmount, { stopLossPct, takeProfitPct });
         await ctx.reply(
-          `✅ *Achat réussi!* (${solAmount} SOL)\n🛑 SL: -${stopLossPct}%  |  🎯 TP: +${takeProfitPct}%\n[Voir la tx](https://solscan.io/tx/${txId})`,
-          { parse_mode: 'Markdown' }
+          `✅ <b>Achat réussi!</b> (${solAmount} SOL)\n🛑 SL: -${stopLossPct}%  |  🎯 TP: +${takeProfitPct}%\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true }
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
@@ -605,8 +605,8 @@ class Bot {
                 }
               );
               await this._send(
-                `🤖 *AUTO-TRADE EXÉCUTÉ*\nAchat: ${solAmt} SOL\n[Voir la tx](https://solscan.io/tx/${txId})`,
-                { parse_mode: 'Markdown' }
+                `🤖 <b>AUTO-TRADE EXÉCUTÉ</b>\nAchat: ${solAmt} SOL\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+                { parse_mode: 'HTML', disable_web_page_preview: true }
               );
             } catch (err) {
               await this._send(`❌ Auto-trade échoué: ${err.message}`);
