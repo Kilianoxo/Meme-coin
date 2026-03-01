@@ -137,6 +137,11 @@ class Dashboard {
       return;
     }
 
+    if (pathname === '/api/paper/buy' && req.method === 'POST') {
+      this._apiPaperBuy(req, res);
+      return;
+    }
+
     // ── Fichiers statiques depuis src/public/ ─────────────────────────────
 
     const filePath = pathname === '/' ? '/index.html' : pathname;
@@ -463,6 +468,15 @@ class Dashboard {
     if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
     await this.paperTrader.manualSell(address);
     this._jsonOk(res, { ok: true });
+  }
+
+  _apiPaperBuy(req, res) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false, error: 'Paper trader non initialisé' }); return; }
+    this._readBody(req, async (body) => {
+      const { address, amountSol } = body;
+      const result = await this.paperTrader.manualBuy(address, amountSol);
+      this._jsonOk(res, result);
+    });
   }
 
   _jsonOk(res, data) {

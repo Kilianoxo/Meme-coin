@@ -178,6 +178,52 @@ class PaperTrader extends EventEmitter {
     this.emit('sell', record);
   }
 
+  /** Achat manuel déclenché depuis le dashboard */
+  async manualBuy(address, amountSol) {
+    address = (address || '').trim();
+    if (!address) return { ok: false, error: 'Adresse manquante' };
+
+    const amount = parseFloat(amountSol);
+    if (isNaN(amount) || amount <= 0) return { ok: false, error: 'Montant invalide' };
+
+    const { config } = this.state;
+    if (amount > config.currentBalance)
+      return { ok: false, error: `Solde insuffisant (${config.currentBalance.toFixed(4)} ◎ disponible)` };
+    if (this.state.positions[address])
+      return { ok: false, error: 'Position déjà ouverte sur ce token' };
+    if (Object.keys(this.state.positions).length >= config.maxPositions)
+      return { ok: false, error: `Max positions atteint (${config.maxPositions})` };
+
+    const price = await this._fetchPrice(address);
+    if (!price || price <= 0) return { ok: false, error: 'Prix introuvable sur Jupiter' };
+
+    const tokensHeld = amount / price;
+    const symbol = address.slice(0, 6).toUpperCase();
+
+    config.currentBalance -= amount;
+    this.state.positions[address] = {
+      symbol,
+      name:        '',
+      address,
+      entryPrice:  price,
+      highPrice:   price,
+      tokensHeld,
+      amountSolIn: amount,
+      slPct:       config.slPct,
+      tpPct:       config.tpPct,
+      score:       null,    // pas de débat IA — entrée manuelle
+      entryTime:   Date.now(),
+      reason:      'Entrée manuelle via dashboard',
+      isGraduated: false,
+      manual:      true,
+    };
+
+    this._save();
+    console.log(`[PaperTrader] 📝 BUY MANUEL ${address.slice(0, 8)}… @ ${price.toExponential(3)} — ${amount.toFixed(3)} ◎`);
+    this.emit('buy', this.state.positions[address]);
+    return { ok: true, position: this.state.positions[address] };
+  }
+
   /** Vente manuelle déclenchée depuis le dashboard */
   manualSell(address) {
     return this._sellPosition(address, 'MANUAL');

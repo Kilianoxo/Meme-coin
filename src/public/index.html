@@ -554,6 +554,19 @@
       font-size: 11px;
     }
     .btn-sell-paper:hover { background: rgba(248,81,73,.18); }
+    .btn-buy-paper {
+      background: rgba(63,185,80,.12);
+      border: 1px solid rgba(63,185,80,.35);
+      color: var(--green);
+    }
+    .btn-buy-paper:hover  { background: rgba(63,185,80,.22); }
+    .btn-buy-paper:disabled { opacity: .45; cursor: not-allowed; }
+    .manual-addr-input {
+      width: 340px;
+      font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+      font-size: 12px;
+    }
+    @media (max-width: 700px) { .manual-addr-input { width: 100%; } }
 
     /* ── Paper PnL total card ─────────────────────────────────────────── */
     .pnl-total-big {
@@ -972,6 +985,39 @@
           <span class="c-muted" style="font-size:12px; align-self:center">⚠️ Efface positions et historique</span>
         </div>
 
+      </div>
+    </div>
+
+    <!-- ── Achat manuel ────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:20px">
+      <div class="sec-head">
+        <h2>➕ Ajouter un coin manuellement</h2>
+        <span class="c-muted" style="font-size:12px">Position fictive — les agents suivent et apprennent</span>
+      </div>
+      <div class="sec-body">
+        <div class="config-panel">
+          <div class="config-field" style="flex:1">
+            <label class="config-label">Adresse du token (Solana)</label>
+            <input class="config-input manual-addr-input" id="manualAddr" type="text"
+                   placeholder="Ex: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Montant fictif (SOL)</label>
+            <input class="config-input" id="manualAmt" type="number" min="0.001" step="0.1"
+                   placeholder="0.5" style="width:110px">
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap">
+            <button class="btn btn-buy-paper" id="manualBuyBtn" onclick="manualBuyPaper()">
+              📥 Ajouter la position
+            </button>
+            <span id="manualBuyMsg" style="font-size:12px; align-self:center"></span>
+          </div>
+        </div>
+        <div style="margin-top:10px; font-size:12px; color:var(--txt2); line-height:1.7">
+          Le bot récupère le prix en temps réel sur Jupiter, ouvre la position avec ton montant fictif et la surveille exactement comme les positions automatiques (SL / TP / Trailing).
+          Les agents noteront le résultat dans leur mémoire.
+        </div>
       </div>
     </div>
 
@@ -1924,6 +1970,43 @@ async function paperSell(address, btn) {
     await fetch(`/api/paper/sell/${address}`, { method: 'POST' });
     fetchPaper();
   } catch { btn.disabled = false; }
+}
+
+async function manualBuyPaper() {
+  const address = (document.getElementById('manualAddr').value || '').trim();
+  const amountSol = parseFloat(document.getElementById('manualAmt').value);
+  const btn = document.getElementById('manualBuyBtn');
+  const msg = document.getElementById('manualBuyMsg');
+
+  if (!address) { msg.textContent = '❌ Adresse requise'; msg.className = 'c-red'; return; }
+  if (isNaN(amountSol) || amountSol <= 0) { msg.textContent = '❌ Montant invalide'; msg.className = 'c-red'; return; }
+
+  btn.disabled = true;
+  msg.textContent = '⏳ Récupération du prix…';
+  msg.className = 'c-muted';
+
+  try {
+    const r = await fetch('/api/paper/buy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, amountSol }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = `✅ Position ouverte @ ${Number(d.position.entryPrice).toExponential(3)}`;
+      msg.className = 'c-green';
+      document.getElementById('manualAddr').value = '';
+      document.getElementById('manualAmt').value  = '';
+      fetchPaper();
+    } else {
+      msg.textContent = `❌ ${d.error}`;
+      msg.className = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className = 'c-red';
+  }
+  btn.disabled = false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
