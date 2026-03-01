@@ -30,10 +30,15 @@ class Bot {
     this.autoTrade = false;
     this.maxPositionSol = parseFloat(process.env.MAX_POSITION_SOL || '0.1');
 
+    // Compteurs pour le résumé horaire
+    this._hourlyAnalyzed = 0;
+    this._hourlyRejected = 0;
+
     this._setupMiddleware();
     this._setupCommands();
     this._setupCallbacks();
     this._listenToScanner();
+    this._startHourlySummary();
   }
 
   // ─── Middleware ────────────────────────────────────────────────────────────
@@ -589,6 +594,14 @@ class Bot {
 
     this.scanner.on('debate', async (debate) => {
       try {
+        this._hourlyAnalyzed++;
+
+        if (debate.decision.decision !== 'BUY') {
+          this._hourlyRejected++;
+          return; // Pas de notif Telegram pour les tokens refusés
+        }
+
+        // Envoi du débat complet uniquement pour les BUY
         await this._send(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {
@@ -631,6 +644,31 @@ class Bot {
         console.error('[Bot] Erreur alerte débat:', err.message);
       }
     });
+  }
+
+  _startHourlySummary() {
+    setInterval(async () => {
+      const analyzed = this._hourlyAnalyzed;
+      const rejected = this._hourlyRejected;
+      const validated = analyzed - rejected;
+
+      this._hourlyAnalyzed = 0;
+      this._hourlyRejected = 0;
+
+      if (analyzed === 0) return; // Rien à signaler
+
+      try {
+        await this._send(
+          `📊 <b>Résumé horaire</b>\n\n` +
+          `🔍 Tokens analysés: <b>${analyzed}</b>\n` +
+          `✅ Validés (BUY): <b>${validated}</b>\n` +
+          `❌ Refusés: <b>${rejected}</b>`,
+          { parse_mode: 'HTML' }
+        );
+      } catch (err) {
+        console.error('[Bot] Erreur résumé horaire:', err.message);
+      }
+    }, 60 * 60 * 1000); // toutes les heures
   }
 
   async _send(text, options = {}) {
