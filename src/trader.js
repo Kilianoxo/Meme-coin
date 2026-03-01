@@ -17,6 +17,7 @@ const bs58        = require('bs58');
 const fs          = require('fs');
 const path        = require('path');
 const agentMemory = require('./agentMemory');
+const logger      = require('./logger');
 
 const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
@@ -232,6 +233,7 @@ class Trader {
     this._save();
 
     console.log(`[Trader] ✅ Achat OK — tx: ${txId}`);
+    logger.buy(tokenMint, solAmount, txId, stopLossPct, takeProfitPct);
     return { txId, quote, position };
   }
 
@@ -277,6 +279,7 @@ class Trader {
     this._save();
 
     console.log(`[Trader] ✅ Vente OK — tx: ${txId}`);
+    logger.sell(tokenMint, pct, txId, pnlSol, exitReason);
     return { txId, quote };
   }
 
@@ -343,6 +346,7 @@ class Trader {
       if (reason) {
         try {
           console.log(`[Trader] ${reason.replace(/<[^>]+>/g, '')}`);
+          logger.sltp(tokenMint, pos.symbol || shortMint, exitReason, changePct);
           const { txId } = await this.sell(tokenMint, 100, 300, exitReason);
           if (notify) {
             notify(`${reason}\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`);

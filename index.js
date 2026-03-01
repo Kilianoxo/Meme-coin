@@ -4,6 +4,7 @@ const Trader    = require('./src/trader');
 const Scanner   = require('./src/scanner');
 const Bot       = require('./src/bot');
 const Dashboard = require('./src/dashboard');
+const logger    = require('./src/logger');
 
 // Vérifications de base au démarrage
 const required = ['TELEGRAM_TOKEN', 'TELEGRAM_ADMIN_ID', 'ANTHROPIC_API_KEY'];
@@ -15,6 +16,7 @@ if (missing.length > 0) {
 }
 
 async function main() {
+  logger.startup();
   console.log('🚀 Démarrage Meme Coin Bot...');
 
   const trader = new Trader();

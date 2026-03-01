@@ -20,7 +20,8 @@ const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
 const { formatSecurity } = require('./birdeye');
 const rugcheck = require('./rugcheck');
-const state = require('./state');
+const state  = require('./state');
+const logger = require('./logger');
 
 class Bot {
   constructor(trader, scanner) {
@@ -596,6 +597,14 @@ class Bot {
     this.scanner.on('debate', async (debate) => {
       try {
         this._hourlyAnalyzed++;
+
+        // Log fichier
+        logger.debate(
+          debate.token?.baseToken?.symbol || '???',
+          debate.token?.baseToken?.address || '',
+          debate.decision?.score ?? null,
+          debate.decision?.decision || 'SKIP'
+        );
 
         // Enregistre dans l'historique du dashboard
         state.pushAnalysis({
