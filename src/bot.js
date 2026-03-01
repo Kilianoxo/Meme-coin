@@ -86,7 +86,7 @@ class Bot {
   }
 
   _formatDebate(debate) {
-    const { bull, bear, decision, token } = debate;
+    const { bull, bear, momentum, decision, token } = debate;
     const sym = this._esc(token.baseToken?.symbol || '???');
     const name = this._esc(token.baseToken?.name || '');
     const price = parseFloat(token.priceUsd || 0);
@@ -107,6 +107,15 @@ class Bot {
 
     msg += `\n🐻 <b>Bear</b> — ${bear.riskScore}/10  |  ${bear.verdict}\n`;
     (bear.redFlags || []).slice(0, 3).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
+
+    // Momentum (si disponible)
+    if (momentum) {
+      const trendEmoji = { ACCELERATING: '🚀', STABLE: '➡️', FADING: '📉', REVERSAL: '🔄' }[momentum.trend] || '❓';
+      const volEmoji = { GROWING: '📈', STABLE: '➡️', DECLINING: '📉' }[momentum.volumeSignal] || '';
+      msg += `\n⚡ <b>Momentum</b> — ${momentum.score}/10  |  ${trendEmoji} ${this._esc(momentum.trend)}  |  Vol ${volEmoji}\n`;
+      (momentum.signals || []).slice(0, 2).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
+      if (momentum.warning) msg += `  ⚠️ ${this._esc(momentum.warning)}\n`;
+    }
 
     // Données de sécurité Birdeye (si disponibles)
     const sec = formatSecurity(debate.security, debate.overview);

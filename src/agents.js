@@ -1,9 +1,9 @@
 /**
  * Système multi-agents IA — Débat Bull vs Bear vs Risk Manager
  *
- * Bull Agent    → Cherche les opportunités d'achat
- * Bear Agent    → Cherche les risques et red flags
- * Risk Manager  → Prend la décision finale
+ * Round 1 (parallèle) : Momentum — vitesse et force du marché
+ * Round 2 (parallèle) : Bull (opportunités) + Bear (risques)
+ * Round 3 (séquentiel): Risk Manager — décision finale pondérée
  */
 
 const { ask } = require('./anthropic');
@@ -30,6 +30,25 @@ function formatTokenForAgents(token) {
   }, null, 2);
 }
 
+function formatMomentumData(token) {
+  const pc = token.priceChange || {};
+  const vol = token.volume || {};
+  const tx = token.txns || {};
+  const h1 = tx.h1 || {};
+  const h6 = tx.h6 || {};
+  const h24 = tx.h24 || {};
+
+  return JSON.stringify({
+    priceChange: { h1: pc.h1 ?? 0, h6: pc.h6 ?? 0, h24: pc.h24 ?? 0 },
+    volume:      { h1: vol.h1 ?? 0, h6: vol.h6 ?? 0, h24: vol.h24 ?? 0 },
+    txns: {
+      h1:  { buys: h1.buys  ?? 0, sells: h1.sells  ?? 0 },
+      h6:  { buys: h6.buys  ?? 0, sells: h6.sells  ?? 0 },
+      h24: { buys: h24.buys ?? 0, sells: h24.sells ?? 0 },
+    },
+  }, null, 2);
+}
+
 function parseAgentJson(text, fallback) {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return fallback;
@@ -38,6 +57,50 @@ function parseAgentJson(text, fallback) {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Agent MOMENTUM — Analyse la vitesse et la force du marché (Round 1)
+ * Retourne: { score: 0-10, trend: string, buyPressure: 0-10, volumeSignal: string,
+ *             signals: string[], warning: string|null }
+ */
+async function runMomentumAgent(token) {
+  const system = `Tu es un agent spécialisé dans l'analyse du momentum de tokens Solana.
+Tu analyses UNIQUEMENT les signaux de vitesse et de force du marché — pas les fondamentaux, pas les narratives.
+
+Signaux à analyser:
+1. Tendance prix: compare priceChange.h1 avec priceChange.h6/6 (rythme horaire moyen)
+   → h1 > h6/6 = accélération, h1 < h6/6 = ralentissement
+2. Tendance volume: compare volume.h1 avec volume.h6/6
+   → h1 > h6/6 = volume croissant, sinon décroissant
+3. Pression d'achat: buys/(buys+sells) sur h1 et h6 — les acheteurs dominent-ils?
+4. Cohérence signal:
+   • prix UP + volume UP + buy ratio > 60% → momentum authentique
+   • prix UP + volume FLAT + peu de txns   → pump suspect (warning)
+   • prix DOWN + volume UP                 → distribution, danger (warning)
+   • prix FLAT + buy ratio élevé           → accumulation silencieuse
+
+Patterns (trend):
+- ACCELERATING : prix accélère sur h1 vs h6, volume croissant, buy dominance
+- STABLE        : mouvement régulier sans accélération notable
+- FADING        : prix positif mais h1 < h6/6, volume décroissant
+- REVERSAL      : h1 opposé en direction à h24 (inversion de tendance)
+
+Calcule buyPressure = (buys_h1 / (buys_h1 + sells_h1)) × 10, arrondi à 1 décimale.
+Si buys_h1 + sells_h1 = 0, utilise les données h6.
+
+Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
+{"score": <0-10>, "trend": "ACCELERATING|STABLE|FADING|REVERSAL", "buyPressure": <0.0-10.0>, "volumeSignal": "GROWING|STABLE|DECLINING", "signals": ["signal court 1", "signal court 2"], "warning": <"texte" ou null>}`;
+
+  const text = await ask(system, `Analyse le momentum:\n${formatMomentumData(token)}`, MODEL);
+  return parseAgentJson(text, {
+    score: 5,
+    trend: 'STABLE',
+    buyPressure: 5.0,
+    volumeSignal: 'STABLE',
+    signals: ['Données insuffisantes pour l\'analyse momentum'],
+    warning: null,
+  });
 }
 
 /**
@@ -142,33 +205,42 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 }
 
 /**
- * Risk Manager — Décision finale basée sur les deux analyses
+ * Risk Manager — Décision finale basée sur Bull + Bear + Momentum
+ * @param {Object} momentum - Résultat de runMomentumAgent (optionnel)
  * Retourne: { decision: "BUY|SKIP|WAIT", confidence: 0-10, suggestedAmountPct: number,
  *             stopLossPct: number, takeProfitPct: number, reasoning: string }
  */
-async function runRiskManager(token, bullAnalysis, bearAnalysis) {
+async function runRiskManager(token, bullAnalysis, bearAnalysis, momentum = null) {
   const system = `Tu es le gestionnaire de risque d'un bot de trading meme coins Solana.
-Tu reçois l'analyse du bull (opportunités) et du bear (risques) et prends une décision finale.
+Tu reçois l'analyse du Bull (opportunités), du Bear (risques), et du Momentum (vitesse marché).
 
 Règles de base:
 - Si riskScore bear >= 8: toujours SKIP
 - Si riskScore bear >= 6 ET score bull <= 5: SKIP
+- Si momentum.trend = "REVERSAL": penché fortement vers SKIP
+- Si momentum.warning != null: traiter comme red flag supplémentaire
 - Si liquidity < 10000 USD: SKIP
 - Si volume 24h < 50000 USD: WAIT ou SKIP
 - suggestedAmountPct: max 5% du portfolio, commence à 1% si incertain
 - stopLossPct: défaut 20%, takeProfitPct: défaut 50%
+- Si momentum.trend = "ACCELERATING" ET bear.riskScore < 5: augmenter takeProfitPct et confidence
 
 Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 {"decision": "BUY|SKIP|WAIT", "confidence": <0-10>, "suggestedAmountPct": <1-5>,
  "stopLossPct": <5-50>, "takeProfitPct": <10-200>, "reasoning": "explication courte"}`;
 
-  const content = `Token: ${formatTokenForAgents(token)}
+  let content = `Token: ${formatTokenForAgents(token)}
 
 Analyse BULL (score ${bullAnalysis.score}/10):
 ${JSON.stringify(bullAnalysis, null, 2)}
 
 Analyse BEAR (risque ${bearAnalysis.riskScore}/10, verdict: ${bearAnalysis.verdict}):
 ${JSON.stringify(bearAnalysis, null, 2)}`;
+
+  if (momentum) {
+    content += `\n\nAnalyse MOMENTUM (score ${momentum.score}/10, trend: ${momentum.trend}):
+${JSON.stringify(momentum, null, 2)}`;
+  }
 
   const text = await ask(system, content, MODEL);
   return parseAgentJson(text, {
@@ -182,13 +254,17 @@ ${JSON.stringify(bearAnalysis, null, 2)}`;
 }
 
 /**
- * Lance le débat complet entre les 3 agents pour un token
+ * Lance le débat complet entre les agents pour un token
+ *
+ * Round 1 (parallèle) : Momentum + Bull + Bear simultanément
+ * Round 2 (séquentiel): Risk Manager reçoit les 3 analyses
+ *
  * @param {Object} token     - Données de paire DexScreener
  * @param {Object} security  - Données de sécurité Birdeye (optionnel)
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
  * @param {Object} overview  - Données Birdeye overview — holder count (optionnel)
  * @param {Object} lpLock    - Données LP lock — { lpLockedPct, lpLockedUSD, isLocked } (optionnel)
- * @returns {Promise<{bull, bear, decision, token, security, rugReport, overview, lpLock}>}
+ * @returns {Promise<{bull, bear, momentum, decision, token, security, rugReport, overview, lpLock}>}
  */
 async function runDebate(token, security = null, rugReport = null, overview = null, lpLock = null) {
   const symbol = token.baseToken?.symbol || '???';
@@ -201,16 +277,19 @@ async function runDebate(token, security = null, rugReport = null, overview = nu
   const sourceStr = sources.length > 0 ? ` (${sources.join(' | ')})` : '';
   console.log(`[Agents] Débat pour ${symbol}${sourceStr}...`);
 
-  const [bull, bear] = await Promise.all([
+  // Round 1: 3 agents spécialisés en parallèle
+  const [momentum, bull, bear] = await Promise.all([
+    runMomentumAgent(token),
     runBullAgent(token),
     runBearAgent(token, security, rugReport, overview, lpLock),
   ]);
 
-  const decision = await runRiskManager(token, bull, bear);
+  // Round 2: Risk Manager avec toutes les données
+  const decision = await runRiskManager(token, bull, bear, momentum);
 
-  console.log(`[Agents] ${symbol} → ${decision.decision} (confiance: ${decision.confidence}/10)`);
+  console.log(`[Agents] ${symbol} → ${decision.decision} | confiance ${decision.confidence}/10 | momentum ${momentum.score}/10 (${momentum.trend})`);
 
-  return { bull, bear, decision, token, security, rugReport, overview, lpLock };
+  return { bull, bear, momentum, decision, token, security, rugReport, overview, lpLock };
 }
 
-module.exports = { runDebate };
+module.exports = { runDebate, runMomentumAgent };
