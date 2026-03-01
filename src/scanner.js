@@ -15,6 +15,10 @@ const rugcheck = require('./rugcheck');
 // Tentative 1 → attend 30s, tentative 2 → attend 45s
 const MIGRATION_DEXSCREENER_DELAYS_MS = [30_000, 45_000];
 
+// Nombre max de tokens envoyés en débat IA par cycle de scan
+// Les candidats sont triés par pertinence avant sélection
+const MAX_CANDIDATES_PER_SCAN = 5;
+
 const SCAN_INTERVAL_MS = 30_000; // 30 secondes
 
 const FILTERS = {
@@ -51,6 +55,27 @@ class Scanner extends EventEmitter {
     }
 
     return true;
+  }
+
+  /**
+   * Score de pertinence rapide (sans LLM) pour prioriser les meilleurs candidats.
+   * Combine vélocité de volume, pression acheteuse et momentum prix récent.
+   * Retourne un nombre positif — plus c'est haut, plus le token est intéressant.
+   */
+  _relevanceScore(pair) {
+    const liq      = pair.liquidity?.usd  || 1;          // évite division par 0
+    const volH1    = pair.volume?.h1      || 0;
+    const pc       = pair.priceChange     || {};
+    const tx       = pair.txns?.h1        || {};
+    const buys     = tx.buys  || 0;
+    const sells    = tx.sells || 0;
+    const total    = buys + sells || 1;
+
+    const volVelocity  = volH1 / liq;                         // volume récent / pool
+    const buyPressure  = buys / total;                        // 0→1, >0.5 = majorité acheteurs
+    const priceBonus   = 1 + Math.max(0, (pc.h1 || 0)) / 100; // bonus si prix monte
+
+    return volVelocity * buyPressure * priceBonus;
   }
 
   /** Sélectionne la meilleure paire (liquidité la plus haute) parmi toutes les paires d'un token */
@@ -169,9 +194,14 @@ class Scanner extends EventEmitter {
       return;
     }
 
-    console.log(`[Scanner] ${candidates.length} nouveau(x) candidat(s)`);
+    // Trie par pertinence (vélocité volume × buy pressure × momentum prix)
+    // et ne garde que les MAX_CANDIDATES_PER_SCAN meilleurs pour les débats IA
+    candidates.sort((a, b) => this._relevanceScore(b) - this._relevanceScore(a));
+    const toAnalyze = candidates.slice(0, MAX_CANDIDATES_PER_SCAN);
 
-    for (const token of candidates) {
+    console.log(`[Scanner] ${candidates.length} candidat(s) — top ${toAnalyze.length} sélectionnés pour débat IA`);
+
+    for (const token of toAnalyze) {
       // Émet immédiatement le candidat (pour l'alerte Telegram brute)
       this.emit('candidate', token);
 
