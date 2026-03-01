@@ -240,12 +240,6 @@ class Trader {
    * @param {string} tokenMint
    * @param {number} pct        - Pourcentage à vendre (1-100)
    * @param {number} slippageBps
-   */
-  /**
-   * Vend un pourcentage d'un token en SOL
-   * @param {string} tokenMint
-   * @param {number} pct        - Pourcentage à vendre (1-100)
-   * @param {number} slippageBps
    * @param {string} exitReason - Raison de clôture pour la mémoire agents
    */
   async sell(tokenMint, pct = 100, slippageBps = 300, exitReason = 'MANUAL') {
