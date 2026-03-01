@@ -11,7 +11,8 @@ const birdeye = require('./birdeye');
 const gecko = require('./geckoterminal');
 const rugcheck = require('./rugcheck');
 
-const MIGRATION_DEXSCREENER_DELAY_MS = 8_000; // Attendre 8s pour que DexScreener indexe le pool
+const MIGRATION_DEXSCREENER_RETRY_ATTEMPTS = 6;
+const MIGRATION_DEXSCREENER_RETRY_DELAY_MS = 10_000; // 10s entre chaque tentative (max 60s)
 
 const SCAN_INTERVAL_MS = 30_000; // 30 secondes
 
@@ -243,15 +244,18 @@ class Scanner extends EventEmitter {
     pumpFun.on('migration', async (migration) => {
       const sym = migration.symbol || migration.mint?.slice(0, 8) || '???';
 
-      // DexScreener a besoin de quelques secondes pour indexer le nouveau pool
-      await new Promise((r) => setTimeout(r, MIGRATION_DEXSCREENER_DELAY_MS));
+      let pair = null;
+      for (let attempt = 1; attempt <= MIGRATION_DEXSCREENER_RETRY_ATTEMPTS; attempt++) {
+        await new Promise((r) => setTimeout(r, MIGRATION_DEXSCREENER_RETRY_DELAY_MS));
+        const pairs = await dex.getTokenPairs('solana', migration.mint);
+        pair = this._bestPair(pairs);
+        if (pair) break;
+        console.log(`[Scanner] Migration ${sym} — pas encore indexé (tentative ${attempt}/${MIGRATION_DEXSCREENER_RETRY_ATTEMPTS})`);
+      }
 
       try {
-        const pairs = await dex.getTokenPairs('solana', migration.mint);
-        const pair = this._bestPair(pairs);
-
         if (!pair) {
-          console.log(`[Scanner] Migration ${sym} — pas encore indexé sur DexScreener`);
+          console.log(`[Scanner] Migration ${sym} — abandonné après ${MIGRATION_DEXSCREENER_RETRY_ATTEMPTS} tentatives`);
           return;
         }
 
