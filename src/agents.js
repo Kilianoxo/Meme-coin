@@ -304,7 +304,7 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
     content += `\n\nAnalyse RugCheck:
 - Score de risque: ${rugReport.score}/1000 (${rugReport.riskLevel}) — plus haut = plus dangereux
 - Déjà rugpull: ${rugReport.rugged ? '🔴 OUI' : '✅ Non'}`;
-    if (rugReport.significantRisks.length > 0) {
+    if (rugReport.significantRisks?.length > 0) {
       content += `\n- Risques détectés:\n${rugReport.significantRisks.map((r) => `  • ${r}`).join('\n')}`;
     }
   }
