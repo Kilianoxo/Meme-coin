@@ -186,10 +186,11 @@ class Scanner extends EventEmitter {
     const address = token.baseToken?.address;
     const symbol = token.baseToken?.symbol || '???';
 
-    // Enrichissement Birdeye + RugCheck en parallèle
-    const [{ security, overview }, rugReport] = await Promise.all([
+    // Enrichissement Birdeye + RugCheck (summary + LP lock) en parallèle
+    const [{ security, overview }, rugReport, lpLock] = await Promise.all([
       birdeye.getTokenData(address),
       rugcheck.getTokenReport(address),
+      rugcheck.getLpLockData(address),
     ]);
 
     // Hard filter Birdeye (mint authority, concentration holders, holders < 50)
@@ -206,7 +207,10 @@ class Scanner extends EventEmitter {
       return;
     }
 
-    const debate = await runDebate(token, security, rugReport, overview);
+    const lpPct = lpLock ? `${lpLock.lpLockedPct.toFixed(0)}% LP lock` : 'LP lock: ?';
+    console.log(`[Scanner] ✅ ${symbol} passe les filtres — ${lpPct}`);
+
+    const debate = await runDebate(token, security, rugReport, overview, lpLock);
     this.emit('debate', debate);
   }
 
@@ -257,9 +261,10 @@ class Scanner extends EventEmitter {
         this.seenAddresses.add(migration.mint);
 
         console.log(`[Scanner] 🎓 Analyse de la graduation: ${sym}`);
-        const [{ security, overview }, rugReport] = await Promise.all([
+        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
           birdeye.getTokenData(migration.mint),
           rugcheck.getTokenReport(migration.mint),
+          rugcheck.getLpLockData(migration.mint),
         ]);
 
         if (birdeye.isHardBlocked(security, overview)) {
@@ -272,7 +277,7 @@ class Scanner extends EventEmitter {
           return;
         }
 
-        runDebate(pair, security, rugReport, overview)
+        runDebate(pair, security, rugReport, overview, lpLock)
           .then((debate) => {
             debate.isGraduated = true;
             this.emit('debate', debate);

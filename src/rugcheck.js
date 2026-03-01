@@ -110,4 +110,44 @@ function formatReport(report) {
   };
 }
 
-module.exports = { getTokenReport, isHardBlocked, summarizeForAgents, formatReport };
+/**
+ * Récupère les données de verrouillage de liquidité via le rapport complet RugCheck
+ * Endpoint: GET /v1/tokens/{mint}/report (plus lourd que /summary, mais contient markets[].lp)
+ * @returns {Promise<{ lpLockedPct: number, lpLockedUSD: number, isLocked: boolean }|null>}
+ */
+async function getLpLockData(mint) {
+  try {
+    const res = await fetch(`${BASE_URL}/tokens/${mint}/report`, {
+      headers: { 'accept': 'application/json' },
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+
+    const json = await res.json();
+    const markets = Array.isArray(json.markets) ? json.markets : [];
+    if (markets.length === 0) return null;
+
+    // Marché principal = le plus de liquidité totale
+    const main = markets.reduce((best, m) => {
+      const bestLiq = (best.liquidityA ?? 0) + (best.liquidityB ?? 0);
+      const mLiq = (m.liquidityA ?? 0) + (m.liquidityB ?? 0);
+      return mLiq > bestLiq ? m : best;
+    });
+
+    const lp = main?.lp ?? {};
+    const lpLockedPct = lp.lpLockedPct ?? 0;
+    const lpLockedUSD = lp.lpLockedUSD ?? 0;
+
+    return {
+      lpLockedPct,
+      lpLockedUSD,
+      isLocked: lpLockedPct >= 80,
+    };
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { getTokenReport, getLpLockData, isHardBlocked, summarizeForAgents, formatReport };

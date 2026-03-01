@@ -17,7 +17,7 @@
 |---|-------|----------|--------|
 | 7 | Détection rugpull / honeypot (RugCheck API) | Critique | ✅ Done |
 | 8 | Analyse on-chain : holders, top wallets, concentration | Critique | ✅ Done (mint/freeze/top10%/createur% + holder count hard filter < 50) |
-| 9 | Analyse liquidité : pool size, locked, slippage | Critique | ⚠️ Partiel (liquidité USD dispo, pas de "locked" vérification) |
+| 9 | Analyse liquidité : pool size, locked, slippage | Critique | ✅ Done (LP lock % + USD via RugCheck full report — affiché Telegram + Bear agent) |
 | 10 | Analyse social : Twitter/X, Telegram | Important | ⚠️ Partiel (présence de liens détectée, pas d'analyse réelle — narrative via LLM ✅) |
 | 11 | Filtres sécurité : mint authority, freeze authority | Critique | ✅ Done |
 

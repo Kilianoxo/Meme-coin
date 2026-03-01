@@ -74,9 +74,10 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
  * @param {Object} security  - Données Birdeye security (optionnel)
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
  * @param {Object} overview  - Données Birdeye overview (optionnel) — holder count, volume enrichi
+ * @param {Object} lpLock    - Données LP lock RugCheck (optionnel) — { lpLockedPct, lpLockedUSD, isLocked }
  * Retourne: { riskScore: 0-10, redFlags: string[], verdict: "AVOID|CAUTION|OK" }
  */
-async function runBearAgent(token, security = null, rugReport = null, overview = null) {
+async function runBearAgent(token, security = null, rugReport = null, overview = null, lpLock = null) {
   const system = `Tu es un analyste crypto PESSIMISTE spécialisé dans la détection de rug pulls et scams sur Solana.
 Tu cherches: liquidité trop basse, volume artificiel (txns faibles vs volume élevé), token trop récent,
 market cap vs fdv suspect, absence de holders, prix en chute libre.
@@ -108,6 +109,18 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 - Nombre de holders uniques: ${overview.holder}`;
     if (overview.holder < 200) {
       content += ` ⚠️ Très peu de holders — risque de manipulation du prix élevé`;
+    }
+  }
+
+  if (lpLock != null) {
+    const pct = lpLock.lpLockedPct.toFixed(1);
+    const usd = lpLock.lpLockedUSD >= 1000
+      ? `$${(lpLock.lpLockedUSD / 1000).toFixed(1)}K`
+      : `$${lpLock.lpLockedUSD.toFixed(0)}`;
+    content += `\n\nLiquidité verrouillée (LP lock):
+- % verrouillé: ${pct}% (${usd} USD)`;
+    if (!lpLock.isLocked) {
+      content += `\n⚠️ Liquidité peu ou pas verrouillée — le créateur peut retirer la liquidité à tout moment (rug pull classique)`;
     }
   }
 
@@ -174,13 +187,15 @@ ${JSON.stringify(bearAnalysis, null, 2)}`;
  * @param {Object} security  - Données de sécurité Birdeye (optionnel)
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
  * @param {Object} overview  - Données Birdeye overview — holder count (optionnel)
- * @returns {Promise<{bull, bear, decision, token, security, rugReport, overview}>}
+ * @param {Object} lpLock    - Données LP lock — { lpLockedPct, lpLockedUSD, isLocked } (optionnel)
+ * @returns {Promise<{bull, bear, decision, token, security, rugReport, overview, lpLock}>}
  */
-async function runDebate(token, security = null, rugReport = null, overview = null) {
+async function runDebate(token, security = null, rugReport = null, overview = null, lpLock = null) {
   const symbol = token.baseToken?.symbol || '???';
   const sources = [
     security ? 'Birdeye' : null,
     overview ? `${overview.holder ?? '?'} holders` : null,
+    lpLock != null ? `LP ${lpLock.lpLockedPct.toFixed(0)}%` : null,
     rugReport ? 'RugCheck' : null,
   ].filter(Boolean);
   const sourceStr = sources.length > 0 ? ` (${sources.join(' | ')})` : '';
@@ -188,14 +203,14 @@ async function runDebate(token, security = null, rugReport = null, overview = nu
 
   const [bull, bear] = await Promise.all([
     runBullAgent(token),
-    runBearAgent(token, security, rugReport, overview),
+    runBearAgent(token, security, rugReport, overview, lpLock),
   ]);
 
   const decision = await runRiskManager(token, bull, bear);
 
   console.log(`[Agents] ${symbol} → ${decision.decision} (confiance: ${decision.confidence}/10)`);
 
-  return { bull, bear, decision, token, security, rugReport, overview };
+  return { bull, bear, decision, token, security, rugReport, overview, lpLock };
 }
 
 module.exports = { runDebate };

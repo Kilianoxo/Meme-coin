@@ -120,6 +120,17 @@ class Bot {
       }
     }
 
+    // LP lock (si disponible)
+    if (debate.lpLock != null) {
+      const pct = debate.lpLock.lpLockedPct;
+      const usd = debate.lpLock.lpLockedUSD;
+      const usdStr = usd >= 1000 ? `$${(usd / 1000).toFixed(1)}K` : `$${usd.toFixed(0)}`;
+      const lpEmoji = pct >= 80 ? '🔐' : pct >= 50 ? '⚠️' : '🔓';
+      const lpLabel = pct >= 80 ? 'verrouillée' : pct > 0 ? 'partiellement verrouillée' : 'non verrouillée';
+      if (!sec) msg += `\n🔒 <b>Sécurité on-chain</b>\n`;
+      msg += `  ${lpEmoji} LP lock: ${pct.toFixed(1)}% (${usdStr}) — ${lpLabel}\n`;
+    }
+
     // Score RugCheck (si disponible)
     const rug = rugcheck.formatReport(debate.rugReport);
     if (rug) {
@@ -421,11 +432,13 @@ class Bot {
         await ctx.reply('🤖 Débat IA en cours...');
 
         const birdeye = require('./birdeye');
-        const [{ security, overview }, rugReport] = await Promise.all([
-          birdeye.getTokenData(pair.baseToken?.address),
-          rugcheck.getTokenReport(pair.baseToken?.address),
+        const addr = pair.baseToken?.address;
+        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
+          birdeye.getTokenData(addr),
+          rugcheck.getTokenReport(addr),
+          rugcheck.getLpLockData(addr),
         ]);
-        const debate = await runDebate(pair, security, rugReport, overview);
+        const debate = await runDebate(pair, security, rugReport, overview, lpLock);
         await ctx.reply(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {
