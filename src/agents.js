@@ -462,21 +462,21 @@ function emitMsg(agent, icon, token, round, content) {
 
 function formatMomentumMsg(symbol, m) {
   const warn = m.warning ? `\n⚠️ ${m.warning}` : '';
-  return `Score ${m.score}/10 | Tendance: ${m.trend} | Buy pressure: ${m.buyPressure}/10 | Volume: ${m.volumeSignal}\n${m.signals.join(' • ')}${warn}`;
+  return `Score ${m.score}/10 | Tendance: ${m.trend} | Buy pressure: ${m.buyPressure}/10 | Volume: ${m.volumeSignal}\n${(m.signals ?? []).join(' • ')}${warn}`;
 }
 
 function formatWhaleMsg(symbol, w) {
   const warn = w.warning ? `\n⚠️ ${w.warning}` : '';
-  return `Score ${w.score}/10 | Concentration: ${w.concentrationRisk} | Holders: ${w.holderHealth} | Distribution: ${w.distributionSignal}\n${w.signals.join(' • ')}${warn}`;
+  return `Score ${w.score}/10 | Concentration: ${w.concentrationRisk} | Holders: ${w.holderHealth} | Distribution: ${w.distributionSignal}\n${(w.signals ?? []).join(' • ')}${warn}`;
 }
 
 function formatBullMsg(symbol, b) {
   const nar = b.narrative ? `\nNarrative: ${b.narrative}` : '';
-  return `Score ${b.score}/10 — ${b.entryReason}\n${b.arguments.join(' • ')}${nar}`;
+  return `Score ${b.score}/10 — ${b.entryReason}\n${(b.arguments ?? []).join(' • ')}${nar}`;
 }
 
 function formatBearMsg(symbol, b) {
-  return `Risk ${b.riskScore}/10 — Verdict: ${b.verdict}\n${b.redFlags.join(' • ')}`;
+  return `Risk ${b.riskScore}/10 — Verdict: ${b.verdict}\n${(b.redFlags ?? []).join(' • ')}`;
 }
 
 function formatCoordMsg(symbol, d) {
