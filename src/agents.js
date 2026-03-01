@@ -190,52 +190,74 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 }
 
 /**
- * Agent BULL — Optimiste, cherche les opportunités
- * Retourne: { score: 0-10, arguments: string[], entryReason: string }
+ * Agent BULL — Optimiste, cherche les opportunités (Round 2)
+ * Reçoit le résultat Momentum du Round 1 pour affiner son score.
+ * @param {Object} momentum - Résultat de runMomentumAgent (optionnel)
+ * Retourne: { score: 0-10, arguments: string[], entryReason: string, narrative: string|null }
  */
-async function runBullAgent(token) {
+async function runBullAgent(token, momentum = null) {
   const system = `Tu es un analyste crypto OPTIMISTE spécialisé dans les meme coins Solana.
 Tu analyses les données de marché pour identifier les opportunités de trading à court terme.
-Tu te concentres sur: momentum des prix, volume croissant, liquidité suffisante, hype.
 
-IMPORTANT — Analyse du nom et de la narrative:
-Le champ "analysisDate" indique la date réelle d'analyse. Utilise ta connaissance des événements
-mondiaux récents (géopolitique, culture pop, tendances crypto) pour évaluer si le nom/symbole du token
-surfe sur une narrative d'actualité forte (ex: conflit géopolitique, personnalité virale, mème en vogue).
-Une narrative d'actualité forte = multiplicateur de hype à court terme.
+IMPORTANT — Narrative:
+Le champ "analysisDate" indique la date réelle. Évalue si le nom/symbole surfe sur une narrative
+d'actualité forte (géopolitique, culture pop, tendances crypto). Narrative forte = multiplicateur hype.
+
+IMPORTANT — Intégration du Momentum (pré-calculé par un agent spécialisé):
+Utilise le résumé momentum pour moduler ton score final:
+- trend ACCELERATING + buyPressure > 7  → signal fort, ajouter +1 à +2 au score
+- trend STABLE                          → neutre, pas d'ajustement
+- trend FADING                          → tempère l'optimisme, -1 au score
+- trend REVERSAL                        → contre-signal sérieux, -2 au score
+- momentum.warning présent              → mentionner comme nuance dans les arguments
 
 Sois factuel et concis. Ne dépasse pas 3 arguments.
 
 Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
-{"score": <0-10>, "arguments": ["arg1", "arg2", "arg3"], "entryReason": "raison principale", "narrative": "contexte narratif détecté ou null"}`;
+{"score": <0-10>, "arguments": ["arg1", "arg2", "arg3"], "entryReason": "raison principale", "narrative": "contexte narratif ou null"}`;
 
-  const text = await ask(system, `Analyse ce token:\n${formatTokenForAgents(token)}`, MODEL);
+  let content = `Analyse ce token:\n${formatTokenForAgents(token)}`;
+
+  if (momentum) {
+    content += `\n\nMomentum (pré-calculé par agent spécialisé):
+- Score: ${momentum.score}/10  |  Tendance: ${momentum.trend}
+- Pression d'achat: ${momentum.buyPressure}/10  |  Volume: ${momentum.volumeSignal}
+- Signaux: ${JSON.stringify(momentum.signals)}${momentum.warning ? `\n- ⚠️ Warning: ${momentum.warning}` : ''}`;
+  }
+
+  const text = await ask(system, content, MODEL);
   return parseAgentJson(text, {
     score: 5,
     arguments: ['Données insuffisantes pour une analyse précise'],
     entryReason: 'Analyse impossible',
+    narrative: null,
   });
 }
 
 /**
- * Agent BEAR — Pessimiste, cherche les risques
+ * Agent BEAR — Pessimiste, détecte rug pulls et scams (Round 2)
+ * Reçoit le résultat Whale du Round 1 — n'analyse plus les holders directement.
  * @param {Object} token     - Données DexScreener
- * @param {Object} security  - Données Birdeye security (optionnel)
+ * @param {Object} security  - Données Birdeye security: mint/freeze authority (optionnel)
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
- * @param {Object} overview  - Données Birdeye overview (optionnel) — holder count, volume enrichi
- * @param {Object} lpLock    - Données LP lock RugCheck (optionnel) — { lpLockedPct, lpLockedUSD, isLocked }
+ * @param {Object} lpLock    - Données LP lock — { lpLockedPct, lpLockedUSD, isLocked } (optionnel)
+ * @param {Object} whale     - Résultat de runWhaleAgent (optionnel)
  * Retourne: { riskScore: 0-10, redFlags: string[], verdict: "AVOID|CAUTION|OK" }
  */
-async function runBearAgent(token, security = null, rugReport = null, overview = null, lpLock = null) {
+async function runBearAgent(token, security = null, rugReport = null, lpLock = null, whale = null) {
   const system = `Tu es un analyste crypto PESSIMISTE spécialisé dans la détection de rug pulls et scams sur Solana.
-Tu cherches: liquidité trop basse, volume artificiel (txns faibles vs volume élevé), token trop récent,
-market cap vs fdv suspect, absence de holders, prix en chute libre.
-Si des données de sécurité on-chain sont fournies, utilise-les en priorité (mint authority, concentration holders).
 
-IMPORTANT — Narrative du nom:
-Évalue aussi si le nom/symbole semble être un opportunisme narratif sans substance
-(ex: nom collé à une actu mais aucune communauté réelle derrière, copie d'un token existant déjà établi).
-Une narrative forcée ou déjà exploitée par d'autres tokens = red flag supplémentaire.
+TON PÉRIMÈTRE (ne pas déborder hors de ces sujets):
+- Sécurité on-chain: mint authority, freeze authority
+- Liquidité: LP lock, liquidité trop basse
+- RugCheck: score de risque, historique rugpull, risques détectés
+- Marché: volume artificiel (txns faibles vs volume élevé), token trop récent, mcap/fdv suspect
+- Narrative: nom/symbole opportuniste sans substance réelle
+
+IMPORTANT — Whale (pré-calculé par agent spécialisé):
+L'analyse des holders et concentration est déjà faite. Tu reçois son verdict.
+Si concentrationRisk = HIGH/CRITICAL ou distributionSignal = DISTRIBUTING → red flag structurel.
+Ne répète pas l'analyse, cite le verdict en une phrase si c'est un red flag.
 
 Sois factuel et concis. Ne dépasse pas 3 red flags.
 
@@ -245,20 +267,9 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
   let content = `Analyse les risques de ce token:\n${formatTokenForAgents(token)}`;
 
   if (security) {
-    content += `\n\nDonnées sécurité on-chain (Birdeye):
+    content += `\n\nSécurité on-chain (Birdeye):
 - Mint authority: ${security.mintAuthority ? '⚠️ ACTIVE (peut créer de nouveaux tokens)' : '✅ Révoquée'}
-- Freeze authority: ${security.freezeAuthority ? '⚠️ ACTIVE (peut geler les wallets)' : '✅ Révoquée'}
-- Top 10 holders: ${security.top10HolderPercent?.toFixed(1) ?? '?'}% du supply
-- Part du créateur: ${security.creatorPercentage?.toFixed(1) ?? '?'}% du supply
-- Part de l'owner: ${security.ownerPercentage?.toFixed(1) ?? '?'}% du supply`;
-  }
-
-  if (overview && overview.holder != null) {
-    content += `\n\nDonnées holders (Birdeye overview):
-- Nombre de holders uniques: ${overview.holder}`;
-    if (overview.holder < 200) {
-      content += ` ⚠️ Très peu de holders — risque de manipulation du prix élevé`;
-    }
+- Freeze authority: ${security.freezeAuthority ? '⚠️ ACTIVE (peut geler les wallets)' : '✅ Révoquée'}`;
   }
 
   if (lpLock != null) {
@@ -269,7 +280,7 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
     content += `\n\nLiquidité verrouillée (LP lock):
 - % verrouillé: ${pct}% (${usd} USD)`;
     if (!lpLock.isLocked) {
-      content += `\n⚠️ Liquidité peu ou pas verrouillée — le créateur peut retirer la liquidité à tout moment (rug pull classique)`;
+      content += `\n⚠️ Liquidité peu ou pas verrouillée — rug pull classique possible`;
     }
   }
 
@@ -280,6 +291,11 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
     if (rugReport.significantRisks.length > 0) {
       content += `\n- Risques détectés:\n${rugReport.significantRisks.map((r) => `  • ${r}`).join('\n')}`;
     }
+  }
+
+  if (whale) {
+    content += `\n\nVerdiet Whale (pré-calculé):
+- Concentration: ${whale.concentrationRisk}  |  Holders: ${whale.holderHealth}  |  Distribution: ${whale.distributionSignal}${whale.warning ? `\n- ⚠️ ${whale.warning}` : ''}`;
   }
 
   const text = await ask(system, content, MODEL);
@@ -351,15 +367,16 @@ ${JSON.stringify(whale, null, 2)}`;
 /**
  * Lance le débat complet entre les agents pour un token
  *
- * Round 1 (parallèle) : Momentum + Bull + Bear simultanément
- * Round 2 (séquentiel): Risk Manager reçoit les 3 analyses
+ * Round 1 (parallèle)  : Momentum + Whale — agents de données spécialisés
+ * Round 2 (parallèle)  : Bull(momentum) + Bear(whale) — agents de débat enrichis
+ * Round 3 (séquentiel) : Risk Manager — décision finale avec toutes les analyses
  *
  * @param {Object} token     - Données de paire DexScreener
  * @param {Object} security  - Données de sécurité Birdeye (optionnel)
  * @param {Object} rugReport - Résumé RugCheck (optionnel)
  * @param {Object} overview  - Données Birdeye overview — holder count (optionnel)
  * @param {Object} lpLock    - Données LP lock — { lpLockedPct, lpLockedUSD, isLocked } (optionnel)
- * @returns {Promise<{bull, bear, momentum, decision, token, security, rugReport, overview, lpLock}>}
+ * @returns {Promise<{bull, bear, momentum, whale, decision, token, security, rugReport, overview, lpLock}>}
  */
 async function runDebate(token, security = null, rugReport = null, overview = null, lpLock = null) {
   const symbol = token.baseToken?.symbol || '???';
@@ -372,15 +389,19 @@ async function runDebate(token, security = null, rugReport = null, overview = nu
   const sourceStr = sources.length > 0 ? ` (${sources.join(' | ')})` : '';
   console.log(`[Agents] Débat pour ${symbol}${sourceStr}...`);
 
-  // Round 1: 4 agents spécialisés en parallèle
-  const [momentum, whale, bull, bear] = await Promise.all([
+  // Round 1: agents de données en parallèle
+  const [momentum, whale] = await Promise.all([
     runMomentumAgent(token),
     runWhaleAgent(token, security, overview),
-    runBullAgent(token),
-    runBearAgent(token, security, rugReport, overview, lpLock),
   ]);
 
-  // Round 2: Risk Manager avec toutes les données
+  // Round 2: agents de débat enrichis par Round 1 (en parallèle)
+  const [bull, bear] = await Promise.all([
+    runBullAgent(token, momentum),
+    runBearAgent(token, security, rugReport, lpLock, whale),
+  ]);
+
+  // Round 3: décision finale
   const decision = await runRiskManager(token, bull, bear, momentum, whale);
 
   console.log(
