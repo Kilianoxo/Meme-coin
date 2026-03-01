@@ -87,7 +87,7 @@ class PaperTrader extends EventEmitter {
   async onDebateResult(debate) {
     if (!debate) return;
 
-    const { decision, token, isGraduated } = debate;
+    const { decision, token, isGraduated, bear } = debate;
     const score   = decision?.score;
     const address = token?.baseToken?.address;
     const symbol  = token?.baseToken?.symbol || address?.slice(0, 6) || '???';
@@ -95,6 +95,11 @@ class PaperTrader extends EventEmitter {
     if (!address || score == null) return;
     if (score < this.state.config.minScore) {
       console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — score ${score} < minScore ${this.state.config.minScore}`);
+      return;
+    }
+    // Bear critique (≥8/10) = rug/pump-and-dump quasi-certain, inutile même en simulation
+    if (bear?.riskScore >= 8) {
+      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — Bear critique (${bear.riskScore}/10)`);
       return;
     }
     if (this.state.positions[address]) return;       // déjà en portefeuille
