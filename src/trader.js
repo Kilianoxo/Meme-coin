@@ -15,6 +15,7 @@ const {
 const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
 const bs58        = require('bs58');
 const fs          = require('fs');
+const https       = require('https');
 const path        = require('path');
 const agentMemory = require('./agentMemory');
 const logger      = require('./logger');
@@ -22,17 +23,50 @@ const logger      = require('./logger');
 const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
 // Clé API Jupiter optionnelle — obtenir gratuitement sur https://station.jup.ag
-// Sans clé : endpoint public (peut être rate-limité selon l'IP du serveur)
-// Avec clé : même endpoint mais authentifié → plus fiable
 const JUPITER_API_KEY = process.env.JUPITER_API_KEY || null;
 const JUPITER_URL = 'https://quote-api.jup.ag/v6';
 const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
 
-/** Headers communs pour toutes les requêtes Jupiter */
-function jupiterHeaders(extra = {}) {
-  const headers = { 'Content-Type': 'application/json', ...extra };
-  if (JUPITER_API_KEY) headers['Authorization'] = `Bearer ${JUPITER_API_KEY}`;
-  return headers;
+/**
+ * Requête HTTPS via le module natif Node.js (contourne undici/fetch).
+ * @param {string} url
+ * @param {{ method?: string, headers?: object, body?: string }} opts
+ * @returns {Promise<any>} — JSON parsé
+ */
+function httpsRequest(url, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const body   = opts.body || null;
+    const reqOpts = {
+      hostname: parsed.hostname,
+      path:     parsed.pathname + parsed.search,
+      method:   opts.method || 'GET',
+      headers:  {
+        'Content-Type': 'application/json',
+        ...(JUPITER_API_KEY ? { Authorization: `Bearer ${JUPITER_API_KEY}` } : {}),
+        ...(opts.headers || {}),
+        ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
+      },
+      timeout: 15_000,
+    };
+
+    const req = https.request(reqOpts, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`HTTP ${res.statusCode} — ${url}`));
+        }
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error(`JSON invalide: ${e.message}`)); }
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout Jupiter')); });
+    if (body) req.write(body);
+    req.end();
+  });
 }
 const WSOL = 'So11111111111111111111111111111111111111112';
 const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
@@ -131,9 +165,7 @@ class Trader {
     url.searchParams.set('amount', amountLamports.toString());
     url.searchParams.set('slippageBps', slippageBps.toString());
 
-    const res = await fetch(url.toString(), { headers: jupiterHeaders() });
-    if (!res.ok) throw new Error(`Jupiter quote: HTTP ${res.status}`);
-    return res.json();
+    return httpsRequest(url.toString());
   }
 
   /** Exécute un swap à partir d'un devis Jupiter */
@@ -141,9 +173,8 @@ class Trader {
     if (!this.wallet) throw new Error('Wallet non chargé');
 
     // 1. Récupère la transaction sérialisée
-    const swapRes = await fetch(`${JUPITER_URL}/swap`, {
+    const { swapTransaction } = await httpsRequest(`${JUPITER_URL}/swap`, {
       method: 'POST',
-      headers: jupiterHeaders(),
       body: JSON.stringify({
         quoteResponse: quote,
         userPublicKey: this.wallet.publicKey.toBase58(),
@@ -152,8 +183,6 @@ class Trader {
         prioritizationFeeLamports: 'auto',
       }),
     });
-    if (!swapRes.ok) throw new Error(`Jupiter swap: HTTP ${swapRes.status}`);
-    const { swapTransaction } = await swapRes.json();
 
     // 2. Désérialise, signe et envoie
     const txBuffer = Buffer.from(swapTransaction, 'base64');
@@ -186,9 +215,7 @@ class Trader {
    */
   async getCurrentPrice(mintAddress) {
     try {
-      const res = await fetch(`${JUPITER_PRICE_URL}?ids=${mintAddress}`);
-      if (!res.ok) return null;
-      const json = await res.json();
+      const json = await httpsRequest(`${JUPITER_PRICE_URL}?ids=${mintAddress}`);
       const price = json?.data?.[mintAddress]?.price;
       return price ? parseFloat(price) : null;
     } catch {
