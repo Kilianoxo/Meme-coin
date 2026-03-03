@@ -21,7 +21,7 @@ const logger      = require('./logger');
 
 const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
-const JUPITER_URL = 'https://quote-api.jup.ag/v6';
+const JUPITER_URL = 'https://api.jup.ag/swap/v1';
 const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
 const WSOL = 'So11111111111111111111111111111111111111112';
 const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s

@@ -32,6 +32,9 @@ class Bot {
     this.autoTrade = false;
     this.maxPositionSol = parseFloat(process.env.MAX_POSITION_SOL || '0.1');
 
+    // Guard anti-doublon : adresses de tokens dont l'achat est en cours
+    this._buyInFlight = new Set();
+
     // Compteurs pour le résumé horaire
     this._hourlyAnalyzed = 0;
     this._hourlyRejected = 0;
@@ -523,7 +526,9 @@ class Bot {
       if (isNaN(solAmount) || solAmount <= 0) return ctx.reply('❌ Montant invalide.');
 
       if (!this.trader.isReady()) return ctx.reply('❌ Wallet non configuré.');
+      if (this._buyInFlight.has(tokenAddress)) return ctx.reply('⏳ Achat déjà en cours pour ce token.');
 
+      this._buyInFlight.add(tokenAddress);
       await ctx.reply(`⏳ Achat de ${solAmount} SOL...`);
       try {
         const { txId } = await this.trader.buy(tokenAddress, solAmount);
@@ -533,6 +538,8 @@ class Bot {
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
+      } finally {
+        this._buyInFlight.delete(tokenAddress);
       }
     });
 
@@ -572,6 +579,10 @@ class Bot {
       if (!this.trader.isReady()) {
         return ctx.reply('❌ Wallet non configuré.');
       }
+      if (this._buyInFlight.has(tokenAddress)) {
+        return ctx.reply('⏳ Achat déjà en cours pour ce token.');
+      }
+      this._buyInFlight.add(tokenAddress);
       try {
         const { txId } = await this.trader.buy(tokenAddress, solAmount, { stopLossPct, takeProfitPct });
         await ctx.reply(
@@ -580,6 +591,8 @@ class Bot {
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
+      } finally {
+        this._buyInFlight.delete(tokenAddress);
       }
     });
 
