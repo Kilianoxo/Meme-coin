@@ -27,10 +27,11 @@ const SCAN_INTERVAL_MS = 30_000; // 30 secondes
 const SEEN_TTL_MS = 4 * 3_600_000; // 4 heures
 
 const FILTERS = {
-  minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD || '10000'),
-  minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD || '50000'),
-  minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD || '100000'),
-  maxAgeHours: parseFloat(process.env.MAX_TOKEN_AGE_HOURS || '72'),
+  minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD    || '10000'),
+  minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD   || '50000'),
+  minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD   || '100000'),
+  maxAgeHours:     parseFloat(process.env.MAX_TOKEN_AGE_HOURS  || '72'),
+  minAgeHours:     parseFloat(process.env.MIN_TOKEN_AGE_HOURS  || '1'),  // ignore < 1h par défaut
 };
 
 class Scanner extends EventEmitter {
@@ -75,9 +76,14 @@ class Scanner extends EventEmitter {
     if (volume24h < FILTERS.minVolume24hUsd) return false;
     if (marketCap < FILTERS.minMarketCapUsd) return false;
 
-    if (!skipAgeFilter && pair.pairCreatedAt) {
+    if (pair.pairCreatedAt) {
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000;
-      if (ageHours > FILTERS.maxAgeHours) return false;
+
+      // Trop récent : pas assez de données pour une analyse fiable
+      if (ageHours < FILTERS.minAgeHours) return false;
+
+      // Trop vieux : sauf pour les sources trending/top-boosted (skipAgeFilter)
+      if (!skipAgeFilter && ageHours > FILTERS.maxAgeHours) return false;
     }
 
     return true;
@@ -169,44 +175,24 @@ class Scanner extends EventEmitter {
     return results;
   }
 
-  /**
-   * Scanne les derniers tokens ayant créé un profil DexScreener.
-   * Ce sont généralement de nouveaux tokens — le filtre d'âge s'applique.
-   */
-  async _scanProfiles() {
-    const profiles = await dex.getLatestTokenProfiles();
-    if (!Array.isArray(profiles)) return [];
-
-    const results = [];
-    for (const item of profiles) {
-      if (!item.tokenAddress || this._isSeen(item.tokenAddress)) continue;
-      const pair = await this._fetchBestPair(item.tokenAddress);
-      if (pair && this._passesFilters(pair)) {
-        results.push({ ...pair, _source: 'dex-profiles' });
-        this._markSeen(item.tokenAddress);
-      }
-    }
-    return results;
-  }
-
   /** Un cycle de scan complet */
   async scan() {
     this.scanCount++;
     console.log(`[Scanner] Scan #${this.scanCount} (${new Date().toLocaleTimeString('fr-FR')})`);
 
     let candidates = [];
-    let trending = [], topBoosted = [], profiles = [];
+    let trending = [], topBoosted = [];
     try {
-      // Priorité : trending > top-boosted > profiles
-      // trending et top-boosted ignorent le filtre d'âge (tokens établis avec momentum)
-      [trending, topBoosted, profiles] = await Promise.all([
+      // Deux sources uniquement : trending + top-boosted
+      // Les deux ignorent le filtre d'âge MAX (tokens établis avec momentum)
+      // mais le filtre MIN s'applique partout (ignore les < 1h)
+      [trending, topBoosted] = await Promise.all([
         this._scanTrending(),
         this._scanTopBoosted(),
-        this._scanProfiles(),
       ]);
-      // Déduplique par adresse de token (les 3 sources peuvent se chevaucher)
+      // Déduplique par adresse de token (les 2 sources peuvent se chevaucher)
       const seen = new Set();
-      for (const pair of [...trending, ...topBoosted, ...profiles]) {
+      for (const pair of [...trending, ...topBoosted]) {
         const addr = pair.baseToken?.address;
         if (addr && !seen.has(addr)) {
           seen.add(addr);
@@ -223,7 +209,7 @@ class Scanner extends EventEmitter {
     candidates.sort((a, b) => this._relevanceScore(b) - this._relevanceScore(a));
     const toAnalyze = candidates.slice(0, MAX_CANDIDATES_PER_SCAN);
 
-    console.log(`[Scanner] ${candidates.length} candidat(s) [${trending.length} trending, ${topBoosted.length} top-boosted, ${profiles.length} profiles] — top ${toAnalyze.length} en débat IA`);
+    console.log(`[Scanner] ${candidates.length} candidat(s) [${trending.length} trending, ${topBoosted.length} top-boosted] — top ${toAnalyze.length} en débat IA`);
 
     for (const token of toAnalyze) {
       // Émet immédiatement le candidat (pour l'alerte Telegram brute)
@@ -274,7 +260,7 @@ class Scanner extends EventEmitter {
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log(`[Scanner] Démarré — filtres: liq>${FILTERS.minLiquidityUsd}$, vol24h>${FILTERS.minVolume24hUsd}$`);
+    console.log(`[Scanner] Démarré — filtres: liq>${FILTERS.minLiquidityUsd}$, vol24h>${FILTERS.minVolume24hUsd}$, âge: ${FILTERS.minAgeHours}h–${FILTERS.maxAgeHours}h`);
     this._listenToPumpFun();
     pumpFun.start();
     this.scan();
