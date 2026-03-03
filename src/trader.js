@@ -21,8 +21,19 @@ const logger      = require('./logger');
 
 const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
+// Clé API Jupiter optionnelle — obtenir gratuitement sur https://station.jup.ag
+// Sans clé : endpoint public (peut être rate-limité selon l'IP du serveur)
+// Avec clé : même endpoint mais authentifié → plus fiable
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY || null;
 const JUPITER_URL = 'https://quote-api.jup.ag/v6';
 const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
+
+/** Headers communs pour toutes les requêtes Jupiter */
+function jupiterHeaders(extra = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extra };
+  if (JUPITER_API_KEY) headers['Authorization'] = `Bearer ${JUPITER_API_KEY}`;
+  return headers;
+}
 const WSOL = 'So11111111111111111111111111111111111111112';
 const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
 
@@ -120,7 +131,7 @@ class Trader {
     url.searchParams.set('amount', amountLamports.toString());
     url.searchParams.set('slippageBps', slippageBps.toString());
 
-    const res = await fetch(url.toString());
+    const res = await fetch(url.toString(), { headers: jupiterHeaders() });
     if (!res.ok) throw new Error(`Jupiter quote: HTTP ${res.status}`);
     return res.json();
   }
@@ -132,7 +143,7 @@ class Trader {
     // 1. Récupère la transaction sérialisée
     const swapRes = await fetch(`${JUPITER_URL}/swap`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jupiterHeaders(),
       body: JSON.stringify({
         quoteResponse: quote,
         userPublicKey: this.wallet.publicKey.toBase58(),
