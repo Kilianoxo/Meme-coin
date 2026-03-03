@@ -31,7 +31,7 @@ async function createMessage({ model = 'claude-haiku-4-5-20251001', maxTokens = 
   };
 
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(API_URL, { method: 'POST', headers, body: JSON.stringify(body) });
+    const res = await fetch(API_URL, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
 
     if (res.ok) return res.json();
 

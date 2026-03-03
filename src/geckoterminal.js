@@ -19,6 +19,7 @@ async function fetchGecko(path) {
   try {
     const res = await fetch(`${BASE_URL}${path}`, {
       headers: { accept: 'application/json;version=20230302' },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
     return res.json();

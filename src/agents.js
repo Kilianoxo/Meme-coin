@@ -165,7 +165,7 @@ Tu évalues la santé distributionnelle du token et détectes les schémas de ma
 
 ANALYSE DES DONNÉES:
 1. Concentration (top10Pct, creatorPct, ownerPct):
-   - top10Pct > 80% → CRITICAL | 60-80% → HIGH | 40-60% → MEDIUM | < 40% → LOW
+   - top10Pct > 90% → CRITICAL | 65-90% → HIGH | 40-65% → MEDIUM | < 40% → LOW
    - creatorPct > 15% → flag majeur (risque de dump créateur)
    - ownerPct > 10% → flag supplémentaire
 
@@ -384,8 +384,8 @@ function calcGlobalScore(bull, bear, momentum, whale, security, rugReport, lpLoc
 function scoreToDecision(score, bear, whale) {
   if (whale.concentrationRisk === 'CRITICAL') return 'SKIP';
   if (bear.riskScore >= 9)                    return 'SKIP';
-  if (score >= 70) return 'BUY';
-  if (score >= 50) return 'WAIT';
+  if (score >= 62) return 'BUY';
+  if (score >= 45) return 'WAIT';
   return 'SKIP';
 }
 
@@ -394,8 +394,8 @@ function scoreToParams(score, momentum) {
   let suggestedAmountPct, stopLossPct, takeProfitPct;
 
   if (score >= 80)      { suggestedAmountPct = 4; stopLossPct = 15; takeProfitPct = 100; }
-  else if (score >= 70) { suggestedAmountPct = 3; stopLossPct = 20; takeProfitPct = 75;  }
-  else if (score >= 60) { suggestedAmountPct = 2; stopLossPct = 20; takeProfitPct = 50;  }
+  else if (score >= 72) { suggestedAmountPct = 3; stopLossPct = 20; takeProfitPct = 75;  }
+  else if (score >= 62) { suggestedAmountPct = 2; stopLossPct = 20; takeProfitPct = 50;  }
   else                  { suggestedAmountPct = 1; stopLossPct = 25; takeProfitPct = 50;  }
 
   if (momentum.trend === 'ACCELERATING') {
