@@ -21,6 +21,11 @@ const MAX_CANDIDATES_PER_SCAN = 5;
 
 const SCAN_INTERVAL_MS = 30_000; // 30 secondes
 
+// Durée pendant laquelle un token vu est ignoré.
+// Après ce délai il redevient éligible — utile pour les tokens plus âgés
+// qui gagnent du momentum après notre premier passage.
+const SEEN_TTL_MS = 4 * 3_600_000; // 4 heures
+
 const FILTERS = {
   minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD || '10000'),
   minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD || '50000'),
@@ -31,14 +36,35 @@ const FILTERS = {
 class Scanner extends EventEmitter {
   constructor() {
     super();
-    this.seenAddresses = new Set();
+    // Map<address, expiryTimestamp> — TTL 4h, permet de rescanner des tokens
+    // plus âgés qui gagnent du momentum après notre premier passage.
+    this.seenAddresses = new Map();
     this.isRunning = false;
     this.scanCount = 0;
     this._interval = null;
   }
 
-  /** Vérifie si une paire passe les filtres de base */
-  _passesFilters(pair) {
+  /** Vérifie si un token a déjà été vu récemment (TTL 4h) */
+  _isSeen(address) {
+    const expiry = this.seenAddresses.get(address);
+    if (expiry === undefined) return false;
+    if (Date.now() >= expiry) { this.seenAddresses.delete(address); return false; }
+    return true;
+  }
+
+  /** Marque un token comme vu pour SEEN_TTL_MS */
+  _markSeen(address) {
+    this.seenAddresses.set(address, Date.now() + SEEN_TTL_MS);
+  }
+
+  /**
+   * Vérifie si une paire passe les filtres de base.
+   * @param {Object}  pair
+   * @param {boolean} skipAgeFilter — true pour les sources "trending/top" où
+   *                                  les tokens peuvent être plus âgés mais
+   *                                  avoir du momentum prouvé.
+   */
+  _passesFilters(pair, skipAgeFilter = false) {
     if (pair.chainId !== 'solana') return false;
 
     const liquidity = pair.liquidity?.usd || 0;
@@ -49,7 +75,7 @@ class Scanner extends EventEmitter {
     if (volume24h < FILTERS.minVolume24hUsd) return false;
     if (marketCap < FILTERS.minMarketCapUsd) return false;
 
-    if (pair.pairCreatedAt) {
+    if (!skipAgeFilter && pair.pairCreatedAt) {
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000;
       if (ageHours > FILTERS.maxAgeHours) return false;
     }
@@ -96,73 +122,68 @@ class Scanner extends EventEmitter {
     }
   }
 
-  /** Scanne les tokens boostés (ont payé pour être mis en avant) */
-  async _scanBoosted() {
-    const boosted = await dex.getLatestBoostedTokens();
+  /**
+   * Scanne les tokens avec le plus de boosts actifs (soutenu, pas juste récent).
+   * Signal plus fort que "latest" : ces tokens ont payé et maintiennent leur boost.
+   * skipAgeFilter = true car un top-boosted peut être établi depuis plusieurs jours.
+   */
+  async _scanTopBoosted() {
+    const boosted = await dex.getTopBoostedTokens();
     if (!Array.isArray(boosted)) return [];
 
     const results = [];
     for (const item of boosted) {
-      if (!item.tokenAddress || this.seenAddresses.has(item.tokenAddress)) continue;
+      if (!item.tokenAddress || this._isSeen(item.tokenAddress)) continue;
       const pair = await this._fetchBestPair(item.tokenAddress);
-      if (pair && this._passesFilters(pair)) {
-        results.push(pair);
-        this.seenAddresses.add(item.tokenAddress);
+      if (pair && this._passesFilters(pair, true)) {
+        results.push({ ...pair, _source: 'dex-top-boosted' });
+        this._markSeen(item.tokenAddress);
       }
     }
     return results;
   }
 
   /**
-   * Scanne GeckoTerminal — nouveaux pools + trending Solana.
-   * Retourne des paires déjà normalisées (format DexScreener).
-   * Filtre sur les critères habituels avant de retourner.
+   * Scanne GeckoTerminal — trending uniquement (plus de nouveaux pools).
+   * Les nouveaux pools = 95 % de bruit; le trending = momentum avéré sur 24h.
+   * skipAgeFilter = true : ces tokens ont peut-être quelques jours mais ils bougent.
    */
-  async _scanGecko() {
-    let pools = [];
+  async _scanTrending() {
+    let trending = [];
     try {
-      const [newPools, trending] = await Promise.all([
-        gecko.getNewPools(),
-        gecko.getTrendingPools(),
-      ]);
-      // Déduplique par adresse de pool (un même pool peut être dans les deux listes)
-      const seen = new Set();
-      for (const p of [...newPools, ...trending]) {
-        const key = p.pairAddress || p.baseToken?.address;
-        if (key && !seen.has(key)) {
-          seen.add(key);
-          pools.push(p);
-        }
-      }
+      trending = await gecko.getTrendingPools();
     } catch (err) {
-      console.error('[Scanner] Erreur GeckoTerminal:', err.message);
+      console.error('[Scanner] Erreur GeckoTerminal trending:', err.message);
       return [];
     }
 
     const results = [];
-    for (const pair of pools) {
+    for (const pair of trending) {
       const addr = pair.baseToken?.address;
-      if (!addr || this.seenAddresses.has(addr)) continue;
-      if (this._passesFilters(pair)) {
-        results.push(pair);
-        this.seenAddresses.add(addr);
+      if (!addr || this._isSeen(addr)) continue;
+      if (this._passesFilters(pair, true)) {
+        results.push({ ...pair, _source: 'gecko-trending' });
+        this._markSeen(addr);
       }
     }
     return results;
   }
 
-  /** Scanne les derniers tokens ayant créé un profil */
+  /**
+   * Scanne les derniers tokens ayant créé un profil DexScreener.
+   * Ce sont généralement de nouveaux tokens — le filtre d'âge s'applique.
+   */
   async _scanProfiles() {
     const profiles = await dex.getLatestTokenProfiles();
     if (!Array.isArray(profiles)) return [];
 
     const results = [];
     for (const item of profiles) {
-      if (!item.tokenAddress || this.seenAddresses.has(item.tokenAddress)) continue;
+      if (!item.tokenAddress || this._isSeen(item.tokenAddress)) continue;
       const pair = await this._fetchBestPair(item.tokenAddress);
       if (pair && this._passesFilters(pair)) {
-        results.push(pair);
-        this.seenAddresses.add(item.tokenAddress);
+        results.push({ ...pair, _source: 'dex-profiles' });
+        this._markSeen(item.tokenAddress);
       }
     }
     return results;
@@ -174,15 +195,18 @@ class Scanner extends EventEmitter {
     console.log(`[Scanner] Scan #${this.scanCount} (${new Date().toLocaleTimeString('fr-FR')})`);
 
     let candidates = [];
+    let trending = [], topBoosted = [], profiles = [];
     try {
-      const [boosted, profiles, geckoResults] = await Promise.all([
-        this._scanBoosted(),
+      // Priorité : trending > top-boosted > profiles
+      // trending et top-boosted ignorent le filtre d'âge (tokens établis avec momentum)
+      [trending, topBoosted, profiles] = await Promise.all([
+        this._scanTrending(),
+        this._scanTopBoosted(),
         this._scanProfiles(),
-        this._scanGecko(),
       ]);
       // Déduplique par adresse de token (les 3 sources peuvent se chevaucher)
       const seen = new Set();
-      for (const pair of [...boosted, ...profiles, ...geckoResults]) {
+      for (const pair of [...trending, ...topBoosted, ...profiles]) {
         const addr = pair.baseToken?.address;
         if (addr && !seen.has(addr)) {
           seen.add(addr);
@@ -199,7 +223,7 @@ class Scanner extends EventEmitter {
     candidates.sort((a, b) => this._relevanceScore(b) - this._relevanceScore(a));
     const toAnalyze = candidates.slice(0, MAX_CANDIDATES_PER_SCAN);
 
-    console.log(`[Scanner] ${candidates.length} candidat(s) — top ${toAnalyze.length} sélectionnés pour débat IA`);
+    console.log(`[Scanner] ${candidates.length} candidat(s) [${trending.length} trending, ${topBoosted.length} top-boosted, ${profiles.length} profiles] — top ${toAnalyze.length} en débat IA`);
 
     for (const token of toAnalyze) {
       // Émet immédiatement le candidat (pour l'alerte Telegram brute)
@@ -239,8 +263,9 @@ class Scanner extends EventEmitter {
       return;
     }
 
-    const lpPct = lpLock ? `${lpLock.lpLockedPct.toFixed(0)}% LP lock` : 'LP lock: ?';
-    console.log(`[Scanner] ✅ ${symbol} passe les filtres — ${lpPct}`);
+    const lpPct   = lpLock ? `${lpLock.lpLockedPct.toFixed(0)}% LP lock` : 'LP lock: ?';
+    const source  = token._source ? ` [${token._source}]` : '';
+    console.log(`[Scanner] ✅ ${symbol}${source} passe les filtres — ${lpPct}`);
 
     const debate = await runDebate(token, security, rugReport, overview, lpLock);
     this.emit('debate', debate);
@@ -292,8 +317,8 @@ class Scanner extends EventEmitter {
 
         // Pour les graduations on bypass les filtres de volume/liquidité
         // (le pool vient juste d'être créé, les métriques sont encore basses)
-        if (this.seenAddresses.has(migration.mint)) return;
-        this.seenAddresses.add(migration.mint);
+        if (this._isSeen(migration.mint)) return;
+        this._markSeen(migration.mint);
 
         console.log(`[Scanner] 🎓 Analyse de la graduation: ${sym}`);
         const [{ security, overview }, rugReport, lpLock] = await Promise.all([
@@ -326,6 +351,11 @@ class Scanner extends EventEmitter {
 
   getStats() {
     const pumpStats = pumpFun.getStats();
+    // Nettoie les entrées expirées avant de compter
+    const now = Date.now();
+    for (const [addr, expiry] of this.seenAddresses) {
+      if (now >= expiry) this.seenAddresses.delete(addr);
+    }
     return {
       scanCount: this.scanCount,
       seenTokens: this.seenAddresses.size,

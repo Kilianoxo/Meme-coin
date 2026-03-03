@@ -240,6 +240,7 @@ class Bot {
         `/auto — Toggle auto-trade\n` +
         `/settings — Voir les paramètres\n` +
         `/set &lt;clé&gt; &lt;valeur&gt; — Modifier un paramètre\n` +
+        `/debat &lt;adresse&gt; — Suggérer un token → les agents débattent\n` +
         `/analyse &lt;adresse&gt; — Analyser un token\n` +
         `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel\n` +
         `/sell &lt;adresse&gt; [%] — Vente manuelle\n\n` +
@@ -261,6 +262,8 @@ class Bot {
         `<b>Trading</b>\n` +
         `/auto — Activer/désactiver le trading automatique\n` +
         `/scan — Lancer un scan manuel toutes sources\n` +
+        `/debat &lt;adresse&gt; — Suggérer un token au débat IA\n` +
+        `  → Tu proposes un CA, Bull / Bear / Momentum / Whale débattent\n` +
         `/analyse &lt;adresse&gt; — Analyse complète d'un token\n` +
         `  → Débat IA (Bull / Bear / Risk Manager)\n` +
         `  → Sécurité on-chain (mint, freeze, holders)\n` +
@@ -459,12 +462,20 @@ class Bot {
       );
     });
 
-    bot.command('analyse', async (ctx) => {
+    // Handler partagé pour /analyse et /debat
+    const analyseHandler = async (ctx) => {
       const parts = ctx.message.text.trim().split(/\s+/);
-      if (parts.length < 2) return ctx.reply('Usage: /analyse <adresse_token>');
+      const isDebat = parts[0] === '/debat';
+      if (parts.length < 2) {
+        return ctx.reply(`Usage: ${isDebat ? '/debat' : '/analyse'} <adresse_token>`);
+      }
 
       const tokenAddress = parts[1];
-      const msg = await ctx.reply('🔍 Récupération des données...');
+      if (isDebat) {
+        await ctx.reply('🤖 Suggestion reçue — les agents vont débattre sur ce token…');
+      } else {
+        await ctx.reply('🔍 Récupération des données...');
+      }
 
       try {
         const pairs = await dex.getTokenPairs('solana', tokenAddress);
@@ -474,7 +485,7 @@ class Bot {
         const pair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
 
         await ctx.reply(this._formatToken(pair), { parse_mode: 'HTML', disable_web_page_preview: true });
-        await ctx.reply('🤖 Débat IA en cours...');
+        await ctx.reply('🤖 Débat IA en cours…');
 
         const birdeye = require('./birdeye');
         const addr = pair.baseToken?.address;
@@ -488,10 +499,12 @@ class Bot {
 
         if (debate.decision.decision === 'BUY') {
           const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
+          const sl     = debate.decision.stopLossPct  || 20;
+          const tp     = debate.decision.takeProfitPct || 50;
           await ctx.reply(
-            '💡 Action:',
+            '💡 Action :',
             Markup.inlineKeyboard([
-              Markup.button.callback(`✅ Acheter (${solAmt.toFixed(3)} SOL)`, `buy:${tokenAddress}:${solAmt.toFixed(4)}`),
+              Markup.button.callback(`✅ Acheter (${solAmt.toFixed(3)} SOL)`, `buy:${tokenAddress}:${solAmt.toFixed(4)}:${sl}:${tp}`),
               Markup.button.callback('❌ Passer', 'skip'),
             ])
           );
@@ -499,7 +512,10 @@ class Bot {
       } catch (err) {
         await ctx.reply(`❌ Erreur: ${err.message}`);
       }
-    });
+    };
+
+    bot.command('analyse', analyseHandler);
+    bot.command('debat',   analyseHandler);
 
     bot.command('buy', async (ctx) => {
       const parts = ctx.message.text.trim().split(/\s+/);

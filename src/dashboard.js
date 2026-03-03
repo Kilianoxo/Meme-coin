@@ -22,7 +22,10 @@ const url   = require('url');
 
 const state       = require('./state');
 const agentMemory = require('./agentMemory');
-const { agentBus } = require('./agents');
+const { agentBus, runDebate } = require('./agents');
+const dex      = require('./dexscreener');
+const birdeye  = require('./birdeye');
+const rugcheck = require('./rugcheck');
 
 const PUBLIC_DIR   = path.join(__dirname, 'public');
 const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
@@ -139,6 +142,11 @@ class Dashboard {
 
     if (pathname === '/api/paper/buy' && req.method === 'POST') {
       this._apiPaperBuy(req, res);
+      return;
+    }
+
+    if (pathname === '/api/debate' && req.method === 'POST') {
+      this._apiDebate(req, res);
       return;
     }
 
@@ -476,6 +484,54 @@ class Dashboard {
       const { address, amountSol } = body;
       const result = await this.paperTrader.manualBuy(address, amountSol);
       this._jsonOk(res, result);
+    });
+  }
+
+  // ─── API /api/debate ──────────────────────────────────────────────────────
+
+  _apiDebate(req, res) {
+    this._readBody(req, async ({ address }) => {
+      if (!address || typeof address !== 'string' || !address.trim()) {
+        this._jsonOk(res, { ok: false, error: 'Adresse manquante' });
+        return;
+      }
+      const addr = address.trim();
+
+      // Annonce immédiate dans le Trading Floor
+      this._pushChat({
+        type:      'system',
+        content:   `🔍 Débat manuel demandé pour <code>${addr.slice(0, 8)}…</code>`,
+        timestamp: Date.now(),
+      });
+
+      try {
+        const pairs = await dex.getTokenPairs('solana', addr);
+        if (!pairs || pairs.length === 0) {
+          this._jsonOk(res, { ok: false, error: 'Token introuvable sur DexScreener' });
+          return;
+        }
+        const pair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+
+        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
+          birdeye.getTokenData(addr),
+          rugcheck.getTokenReport(addr),
+          rugcheck.getLpLockData(addr),
+        ]);
+
+        const debate = await runDebate(pair, security, rugReport, overview, lpLock);
+
+        const sym = pair.baseToken?.symbol || addr.slice(0, 6);
+        this._pushChat({
+          type:      'system',
+          content:   `📊 Débat terminé — <b>$${sym}</b> → ${debate.decision?.decision} (${debate.decision?.score ?? '?'}/100)`,
+          timestamp: Date.now(),
+        });
+
+        this._jsonOk(res, { ok: true, debate, pair });
+      } catch (err) {
+        this._pushChat({ type: 'system', content: `❌ Erreur débat : ${err.message}`, timestamp: Date.now() });
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
     });
   }
 

@@ -821,6 +821,29 @@
       </div>
     </div>
 
+    <!-- ── Soumettre un token au débat ──────────────────────────────────── -->
+    <div class="section" style="margin-bottom:16px">
+      <div class="sec-head">
+        <h2>🔍 Soumettre un token au débat</h2>
+        <span class="c-muted" style="font-size:12px">Tu colles un CA, les 4 agents analysent — résultat ici + dans le fil</span>
+      </div>
+      <div class="sec-body">
+        <div class="config-panel">
+          <div class="config-field" style="flex:1">
+            <label class="config-label">Adresse du token (Solana)</label>
+            <input class="config-input manual-addr-input" id="debateAddr" type="text"
+                   placeholder="Ex: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap">
+            <button class="btn btn-save" id="debateBtn" onclick="submitDebate()">🤖 Lancer le débat</button>
+            <span id="debateMsg" style="font-size:12px; align-self:center"></span>
+          </div>
+        </div>
+        <div id="debateResult" style="display:none; margin-top:16px"></div>
+      </div>
+    </div>
+
     <!-- ── Live chat + stats agents ─────────────────────────────────────── -->
     <div class="two-col" style="margin-bottom:16px">
 
@@ -1962,6 +1985,108 @@ async function resetPaper() {
     });
     fetchPaper();
   } catch {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DÉBAT MANUEL (Trading Floor)
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function submitDebate() {
+  const address = (document.getElementById('debateAddr').value || '').trim();
+  const btn = document.getElementById('debateBtn');
+  const msg = document.getElementById('debateMsg');
+  const result = document.getElementById('debateResult');
+
+  if (!address) { msg.textContent = '❌ Adresse requise'; msg.className = 'c-red'; return; }
+
+  btn.disabled = true;
+  msg.textContent = '⏳ Les agents analysent… (~15s)';
+  msg.className = 'c-muted';
+  result.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/debate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = `✅ ${d.debate?.decision?.decision ?? 'Terminé'}`;
+      msg.className = d.debate?.decision?.decision === 'BUY' ? 'c-green' : d.debate?.decision?.decision === 'WAIT' ? 'c-yellow' : 'c-red';
+      result.style.display = 'block';
+      result.innerHTML = renderDebateCard(d.debate, d.pair);
+    } else {
+      msg.textContent = `❌ ${d.error}`;
+      msg.className = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className = 'c-red';
+  }
+  btn.disabled = false;
+}
+
+function renderDebateCard(debate, pair) {
+  if (!debate || !pair) return '';
+  const { decision, bull, bear, momentum, whale } = debate;
+  const sym    = esc(pair.baseToken?.symbol || '???');
+  const name   = esc(pair.baseToken?.name   || '');
+  const price  = parseFloat(pair.priceUsd || 0);
+  const ch24   = pair.priceChange?.h24 || 0;
+  const pairUrl = pair.url || `https://dexscreener.com/solana/${pair.pairAddress || pair.baseToken?.address || ''}`;
+
+  const decColor = { BUY: 'var(--green)', SKIP: 'var(--red)', WAIT: 'var(--yellow)' }[decision?.decision] || 'var(--txt2)';
+  const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision?.decision] || '⚪';
+  const ch24cls  = ch24 >= 0 ? 'c-green' : 'c-red';
+
+  let h = `<div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:16px;font-size:13px;line-height:1.6">`;
+
+  // Header token
+  h += `<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;gap:12px">`;
+  h += `<div>`;
+  h += `<span style="font-size:16px;font-weight:700;color:var(--yellow)">$${sym}</span> <span class="c-muted">${name}</span><br>`;
+  h += `<span class="mono">$${price < 0.0001 ? price.toExponential(3) : price.toFixed(6)}</span> `;
+  h += `<span class="${ch24cls}">${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}% 24h</span>`;
+  h += `</div>`;
+  h += `<a href="${pairUrl}" target="_blank" style="font-size:12px;color:var(--blue);white-space:nowrap">DexScreener ↗</a>`;
+  h += `</div>`;
+
+  // Verdict
+  h += `<div style="background:var(--card);border-radius:8px;padding:12px;margin-bottom:12px;border-left:3px solid ${decColor}">`;
+  h += `<div style="font-size:15px;font-weight:700;color:${decColor}">${decEmoji} ${decision?.decision}`;
+  if (decision?.score != null) h += ` — ${decision.score}/100`;
+  if (decision?.confidence != null) h += ` &nbsp;·&nbsp; confiance ${decision.confidence}/10`;
+  h += `</div>`;
+  if (decision?.reasoning) h += `<div style="color:var(--txt2);font-size:12px;margin-top:4px">${esc(decision.reasoning)}</div>`;
+  h += `</div>`;
+
+  // Agents
+  const agents = [
+    bull     && { icon: '🐂', label: `Bull ${bull.score}/10`,          color: 'var(--green)',  bg: 'rgba(63,185,80,.08)',   border: 'rgba(63,185,80,.2)',  sub: bull.narrative },
+    bear     && { icon: '🐻', label: `Bear ${bear.riskScore}/10`,      color: 'var(--red)',    bg: 'rgba(248,81,73,.08)',   border: 'rgba(248,81,73,.2)',  sub: bear.verdict },
+    momentum && { icon: '⚡', label: `Momentum ${momentum.score}/10`,  color: 'var(--blue)',   bg: 'rgba(88,166,255,.08)',  border: 'rgba(88,166,255,.2)', sub: momentum.trend },
+    whale    && { icon: '🐋', label: `Whale ${whale.score}/10`,        color: 'var(--purple)', bg: 'rgba(188,140,255,.08)', border: 'rgba(188,140,255,.2)',sub: whale.distributionSignal },
+  ].filter(Boolean);
+
+  const cols = agents.length;
+  h += `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:8px;margin-bottom:12px">`;
+  for (const a of agents) {
+    h += `<div style="background:${a.bg};border:1px solid ${a.border};border-radius:7px;padding:10px">`;
+    h += `<div style="font-weight:600;color:${a.color}">${a.icon} ${a.label}</div>`;
+    if (a.sub) h += `<div style="font-size:11px;color:var(--txt2);margin-top:3px">${esc(String(a.sub))}</div>`;
+    h += `</div>`;
+  }
+  h += `</div>`;
+
+  // SL/TP si BUY
+  if (decision?.decision === 'BUY' && decision.stopLossPct) {
+    h += `<div style="font-size:12px;color:var(--txt2)">💸 Taille suggérée: ${decision.suggestedAmountPct}%`;
+    h += `&nbsp;&nbsp;·&nbsp;&nbsp;🛑 SL: -${decision.stopLossPct}%&nbsp;&nbsp;·&nbsp;&nbsp;🎯 TP: +${decision.takeProfitPct}%</div>`;
+  }
+
+  h += `</div>`;
+  return h;
 }
 
 async function paperSell(address, btn) {
