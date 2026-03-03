@@ -137,6 +137,9 @@ class PaperTrader extends EventEmitter {
       address,
       entryPrice:  price,
       highPrice:   price,
+      currentPrice: price,
+      pnlPct:      0,
+      pnlSol:      0,
       tokensHeld,
       amountSolIn: amountSol,
       slPct:       decision.stopLossPct   || config.slPct,
@@ -207,6 +210,9 @@ class PaperTrader extends EventEmitter {
       address,
       entryPrice:  price,
       highPrice:   price,
+      currentPrice: price,
+      pnlPct:      0,
+      pnlSol:      0,
       tokensHeld,
       amountSolIn: amount,
       slPct:       config.slPct,
@@ -239,12 +245,16 @@ class PaperTrader extends EventEmitter {
       // Met à jour le plus haut
       if (price > pos.highPrice) {
         pos.highPrice = price;
-        this._save();
       }
 
       const gainPct      = ((price - pos.entryPrice)   / pos.entryPrice)   * 100;
       const dropFromHigh = ((pos.highPrice - price)     / pos.highPrice)    * 100;
       const maxGainPct   = ((pos.highPrice - pos.entryPrice) / pos.entryPrice) * 100;
+
+      // Stocke prix actuel + PnL sur la position pour l'affichage dashboard
+      pos.currentPrice = price;
+      pos.pnlPct       = parseFloat(gainPct.toFixed(2));
+      pos.pnlSol       = parseFloat(((pos.tokensHeld * price) - pos.amountSolIn).toFixed(6));
 
       if (gainPct <= -pos.slPct) {
         await this._sellPosition(address, 'STOP_LOSS');
@@ -259,7 +269,10 @@ class PaperTrader extends EventEmitter {
       const { trailingActivation, trailingDistance } = this.state.config;
       if (maxGainPct >= trailingActivation && dropFromHigh >= trailingDistance) {
         await this._sellPosition(address, 'TRAILING_STOP');
+        continue;
       }
+
+      this._save();
     }
   }
 
