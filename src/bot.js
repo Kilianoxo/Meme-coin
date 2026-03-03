@@ -296,12 +296,9 @@ class Bot {
       await ctx.reply(
         `📊 <b>Statut</b>\n\n` +
         `📡 Scanner: ${stats.isRunning ? '✅ Actif' : '❌ Arrêté'}\n` +
-        `🔄 Scans DexScreener: ${stats.scanCount}\n` +
+        `🔄 Scans: ${stats.scanCount}\n` +
         `👁 Tokens vus: ${stats.seenTokens}\n` +
-        `\n🐸 <b>Pump.fun</b> (PumpPortal WS)\n` +
-        `   ${stats.pumpFunConnected ? '✅ Connecté' : '❌ Déconnecté'}\n` +
-        `   Nouveaux tokens: ${stats.pumpNewTokens || 0}\n` +
-        `   Graduations: ${stats.pumpMigrations || 0}\n` +
+        `📈 Sources: DexScreener top-boosted + GeckoTerminal trending\n` +
         `\n🤖 Auto-trade: ${this.autoTrade ? '✅ Activé' : '❌ Désactivé'}\n` +
         `💼 Positions: ${positions.length}\n` +
         `💰 Balance: ${balance}`,
@@ -595,21 +592,6 @@ class Bot {
   // ─── Événements du scanner ────────────────────────────────────────────────
 
   _listenToScanner() {
-    // Nouveaux tokens sur la bonding curve (seulement si liens sociaux présents)
-    this.scanner.on('pumpNew', async (token) => {
-      const hasSocials = token.twitter || token.telegram || token.website;
-      if (!hasSocials) return; // Filtre les tokens sans présence sociale
-
-      try {
-        await this._send(this._formatPumpNew(token), {
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-        });
-      } catch (err) {
-        console.error('[Bot] Erreur alerte pumpNew:', err.message);
-      }
-    });
-
     this.scanner.on('debate', async (debate) => {
       if (!debate?.decision) return;
       try {

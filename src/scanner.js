@@ -1,19 +1,16 @@
 /**
  * Scanner de tokens — Interroge DexScreener toutes les 30s
  * Émet des événements: 'candidate' (token brut) et 'debate' (résultat IA)
+ * Sources: DexScreener top-boosted + GeckoTerminal trending uniquement
+ * Pump.fun désactivé — trop aléatoire, analyse impossible sur des tokens de quelques minutes
  */
 
 const { EventEmitter } = require('events');
 const dex = require('./dexscreener');
 const { runDebate } = require('./agents');
-const pumpFun = require('./pumpfun');
 const birdeye = require('./birdeye');
 const gecko = require('./geckoterminal');
 const rugcheck = require('./rugcheck');
-
-// Délais d'attente avant chaque tentative de lookup DexScreener après une graduation
-// Tentative 1 → attend 30s, tentative 2 → attend 45s
-const MIGRATION_DEXSCREENER_DELAYS_MS = [30_000, 45_000];
 
 // Nombre max de tokens envoyés en débat IA par cycle de scan
 // Les candidats sont triés par pertinence avant sélection
@@ -261,8 +258,6 @@ class Scanner extends EventEmitter {
     if (this.isRunning) return;
     this.isRunning = true;
     console.log(`[Scanner] Démarré — filtres: liq>${FILTERS.minLiquidityUsd}$, vol24h>${FILTERS.minVolume24hUsd}$, âge: ${FILTERS.minAgeHours}h–${FILTERS.maxAgeHours}h`);
-    this._listenToPumpFun();
-    pumpFun.start();
     this.scan();
     this._interval = setInterval(() => this.scan(), SCAN_INTERVAL_MS);
   }
@@ -270,74 +265,11 @@ class Scanner extends EventEmitter {
   stop() {
     if (!this.isRunning) return;
     clearInterval(this._interval);
-    pumpFun.stop();
     this.isRunning = false;
     console.log('[Scanner] Arrêté.');
   }
 
-  /** Écoute les événements PumpPortal WebSocket */
-  _listenToPumpFun() {
-    // Nouveau token sur la bonding curve — on stocke le mint pour contexte
-    pumpFun.on('newToken', (token) => {
-      this.emit('pumpNew', token);
-    });
-
-    // Token gradué — maintenant tradeable via Jupiter, analyse immédiate
-    pumpFun.on('migration', async (migration) => {
-      const sym = migration.symbol || migration.mint?.slice(0, 8) || '???';
-
-      let pair = null;
-      for (let i = 0; i < MIGRATION_DEXSCREENER_DELAYS_MS.length; i++) {
-        await new Promise((r) => setTimeout(r, MIGRATION_DEXSCREENER_DELAYS_MS[i]));
-        const pairs = await dex.getTokenPairs('solana', migration.mint);
-        pair = this._bestPair(pairs);
-        if (pair) break;
-        console.log(`[Scanner] Migration ${sym} — pas encore indexé (tentative ${i + 1}/${MIGRATION_DEXSCREENER_DELAYS_MS.length})`);
-      }
-
-      try {
-        if (!pair) {
-          console.log(`[Scanner] Migration ${sym} — abandonné après ${MIGRATION_DEXSCREENER_DELAYS_MS.length} tentatives`);
-          return;
-        }
-
-        // Pour les graduations on bypass les filtres de volume/liquidité
-        // (le pool vient juste d'être créé, les métriques sont encore basses)
-        if (this._isSeen(migration.mint)) return;
-        this._markSeen(migration.mint);
-
-        console.log(`[Scanner] 🎓 Analyse de la graduation: ${sym}`);
-        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
-          birdeye.getTokenData(migration.mint),
-          rugcheck.getTokenReport(migration.mint),
-          rugcheck.getLpLockData(migration.mint),
-        ]);
-
-        if (birdeye.isHardBlocked(security, overview)) {
-          console.log(`[Scanner] ⛔ Graduation ${sym} bloquée Birdeye`);
-          return;
-        }
-
-        if (rugcheck.isHardBlocked(rugReport)) {
-          console.log(`[Scanner] ⛔ Graduation ${sym} bloquée RugCheck (score: ${rugReport?.score ?? '?'})`);
-          return;
-        }
-
-        runDebate(pair, security, rugReport, overview, lpLock)
-          .then((debate) => {
-            if (!debate) return;
-            debate.isGraduated = true;
-            this.emit('debate', debate);
-          })
-          .catch((err) => console.error('[Scanner] Erreur débat graduation:', err.message));
-      } catch (err) {
-        console.error('[Scanner] Erreur fetch graduation:', err.message);
-      }
-    });
-  }
-
   getStats() {
-    const pumpStats = pumpFun.getStats();
     // Nettoie les entrées expirées avant de compter
     const now = Date.now();
     for (const [addr, expiry] of this.seenAddresses) {
@@ -347,9 +279,6 @@ class Scanner extends EventEmitter {
       scanCount: this.scanCount,
       seenTokens: this.seenAddresses.size,
       isRunning: this.isRunning,
-      pumpFunConnected: pumpStats.connected,
-      pumpNewTokens: pumpStats.newTokenCount,
-      pumpMigrations: pumpStats.migrationCount,
     };
   }
 
