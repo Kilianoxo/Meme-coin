@@ -9,9 +9,9 @@
  */
 
 const EventEmitter = require('events');
-const https        = require('https');
 const fs           = require('fs');
 const path         = require('path');
+const dex          = require('./dexscreener');
 
 const DATA_FILE = path.join(__dirname, '../data/paper_positions.json');
 
@@ -59,21 +59,35 @@ class PaperTrader extends EventEmitter {
 
   // ─── Prix Jupiter (lecture seule, pas de swap) ────────────────────────────
 
-  _fetchPrice(address) {
-    return new Promise((resolve) => {
-      const url = `https://api.jup.ag/price/v2?ids=${address}`;
-      https.get(url, { headers: { 'User-Agent': 'meme-coin-paper/1.0' } }, (res) => {
-        let raw = '';
-        res.on('data', c => (raw += c));
-        res.on('end', () => {
-          try {
-            const data  = JSON.parse(raw);
-            const price = data?.data?.[address]?.price;
-            resolve(price ? parseFloat(price) : null);
-          } catch { resolve(null); }
-        });
-      }).on('error', () => resolve(null));
-    });
+  async _fetchPrice(address) {
+    try {
+      const res = await fetch(`https://api.jup.ag/price/v2?ids=${address}`, {
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const json  = await res.json();
+      const price = json?.data?.[address]?.price;
+      return price != null ? parseFloat(price) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fallback DexScreener si Jupiter ne connaît pas le token */
+  async _fetchPriceWithFallback(address) {
+    let price = await this._fetchPrice(address);
+    if (price != null && price > 0) return { price, source: 'Jupiter' };
+
+    try {
+      const pairs = await dex.getTokenPairs('solana', address);
+      if (pairs && pairs.length > 0) {
+        const best = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+        const dexPrice = parseFloat(best.priceUsd || 0);
+        if (dexPrice > 0) return { price: dexPrice, source: 'DexScreener' };
+      }
+    } catch { /* silencieux */ }
+
+    return null;
   }
 
   // ─── Entrée depuis un résultat de débat ───────────────────────────────────
@@ -197,9 +211,10 @@ class PaperTrader extends EventEmitter {
     if (Object.keys(this.state.positions).length >= config.maxPositions)
       return { ok: false, error: `Max positions atteint (${config.maxPositions})` };
 
-    const price = await this._fetchPrice(address);
-    if (!price || price <= 0) return { ok: false, error: 'Prix introuvable sur Jupiter' };
+    const result = await this._fetchPriceWithFallback(address);
+    if (!result) return { ok: false, error: 'Prix introuvable (Jupiter + DexScreener). Vérifie que l\'adresse est un token Solana valide.' };
 
+    const { price, source } = result;
     const tokensHeld = amount / price;
     const symbol = address.slice(0, 6).toUpperCase();
 
@@ -219,13 +234,13 @@ class PaperTrader extends EventEmitter {
       tpPct:       config.tpPct,
       score:       null,    // pas de débat IA — entrée manuelle
       entryTime:   Date.now(),
-      reason:      'Entrée manuelle via dashboard',
+      reason:      `Entrée manuelle via dashboard (prix: ${source})`,
       isGraduated: false,
       manual:      true,
     };
 
     this._save();
-    console.log(`[PaperTrader] 📝 BUY MANUEL ${address.slice(0, 8)}… @ ${price.toExponential(3)} — ${amount.toFixed(3)} ◎`);
+    console.log(`[PaperTrader] 📝 BUY MANUEL ${address.slice(0, 8)}… @ ${price.toExponential(3)} [${source}] — ${amount.toFixed(3)} ◎`);
     this.emit('buy', this.state.positions[address]);
     return { ok: true, position: this.state.positions[address] };
   }
@@ -239,8 +254,9 @@ class PaperTrader extends EventEmitter {
 
   async _monitorPositions() {
     for (const [address, pos] of Object.entries(this.state.positions)) {
-      const price = await this._fetchPrice(address);
-      if (!price) continue;
+      const fetched = await this._fetchPriceWithFallback(address);
+      if (!fetched) continue;
+      const price = fetched.price;
 
       // Met à jour le plus haut
       if (price > pos.highPrice) {
