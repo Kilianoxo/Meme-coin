@@ -268,7 +268,7 @@ class Scanner extends EventEmitter {
     console.log(`[Scanner] ✅ ${symbol}${source} passe les filtres — ${lpPct}`);
 
     const debate = await runDebate(token, security, rugReport, overview, lpLock);
-    this.emit('debate', debate);
+    if (debate) this.emit('debate', debate);
   }
 
   start() {
@@ -339,6 +339,7 @@ class Scanner extends EventEmitter {
 
         runDebate(pair, security, rugReport, overview, lpLock)
           .then((debate) => {
+            if (!debate) return;
             debate.isGraduated = true;
             this.emit('debate', debate);
           })

@@ -390,7 +390,7 @@ class Bot {
         const pnlPct = ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100;
         const pnlSol = p.solSpent * (pnlPct / 100);
         const arrow = pnlPct >= 0 ? '🟢' : '🔴';
-        const shortMint = `\`${p.tokenMint.slice(0, 12)}...\``;
+        const shortMint = `<code>${p.tokenMint.slice(0, 12)}...</code>`;
         unrealizedLines += `${arrow} ${shortMint}: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% (${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n`;
         hasUnrealized = true;
       }
@@ -611,6 +611,7 @@ class Bot {
     });
 
     this.scanner.on('debate', async (debate) => {
+      if (!debate?.decision) return;
       try {
         this._hourlyAnalyzed++;
 
@@ -639,41 +640,39 @@ class Bot {
         // Envoi du débat complet uniquement pour les BUY
         await this._send(this._formatDebate(debate), { parse_mode: 'HTML' });
 
-        if (debate.decision.decision === 'BUY') {
-          const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
+        const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
 
-          if (this.autoTrade && this.trader.isReady()) {
-            try {
-              const { txId } = await this.trader.buy(
-                debate.token.baseToken?.address,
-                solAmt,
-                {
-                  stopLossPct: debate.decision.stopLossPct,
-                  takeProfitPct: debate.decision.takeProfitPct,
-                }
-              );
-              await this._send(
-                `🤖 <b>AUTO-TRADE EXÉCUTÉ</b>\nAchat: ${solAmt} SOL\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
-                { parse_mode: 'HTML', disable_web_page_preview: true }
-              );
-            } catch (err) {
-              await this._send(`❌ Auto-trade échoué: ${err.message}`);
-            }
-          } else {
-            const sl = debate.decision.stopLossPct || 20;
-            const tp = debate.decision.takeProfitPct || 50;
-            await this.bot.telegram.sendMessage(
-              this.adminId,
-              '💡 Confirmer l\'achat?',
-              Markup.inlineKeyboard([
-                Markup.button.callback(
-                  `✅ Acheter (${solAmt.toFixed(3)} SOL)`,
-                  `buy:${debate.token.baseToken?.address}:${solAmt.toFixed(4)}:${sl}:${tp}`
-                ),
-                Markup.button.callback('❌ Passer', 'skip'),
-              ])
+        if (this.autoTrade && this.trader.isReady()) {
+          try {
+            const { txId } = await this.trader.buy(
+              debate.token.baseToken?.address,
+              solAmt,
+              {
+                stopLossPct: debate.decision.stopLossPct,
+                takeProfitPct: debate.decision.takeProfitPct,
+              }
             );
+            await this._send(
+              `🤖 <b>AUTO-TRADE EXÉCUTÉ</b>\nAchat: ${solAmt} SOL\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+              { parse_mode: 'HTML', disable_web_page_preview: true }
+            );
+          } catch (err) {
+            await this._send(`❌ Auto-trade échoué: ${err.message}`);
           }
+        } else {
+          const sl = debate.decision.stopLossPct || 20;
+          const tp = debate.decision.takeProfitPct || 50;
+          await this.bot.telegram.sendMessage(
+            this.adminId,
+            '💡 Confirmer l\'achat?',
+            Markup.inlineKeyboard([
+              Markup.button.callback(
+                `✅ Acheter (${solAmt.toFixed(3)} SOL)`,
+                `buy:${debate.token.baseToken?.address}:${solAmt.toFixed(4)}:${sl}:${tp}`
+              ),
+              Markup.button.callback('❌ Passer', 'skip'),
+            ])
+          );
         }
       } catch (err) {
         console.error('[Bot] Erreur alerte débat:', err.message);

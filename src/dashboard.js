@@ -91,6 +91,19 @@ class Dashboard {
     const parsed   = url.parse(req.url);
     const pathname = parsed.pathname;
 
+    // ── CORS preflight ───────────────────────────────────────────────────────
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin':  '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age':       '86400',
+      });
+      res.end();
+      return;
+    }
+
     // ── API ──────────────────────────────────────────────────────────────────
 
     if (pathname === '/api/data' && req.method === 'GET') {
@@ -519,6 +532,12 @@ class Dashboard {
         ]);
 
         const debate = await runDebate(pair, security, rugReport, overview, lpLock);
+
+        if (!debate) {
+          this._pushChat({ type: 'system', content: `⏸️ Débats IA désactivés — débat ignoré.`, timestamp: Date.now() });
+          this._jsonOk(res, { ok: false, error: 'Débats IA désactivés' });
+          return;
+        }
 
         const sym = pair.baseToken?.symbol || addr.slice(0, 6);
         this._pushChat({

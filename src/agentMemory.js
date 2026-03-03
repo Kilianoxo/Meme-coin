@@ -195,7 +195,7 @@ class AgentMemory {
     // Pattern 2 : Bear très précis → augmenter son poids
     const { bear } = this.data.agentStats;
     const bearTotal = bear.correct + bear.wrong;
-    if (bearTotal >= 5 && !lesson.isWin && lesson.bearRiskScore >= 7) {
+    if (bearTotal >= 5 && lesson.outcome === 'LOSS' && lesson.bearRiskScore >= 7) {
       const bearAcc = bear.correct / bearTotal;
       if (bearAcc >= 0.70) {
         this._addSuggestion('bear',
@@ -211,7 +211,7 @@ class AgentMemory {
     // Pattern 3 : Bull surestimant (trop de faux positifs)
     const { bull } = this.data.agentStats;
     const bullTotal = bull.correct + bull.wrong;
-    if (bullTotal >= 5 && !lesson.isWin && lesson.bullScore >= 8) {
+    if (bullTotal >= 5 && lesson.outcome === 'LOSS' && lesson.bullScore >= 8) {
       const bullAcc = bull.correct / bullTotal;
       if (bullAcc <= 0.40) {
         this._addSuggestion('bull',

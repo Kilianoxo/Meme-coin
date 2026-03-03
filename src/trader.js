@@ -198,6 +198,7 @@ class Trader {
       slippageBps = 300,
       stopLossPct = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT || '20'),
       takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
+      symbol = null,
     } = opts;
     if (!this.wallet) throw new Error('Wallet non chargé');
 
@@ -218,6 +219,7 @@ class Trader {
 
     const position = {
       tokenMint,
+      symbol,
       solSpent: solAmount,
       buyTxId: txId,
       entryTimestamp: Date.now(),

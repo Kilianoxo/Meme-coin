@@ -63,7 +63,7 @@ function formatWhaleData(token, security, overview) {
       },
       volume: { h1: vol.h1 ?? 0, h24: vol.h24 ?? 0 },
     },
-    marketCap: token.marketCap?.usd ?? null,
+    marketCap: token.marketCap ?? token.fdv ?? null,
     liquidity:  token.liquidity?.usd ?? null,
   }, null, 2);
 }
@@ -301,16 +301,20 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
   }
 
   if (rugReport) {
+    const riskLevel = rugReport.score < 300 ? 'LOW' : rugReport.score < 700 ? 'MODERATE' : 'HIGH';
     content += `\n\nAnalyse RugCheck:
-- Score de risque: ${rugReport.score}/1000 (${rugReport.riskLevel}) — plus haut = plus dangereux
+- Score de risque: ${rugReport.score}/1000 (${riskLevel}) — plus haut = plus dangereux
 - Déjà rugpull: ${rugReport.rugged ? '🔴 OUI' : '✅ Non'}`;
-    if (rugReport.significantRisks?.length > 0) {
-      content += `\n- Risques détectés:\n${rugReport.significantRisks.map((r) => `  • ${r}`).join('\n')}`;
+    const significantRisks = (rugReport.risks || [])
+      .filter((r) => r.level === 'warn' || r.level === 'danger')
+      .map((r) => `[${r.level.toUpperCase()}] ${r.name}: ${r.description}`);
+    if (significantRisks.length > 0) {
+      content += `\n- Risques détectés:\n${significantRisks.map((r) => `  • ${r}`).join('\n')}`;
     }
   }
 
   if (whale) {
-    content += `\n\nVerdiet Whale (pré-calculé):
+    content += `\n\nVerdict Whale (pré-calculé):
 - Concentration: ${whale.concentrationRisk}  |  Holders: ${whale.holderHealth}  |  Distribution: ${whale.distributionSignal}${whale.warning ? `\n- ⚠️ ${whale.warning}` : ''}`;
   }
 
