@@ -1,7 +1,7 @@
 /**
  * Moteur de trading — Solana + Jupiter API v6
  *
- * Jupiter API (https://quote-api.jup.ag/v6) gère le routing optimal
+ * Jupiter API (https://lite-api.jup.ag/swap/v1) gère le routing optimal
  * entre tous les DEX Solana (Raydium, Orca, Meteora, etc.)
  */
 
@@ -24,8 +24,8 @@ const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
 // Clé API Jupiter optionnelle — obtenir gratuitement sur https://station.jup.ag
 const JUPITER_API_KEY = process.env.JUPITER_API_KEY || null;
-const JUPITER_URL = 'https://quote-api.jup.ag/v6';
-const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
+const JUPITER_URL = 'https://lite-api.jup.ag/swap/v1';
+const JUPITER_PRICE_URL = 'https://lite-api.jup.ag/price/v2';
 
 /**
  * Requête HTTPS via le module natif Node.js (contourne undici/fetch).
