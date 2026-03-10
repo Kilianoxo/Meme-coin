@@ -57,17 +57,26 @@ async function getTokenReport(mint) {
 
 /**
  * Hard filter RugCheck — true si le token est trop dangereux pour être analysé
- * Règles:
+ * Règles (assouplies pour tokens trendy établis):
  *   - Déjà rugpull → DANGER absolu
- *   - Score > 800  → trop risqué
- *   - Au moins un risque de niveau "danger" → bloquant
+ *   - Score > 1200 → trop risqué (800 bloquait trop de tokens légitimes)
+ *   - Risque "danger" sur mint authority ou honeypot uniquement (LP lock ignoré)
  */
+
+// Risques "danger" qui bloquent réellement (rug/honeypot)
+const HARD_DANGER_RISKS = new Set([
+  'Honeypot',
+  'Freeze Authority still enabled',
+  'Mint Authority still enabled',
+  'Copycat Token',
+]);
+
 function isHardBlocked(report) {
   if (!report) return false; // Pas de données = on laisse passer (silencieux)
 
   if (report.rugged) return true;
-  if (report.score > 800) return true;
-  if (report.risks.some((r) => r.level === 'danger')) return true;
+  if (report.score > 1200) return true;
+  if (report.risks.some((r) => r.level === 'danger' && HARD_DANGER_RISKS.has(r.name))) return true;
 
   return false;
 }

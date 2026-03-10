@@ -86,11 +86,11 @@ async function getTokenData(tokenAddress) {
 
 /**
  * Hard filter — retourne true si le token est trop dangereux pour être analysé
- * Règles:
+ * Règles (assouplies pour tokens trendy établis):
  *   - Mint authority encore active → peut printer des tokens à l'infini → DANGER
- *   - Créateur détient > 20% du supply → risque de dump → DANGER
- *   - Top 10 holders > 90% du supply → manipulation évidente → DANGER
- *   - Moins de 50 holders uniques → volume quasi-certainement wash tradé → DANGER
+ *   - Créateur détient > 30% du supply → risque de dump → DANGER
+ *   - Top 10 holders > 95% du supply → manipulation évidente → DANGER
+ *   - Moins de 20 holders uniques → volume quasi-certainement wash tradé → DANGER
  */
 function isHardBlocked(security, overview = null) {
   if (!security && !overview) return false; // Pas de données = on laisse passer
@@ -99,15 +99,15 @@ function isHardBlocked(security, overview = null) {
     if (security.mintAuthority !== null && security.mintAuthority !== undefined) {
       return true; // Mint authority active
     }
-    if ((security.creatorPercentage || 0) > 20) {
+    if ((security.creatorPercentage || 0) > 30) {
       return true; // Créateur tient trop de tokens
     }
-    if ((security.top10HolderPercent || 0) > 90) {
+    if ((security.top10HolderPercent || 0) > 95) {
       return true; // Concentration extrême
     }
   }
 
-  if (overview && overview.holder != null && overview.holder < 50) {
+  if (overview && overview.holder != null && overview.holder < 20) {
     return true; // Trop peu de holders → wash trading probable
   }
 

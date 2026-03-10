@@ -24,9 +24,9 @@ const SCAN_INTERVAL_MS = 30_000; // 30 secondes
 const SEEN_TTL_MS = 4 * 3_600_000; // 4 heures
 
 const FILTERS = {
-  minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD    || '10000'),
-  minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD   || '50000'),
-  minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD   || '100000'),
+  minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD    || '5000'),
+  minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD   || '20000'),
+  minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD   || '50000'),
   maxAgeHours:     parseFloat(process.env.MAX_TOKEN_AGE_HOURS  || '72'),
   minAgeHours:     parseFloat(process.env.MIN_TOKEN_AGE_HOURS  || '6'),  // ignore < 6h par défaut
 };
@@ -65,22 +65,35 @@ class Scanner extends EventEmitter {
   _passesFilters(pair, skipAgeFilter = false) {
     if (pair.chainId !== 'solana') return false;
 
+    const symbol    = pair.baseToken?.symbol || pair.baseToken?.address?.slice(0, 8) || '?';
     const liquidity = pair.liquidity?.usd || 0;
     const volume24h = pair.volume?.h24 || 0;
     const marketCap = pair.marketCap || pair.fdv || 0;
 
-    if (liquidity < FILTERS.minLiquidityUsd) return false;
-    if (volume24h < FILTERS.minVolume24hUsd) return false;
-    if (marketCap < FILTERS.minMarketCapUsd) return false;
+    if (liquidity < FILTERS.minLiquidityUsd) {
+      console.log(`[Scanner] ⛔ ${symbol} liq trop faible: $${liquidity.toFixed(0)} < $${FILTERS.minLiquidityUsd}`);
+      return false;
+    }
+    if (volume24h < FILTERS.minVolume24hUsd) {
+      console.log(`[Scanner] ⛔ ${symbol} vol24h trop faible: $${volume24h.toFixed(0)} < $${FILTERS.minVolume24hUsd}`);
+      return false;
+    }
+    if (marketCap < FILTERS.minMarketCapUsd) {
+      console.log(`[Scanner] ⛔ ${symbol} mcap trop faible: $${marketCap.toFixed(0)} < $${FILTERS.minMarketCapUsd}`);
+      return false;
+    }
 
     if (pair.pairCreatedAt) {
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000;
 
-      // Trop récent : pas assez de données pour une analyse fiable
-      if (ageHours < FILTERS.minAgeHours) return false;
-
-      // Trop vieux : sauf pour les sources trending/top-boosted (skipAgeFilter)
-      if (!skipAgeFilter && ageHours > FILTERS.maxAgeHours) return false;
+      if (ageHours < FILTERS.minAgeHours) {
+        console.log(`[Scanner] ⛔ ${symbol} trop récent: ${ageHours.toFixed(1)}h < ${FILTERS.minAgeHours}h`);
+        return false;
+      }
+      if (!skipAgeFilter && ageHours > FILTERS.maxAgeHours) {
+        console.log(`[Scanner] ⛔ ${symbol} trop vieux: ${ageHours.toFixed(1)}h > ${FILTERS.maxAgeHours}h`);
+        return false;
+      }
     }
 
     return true;
