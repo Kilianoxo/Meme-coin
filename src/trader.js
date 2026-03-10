@@ -135,6 +135,30 @@ class Trader {
     return lamports / LAMPORTS_PER_SOL;
   }
 
+  /**
+   * Retourne tous les tokens SPL non nuls du wallet (on-chain)
+   * @returns {Promise<Array<{ mint, amount, decimals }>>}
+   */
+  async getWalletTokens() {
+    if (!this.wallet) throw new Error('Wallet non chargé');
+    const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+    const { value } = await this.connection.getParsedTokenAccountsByOwner(
+      this.wallet.publicKey,
+      { programId: TOKEN_PROGRAM }
+    );
+    return value
+      .map(({ account }) => {
+        const info = account.data.parsed?.info;
+        return {
+          mint:      info?.mint      || null,
+          amount:    info?.tokenAmount?.uiAmount    || 0,
+          decimals:  info?.tokenAmount?.decimals    || 0,
+          rawAmount: info?.tokenAmount?.amount      || '0',
+        };
+      })
+      .filter(t => t.mint && t.amount > 0);
+  }
+
   async getTokenBalance(mintAddress) {
     if (!this.wallet) throw new Error('Wallet non chargé');
     try {

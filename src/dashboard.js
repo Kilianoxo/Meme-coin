@@ -296,17 +296,23 @@ class Dashboard {
     const positions = Array.from(this.trader.positions.values());
     const history   = this.trader.history || [];
 
-    // Balance SOL du wallet (best effort)
+    // Balance SOL + tokens SPL du wallet (best effort)
     let walletBalance = null;
+    let walletTokens  = [];
     try {
       if (this.trader.isReady()) {
-        walletBalance = await this.trader.getSolBalance();
+        [walletBalance, walletTokens] = await Promise.all([
+          this.trader.getSolBalance(),
+          this.trader.getWalletTokens(),
+        ]);
       }
     } catch { /* silencieux */ }
 
-    // Prix live pour les positions ouvertes (Jupiter Price API)
-    const mints  = positions.map(p => p.tokenMint);
-    const prices = mints.length > 0 ? await this._fetchPrices(mints) : {};
+    // Prix live pour les positions ouvertes + tokens wallet (Jupiter Price API)
+    const posMints    = positions.map(p => p.tokenMint);
+    const tokenMints  = walletTokens.map(t => t.mint);
+    const allMints    = [...new Set([...posMints, ...tokenMints])];
+    const prices      = allMints.length > 0 ? await this._fetchPrices(allMints) : {};
 
     const enrichedPositions = positions.map(p => {
       const currentPrice = prices[p.tokenMint] ?? null;
@@ -343,10 +349,18 @@ class Dashboard {
     const weekPnl   = weekSells.reduce((s, h) => s + h.pnlSol, 0);
     const weekWins  = weekSells.filter(h => h.pnlSol > 0).length;
 
+    // Enrichit les tokens wallet avec prix + valeur USD
+    const enrichedWalletTokens = walletTokens.map(t => {
+      const price    = prices[t.mint] ?? null;
+      const valueUsd = price ? price * t.amount : null;
+      return { ...t, price, valueUsd };
+    }).sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0)); // tri par valeur décroissante
+
     return {
       updatedAt:       Date.now(),
       walletBalance:   walletBalance !== null ? parseFloat(walletBalance.toFixed(6)) : null,
       walletAddress:   this.trader.walletAddress || null,
+      walletTokens:    enrichedWalletTokens,
       recentAnalyses:  state.recentAnalyses,
       stats: {
         realizedPnl:   parseFloat(realizedPnl.toFixed(6)),

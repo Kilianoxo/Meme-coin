@@ -720,6 +720,30 @@
 
     </div>
 
+    <!-- ── Tokens wallet on-chain ───────────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>💼 Tokens dans le Wallet</h2>
+        <span class="c-muted" id="walletTokenCount" style="font-size:13px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Mint</th>
+              <th>Quantité</th>
+              <th>Prix USD</th>
+              <th>Valeur USD</th>
+              <th>Suivi bot</th>
+            </tr>
+          </thead>
+          <tbody id="walletTokenBody">
+            <tr><td colspan="5" class="empty">Wallet non chargé ou aucun token</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- ── Positions actuelles ───────────────────────────────────────────── -->
     <div class="section">
       <div class="sec-head">
@@ -1288,6 +1312,7 @@ function render(d) {
   renderCumulChart(d.pnlTimeline);
   renderDailyChart(d.dailyPnl);
   renderWeekly(d.weekly);
+  renderWalletTokens(d.walletTokens || [], d.positions || []);
   renderPositions(d.positions);
   renderHistory(d.history);
   renderRecentAnalyses(d.recentAnalyses);
@@ -1376,6 +1401,39 @@ function renderWeekly(w) {
   ul.innerHTML = (w.alerts || [])
     .map(a => `<li class="alert-item ${a.type}"><span>${esc(a.msg)}</span></li>`)
     .join('') || '<li class="alert-item info"><span>Aucune alerte.</span></li>';
+}
+
+function renderWalletTokens(tokens, positions) {
+  const tbody = document.getElementById('walletTokenBody');
+  const countEl = document.getElementById('walletTokenCount');
+
+  if (!tokens || tokens.length === 0) {
+    countEl.textContent = '0 token';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Aucun token SPL dans le wallet</td></tr>';
+    return;
+  }
+
+  // Index des mints trackés par le bot
+  const trackedMints = new Set((positions || []).map(p => p.tokenMint));
+
+  countEl.textContent = tokens.length + ' token' + (tokens.length !== 1 ? 's' : '');
+
+  tbody.innerHTML = tokens.map(t => {
+    const mintShortStr = t.mint ? t.mint.slice(0, 6) + '…' + t.mint.slice(-4) : '—';
+    const qtyStr   = t.amount < 0.000001 ? t.amount.toExponential(2) : t.amount.toLocaleString('fr-FR', { maximumFractionDigits: 4 });
+    const priceStr = t.price  != null ? '$' + (t.price < 0.0001 ? t.price.toExponential(4) : t.price.toFixed(6)) : '—';
+    const valueStr = t.valueUsd != null ? '$' + t.valueUsd.toFixed(2) : '—';
+    const tracked  = trackedMints.has(t.mint);
+    const dexUrl   = `https://dexscreener.com/solana/${t.mint}`;
+
+    return `<tr>
+      <td><a href="${dexUrl}" target="_blank" class="mono" title="${t.mint}">${mintShortStr}</a></td>
+      <td class="mono">${qtyStr}</td>
+      <td>${priceStr}</td>
+      <td class="${t.valueUsd > 0 ? 'c-green' : ''}">${valueStr}</td>
+      <td>${tracked ? '<span class="c-green">✅ Suivi</span>' : '<span class="c-muted">—</span>'}</td>
+    </tr>`;
+  }).join('');
 }
 
 function renderPositions(positions) {
