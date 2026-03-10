@@ -639,6 +639,11 @@
     <!-- ── Stat cards ────────────────────────────────────────────────────── -->
     <div class="cards">
       <div class="card">
+        <div class="card-label">💰 Balance Wallet</div>
+        <div class="card-value" id="cBalance">—</div>
+        <div class="card-sub" id="cBalanceAddr" style="font-size:11px;word-break:break-all;">— SOL</div>
+      </div>
+      <div class="card">
         <div class="card-label">Positions ouvertes</div>
         <div class="card-value" id="cPos">—</div>
         <div class="card-sub">tokens actifs</div>
@@ -1279,7 +1284,7 @@ async function fetchData() {
 }
 
 function render(d) {
-  renderStats(d.stats, d.weekly);
+  renderStats(d.stats, d.weekly, d.walletBalance, d.walletAddress);
   renderCumulChart(d.pnlTimeline);
   renderDailyChart(d.dailyPnl);
   renderWeekly(d.weekly);
@@ -1288,7 +1293,22 @@ function render(d) {
   renderRecentAnalyses(d.recentAnalyses);
 }
 
-function renderStats(s, w) {
+function renderStats(s, w, walletBalance, walletAddress) {
+  // Balance wallet
+  const balEl = document.getElementById('cBalance');
+  if (walletBalance !== null && walletBalance !== undefined) {
+    balEl.textContent = walletBalance.toFixed(4) + ' SOL';
+    balEl.className = 'card-value c-blue';
+    if (walletAddress) {
+      const short = walletAddress.slice(0, 6) + '…' + walletAddress.slice(-4);
+      document.getElementById('cBalanceAddr').textContent = short;
+    }
+  } else {
+    balEl.textContent = '— SOL';
+    balEl.className = 'card-value';
+    document.getElementById('cBalanceAddr').textContent = 'Wallet non chargé';
+  }
+
   setText('cPos', s.openPositions);
 
   const pnlEl = document.getElementById('cPnl');

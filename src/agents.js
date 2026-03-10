@@ -343,15 +343,17 @@ function calcSecurityScore(security, rugReport, lpLock) {
   if (security?.mintAuthority)   pts -= 6; // mint active = peut printer à l'infini
   if (security?.freezeAuthority) pts -= 3; // freeze active = peut geler les wallets
 
+  // LP lock : seulement si données dispo ET lock vraiment nul (< 10%)
+  // Les pools établis (SOL, etc.) n'ont pas de LP lock — pas de pénalité par défaut
   if (lpLock != null) {
-    if (lpLock.lpLockedPct < 30)  pts -= 4; // LP quasi non verrouillée
-    else if (lpLock.lpLockedPct < 70) pts -= 2; // LP partiellement verrouillée
+    if (lpLock.lpLockedPct < 10)  pts -= 2; // LP totalement libre — léger malus
+    // LP partiellement lockée (10-70%) = neutre pour les tokens trendy établis
   }
 
   if (rugReport) {
-    if (rugReport.score > 700)      pts -= 5;
-    else if (rugReport.score > 400) pts -= 2;
-    else if (rugReport.score > 200) pts -= 1;
+    if (rugReport.score > 800)      pts -= 4;
+    else if (rugReport.score > 500) pts -= 2;
+    else if (rugReport.score > 300) pts -= 1;
   }
 
   return Math.max(0, pts);
@@ -384,8 +386,8 @@ function calcGlobalScore(bull, bear, momentum, whale, security, rugReport, lpLoc
 function scoreToDecision(score, bear, whale) {
   if (whale.concentrationRisk === 'CRITICAL') return 'SKIP';
   if (bear.riskScore >= 9)                    return 'SKIP';
-  if (score >= 62) return 'BUY';
-  if (score >= 45) return 'WAIT';
+  if (score >= 55) return 'BUY';
+  if (score >= 40) return 'WAIT';
   return 'SKIP';
 }
 
@@ -394,8 +396,8 @@ function scoreToParams(score, momentum) {
   let suggestedAmountPct, stopLossPct, takeProfitPct;
 
   if (score >= 80)      { suggestedAmountPct = 4; stopLossPct = 15; takeProfitPct = 100; }
-  else if (score >= 72) { suggestedAmountPct = 3; stopLossPct = 20; takeProfitPct = 75;  }
-  else if (score >= 62) { suggestedAmountPct = 2; stopLossPct = 20; takeProfitPct = 50;  }
+  else if (score >= 70) { suggestedAmountPct = 3; stopLossPct = 20; takeProfitPct = 75;  }
+  else if (score >= 55) { suggestedAmountPct = 2; stopLossPct = 20; takeProfitPct = 50;  }
   else                  { suggestedAmountPct = 1; stopLossPct = 25; takeProfitPct = 50;  }
 
   if (momentum.trend === 'ACCELERATING') {

@@ -296,6 +296,14 @@ class Dashboard {
     const positions = Array.from(this.trader.positions.values());
     const history   = this.trader.history || [];
 
+    // Balance SOL du wallet (best effort)
+    let walletBalance = null;
+    try {
+      if (this.trader.isReady()) {
+        walletBalance = await this.trader.getSolBalance();
+      }
+    } catch { /* silencieux */ }
+
     // Prix live pour les positions ouvertes (Jupiter Price API)
     const mints  = positions.map(p => p.tokenMint);
     const prices = mints.length > 0 ? await this._fetchPrices(mints) : {};
@@ -337,6 +345,8 @@ class Dashboard {
 
     return {
       updatedAt:       Date.now(),
+      walletBalance:   walletBalance !== null ? parseFloat(walletBalance.toFixed(6)) : null,
+      walletAddress:   this.trader.walletAddress || null,
       recentAnalyses:  state.recentAnalyses,
       stats: {
         realizedPnl:   parseFloat(realizedPnl.toFixed(6)),
