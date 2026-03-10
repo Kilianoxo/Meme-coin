@@ -1183,7 +1183,8 @@
 // STATE
 // ═══════════════════════════════════════════════════════════════════════════
 let cumulChart, dailyChart;
-let allTimeline  = [];
+let allTimeline       = [];
+let allManualTimeline = [];
 let chartRange   = 0;
 let activePage   = 'dashboard';
 let chatMessages = [];
@@ -1236,18 +1237,35 @@ function initCharts() {
     type: 'line',
     data: {
       labels: [],
-      datasets: [{
-        label: 'PnL cumulatif (SOL)',
-        data: [],
-        borderColor: '#58a6ff',
-        backgroundColor: 'rgba(88,166,255,0.07)',
-        borderWidth: 2,
-        pointRadius: 4,
-        pointHoverRadius: 6,
-        pointBackgroundColor: '#58a6ff',
-        fill: true,
-        tension: 0.3,
-      }],
+      datasets: [
+        {
+          label: 'PnL réalisé bot (SOL)',
+          data: [],
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.07)',
+          borderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#58a6ff',
+          fill: true,
+          tension: 0.3,
+          spanGaps: true,
+        },
+        {
+          label: 'PnL manuel non réalisé (SOL)',
+          data: [],
+          borderColor: '#f0883e',
+          backgroundColor: 'rgba(240,136,62,0.07)',
+          borderWidth: 2,
+          borderDash: [6, 3],
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#f0883e',
+          fill: true,
+          tension: 0.3,
+          spanGaps: true,
+        },
+      ],
     },
     options: {
       ...baseOpts,
@@ -1309,7 +1327,7 @@ async function fetchData() {
 
 function render(d) {
   renderStats(d.stats, d.weekly, d.walletBalance, d.walletAddress);
-  renderCumulChart(d.pnlTimeline);
+  renderCumulChart(d.pnlTimeline, d.manualTimeline);
   renderDailyChart(d.dailyPnl);
   renderWeekly(d.weekly);
   renderWalletTokens(d.walletTokens || [], d.positions || []);
@@ -1351,27 +1369,53 @@ function renderStats(s, w, walletBalance, walletAddress) {
   setText('cWkTrades', w.trades + ' trade(s) cette semaine');
 }
 
-function renderCumulChart(timeline) {
-  allTimeline = timeline || [];
+function renderCumulChart(timeline, manualTimeline) {
+  allTimeline       = timeline       || [];
+  allManualTimeline = manualTimeline || [];
   drawCumul();
 }
 
 function drawCumul() {
-  let data = allTimeline;
+  let data       = allTimeline;
+  let manualData = allManualTimeline;
+
   if (chartRange > 0) {
     const cut = Date.now() - chartRange * 864e5;
-    data = data.filter(p => p.t >= cut);
+    data       = data.filter(p => p.t >= cut);
+    manualData = manualData.filter(p => p.t >= cut);
   }
 
-  const points = data.length === 0 ? [{ t: Date.now(), pnl: 0 }] : data;
-  const lastPnl = points[points.length - 1]?.pnl ?? 0;
+  // Fusionne tous les timestamps des deux séries → axe X commun
+  const allTs = [...new Set([
+    ...(data.length       ? data       : [{ t: Date.now() }]).map(p => p.t),
+    ...(manualData.length ? manualData : []).map(p => p.t),
+  ])].sort((a, b) => a - b);
 
-  cumulChart.data.labels = points.map(p =>
-    new Date(p.t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  const labels = allTs.map(t =>
+    new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
   );
-  cumulChart.data.datasets[0].data            = points.map(p => p.pnl);
-  cumulChart.data.datasets[0].borderColor     = lastPnl >= 0 ? '#58a6ff' : '#f85149';
-  cumulChart.data.datasets[0].backgroundColor = lastPnl >= 0 ? 'rgba(88,166,255,0.07)' : 'rgba(248,81,73,0.07)';
+
+  // Step-function : pour chaque timestamp, prend la dernière valeur connue (ou null)
+  function stepValues(series, ts) {
+    return ts.map(t => {
+      const pts = series.filter(p => p.t <= t);
+      return pts.length > 0 ? pts[pts.length - 1].pnl : null;
+    });
+  }
+
+  const botValues    = stepValues(data,       allTs);
+  const manualValues = stepValues(manualData, allTs);
+
+  const lastBotPnl = botValues.filter(v => v !== null).pop() ?? 0;
+
+  cumulChart.data.labels = labels;
+
+  cumulChart.data.datasets[0].data            = botValues;
+  cumulChart.data.datasets[0].borderColor     = lastBotPnl >= 0 ? '#58a6ff' : '#f85149';
+  cumulChart.data.datasets[0].backgroundColor = lastBotPnl >= 0 ? 'rgba(88,166,255,0.07)' : 'rgba(248,81,73,0.07)';
+
+  cumulChart.data.datasets[1].data = manualValues;
+
   cumulChart.update();
 }
 

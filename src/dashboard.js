@@ -329,7 +329,7 @@ class Dashboard {
     const wins        = sells.filter(h => h.pnlSol > 0).length;
     const winRate     = sells.length > 0 ? Math.round((wins / sells.length) * 100) : null;
 
-    // Timeline PnL cumulatif
+    // Timeline PnL cumulatif (positions fermées par le bot)
     const pnlTimeline = [];
     let cum = 0;
     sells
@@ -339,6 +339,16 @@ class Dashboard {
         cum += h.pnlSol;
         pnlTimeline.push({ t: h.timestamp, pnl: parseFloat(cum.toFixed(6)) });
       });
+
+    // Timeline PnL manuel (positions importées — non réalisé cumulatif en temps réel)
+    const importedPositions = enrichedPositions.filter(p => p.imported && p.pnlSol != null);
+    const manualTimeline = [];
+    if (importedPositions.length > 0) {
+      const sorted = importedPositions.slice().sort((a, b) => a.entryTimestamp - b.entryTimestamp);
+      manualTimeline.push({ t: sorted[0].entryTimestamp, pnl: 0 }); // point de départ = 0 à l'import
+      const totalManualPnl = importedPositions.reduce((s, p) => s + p.pnlSol, 0);
+      manualTimeline.push({ t: Date.now(), pnl: parseFloat(totalManualPnl.toFixed(6)) });
+    }
 
     // PnL par jour sur 7 jours
     const dailyPnl = this._dailyPnl(sells, 7);
@@ -376,6 +386,7 @@ class Dashboard {
         alerts:  this._weekAlerts(weekSells, sells),
       },
       pnlTimeline,
+      manualTimeline,
       dailyPnl,
       positions: enrichedPositions,
       history:   history.slice(-100).reverse(),
