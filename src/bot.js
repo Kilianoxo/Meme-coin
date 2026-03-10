@@ -246,7 +246,8 @@ class Bot {
         `/debat &lt;adresse&gt; — Suggérer un token → les agents débattent\n` +
         `/analyse &lt;adresse&gt; — Analyser un token\n` +
         `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel\n` +
-        `/sell &lt;adresse&gt; [%] — Vente manuelle\n\n` +
+        `/sell &lt;adresse&gt; [%] — Vente manuelle\n` +
+        `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position externe\n\n` +
         `/help — Aide détaillée de toutes les commandes`,
         { parse_mode: 'HTML' }
       );
@@ -271,7 +272,8 @@ class Bot {
         `  → Débat IA (Bull / Bear / Risk Manager)\n` +
         `  → Sécurité on-chain (mint, freeze, holders)\n` +
         `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel en SOL\n` +
-        `/sell &lt;adresse&gt; [%] — Vente manuelle (défaut: 100%)\n\n` +
+        `/sell &lt;adresse&gt; [%] — Vente manuelle (défaut: 100%)\n` +
+        `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position achetée hors du bot\n\n` +
 
         `<b>Suivi</b>\n` +
         `/positions — Positions ouvertes + PnL non réalisé\n` +
@@ -540,6 +542,35 @@ class Bot {
         await ctx.reply(`❌ ${err.message}`);
       } finally {
         this._buyInFlight.delete(tokenAddress);
+      }
+    });
+
+    bot.command('addposition', async (ctx) => {
+      const parts = ctx.message.text.trim().split(/\s+/);
+      if (parts.length < 3) return ctx.reply('Usage: /addposition <adresse_token> <sol_dépensé>\nEx: /addposition ABC123... 0.5');
+
+      const [, tokenAddress, solStr] = parts;
+      const solSpent = parseFloat(solStr);
+      if (isNaN(solSpent) || solSpent <= 0) return ctx.reply('❌ Montant SOL invalide.');
+
+      if (!this.trader.isReady()) return ctx.reply('❌ Wallet non configuré.');
+
+      await ctx.reply('⏳ Import de la position...');
+      try {
+        const { position } = await this.trader.importPosition(tokenAddress, solSpent);
+        const priceStr = position.entryPriceUsd
+          ? `$${position.entryPriceUsd.toFixed(6)}`
+          : 'prix indisponible';
+        await ctx.reply(
+          `✅ <b>Position importée!</b>\n` +
+          `📍 <code>${this._esc(tokenAddress)}</code>\n` +
+          `💰 SOL dépensé: ${solSpent}\n` +
+          `💵 Prix d'entrée: ${priceStr}\n` +
+          `🛑 SL: -${position.stopLossPct}%  |  🎯 TP: +${position.takeProfitPct}%`,
+          { parse_mode: 'HTML' }
+        );
+      } catch (err) {
+        await ctx.reply(`❌ ${err.message}`);
       }
     });
 

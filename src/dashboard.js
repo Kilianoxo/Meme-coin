@@ -421,7 +421,7 @@ class Dashboard {
   async _fetchPrices(mints) {
     try {
       const ids  = mints.join(',');
-      const data = await this._get(`https://api.jup.ag/price/v2?ids=${ids}`);
+      const data = await this._get(`https://lite-api.jup.ag/price/v2?ids=${ids}`);
       const out  = {};
       for (const [mint, info] of Object.entries(data?.data ?? {})) {
         if (info?.price) out[mint] = parseFloat(info.price);

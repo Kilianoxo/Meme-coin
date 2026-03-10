@@ -278,6 +278,45 @@ class Trader {
   }
 
   /**
+   * Importe une position achetée hors du bot (Phantom, etc.)
+   * N'exécute aucun swap — enregistre simplement la position pour le suivi SL/TP.
+   * @param {string} tokenMint
+   * @param {number} solSpent        - Montant estimé dépensé en SOL
+   * @param {Object} opts            - { stopLossPct, takeProfitPct, symbol }
+   */
+  async importPosition(tokenMint, solSpent, opts = {}) {
+    const {
+      stopLossPct  = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT  || '20'),
+      takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
+      symbol = null,
+    } = opts;
+
+    const entryPriceUsd = await this.getCurrentPrice(tokenMint);
+
+    const position = {
+      tokenMint,
+      symbol,
+      solSpent,
+      buyTxId: null,
+      entryTimestamp: Date.now(),
+      outAmount: null,
+      entryPriceUsd,
+      stopLossPct,
+      takeProfitPct,
+      highPriceUsd: entryPriceUsd,
+      status: 'open',
+      imported: true,
+    };
+
+    this.positions.set(tokenMint, position);
+    this.history.push({ action: 'BUY', ...position });
+    this._save();
+
+    console.log(`[Trader] 📥 Position importée: ${tokenMint} (${solSpent} SOL estimé)`);
+    return { position };
+  }
+
+  /**
    * Vend un pourcentage d'un token en SOL
    * @param {string} tokenMint
    * @param {number} pct        - Pourcentage à vendre (1-100)
