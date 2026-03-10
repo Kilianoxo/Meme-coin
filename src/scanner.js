@@ -26,7 +26,7 @@ const SEEN_TTL_MS = 4 * 3_600_000; // 4 heures
 const FILTERS = {
   minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD    || '5000'),
   minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD   || '20000'),
-  minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD   || '50000'),
+  minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD   || '30000'),
   maxAgeHours:     parseFloat(process.env.MAX_TOKEN_AGE_HOURS  || '72'),
   minAgeHours:     parseFloat(process.env.MIN_TOKEN_AGE_HOURS  || '6'),  // ignore < 6h par défaut
 };
