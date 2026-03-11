@@ -6,11 +6,12 @@
  */
 
 const { EventEmitter } = require('events');
-const dex = require('./dexscreener');
+const dex          = require('./dexscreener');
 const { runDebate } = require('./agents');
-const birdeye = require('./birdeye');
-const gecko = require('./geckoterminal');
-const rugcheck = require('./rugcheck');
+const birdeye      = require('./birdeye');
+const gecko        = require('./geckoterminal');
+const rugcheck     = require('./rugcheck');
+const tokenHistory = require('./tokenHistory');
 
 // Nombre max de tokens envoyés en débat IA par cycle de scan
 // Les candidats sont triés par pertinence avant sélection
@@ -262,6 +263,23 @@ class Scanner extends EventEmitter {
     const lpPct   = lpLock ? `${lpLock.lpLockedPct.toFixed(0)}% LP lock` : 'LP lock: ?';
     const source  = token._source ? ` [${token._source}]` : '';
     console.log(`[Scanner] ✅ ${symbol}${source} passe les filtres — ${lpPct}`);
+
+    // Enregistre le passage des filtres et vérifie si token récidiviste
+    const recurringInfo = tokenHistory.recordSighting(
+      token.baseToken?.symbol || '',
+      token.baseToken?.name   || '',
+      address,
+      token._source || 'unknown'
+    );
+    token._recurring = recurringInfo;
+
+    if (recurringInfo.isRecurring) {
+      const dayStr = recurringInfo.daysSinceLast < 1
+        ? "aujourd'hui"
+        : `il y a ${recurringInfo.daysSinceLast}j`;
+      const peakStr = recurringInfo.avgPeakPct != null ? ` | peak moy: +${recurringInfo.avgPeakPct}%` : '';
+      console.log(`[Scanner] 🔄 RÉCIDIVISTE $${symbol} — vu ${recurringInfo.sightings}x (${dayStr})${peakStr}`);
+    }
 
     const debate = await runDebate(token, security, rugReport, overview, lpLock);
     if (debate) this.emit('debate', debate);

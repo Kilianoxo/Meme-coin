@@ -16,12 +16,13 @@
  */
 
 const { Telegraf, Markup } = require('telegraf');
-const dex = require('./dexscreener');
+const dex          = require('./dexscreener');
 const { runDebate } = require('./agents');
 const { formatSecurity } = require('./birdeye');
-const rugcheck = require('./rugcheck');
-const state  = require('./state');
-const logger = require('./logger');
+const rugcheck     = require('./rugcheck');
+const tokenHistory = require('./tokenHistory');
+const state        = require('./state');
+const logger       = require('./logger');
 
 class Bot {
   constructor(trader, scanner) {
@@ -122,6 +123,15 @@ class Bot {
     const scoreStr = decision.score != null ? `  —  <b>${decision.score}/100</b>` : '';
     msg += `${decEmoji} <b>${decision.decision}</b>${scoreStr}  —  confiance ${decision.confidence}/10\n`;
     if (decision.reasoning) msg += `<i>${this._esc(decision.reasoning)}</i>\n`;
+
+    // ─── Badge récidiviste ─────────────────────────────────────────────────
+    const rec = debate.token?._recurring;
+    if (rec?.isRecurring) {
+      const dayStr  = rec.daysSinceLast < 1 ? "aujourd'hui" : `il y a ${rec.daysSinceLast}j`;
+      const peakStr = rec.avgPeakPct != null ? `  |  📈 peak moy: <b>+${rec.avgPeakPct}%</b>` : '';
+      const cycleStr = rec.totalCycles > 0 ? `  |  ${rec.totalCycles} cycle(s) clôturé(s)` : '';
+      msg += `\n🔄 <b>RÉCIDIVISTE</b> — vu <b>${rec.sightings}x</b> boosté  |  ${dayStr}${peakStr}${cycleStr}\n`;
+    }
 
     // ─── Agent Momentum ────────────────────────────────────────────────────
     if (momentum) {
@@ -247,7 +257,8 @@ class Bot {
         `/analyse &lt;adresse&gt; — Analyser un token\n` +
         `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel\n` +
         `/sell &lt;adresse&gt; [%] — Vente manuelle\n` +
-        `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position externe\n\n` +
+        `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position externe\n` +
+        `/recurring — Tokens récidivistes (boostés plusieurs fois)\n\n` +
         `/help — Aide détaillée de toutes les commandes`,
         { parse_mode: 'HTML' }
       );
@@ -266,6 +277,7 @@ class Bot {
         `<b>Trading</b>\n` +
         `/auto — Activer/désactiver le trading automatique\n` +
         `/scan — Lancer un scan manuel toutes sources\n` +
+        `/recurring — Tokens récidivistes (boostés plusieurs fois)\n` +
         `/debat &lt;adresse&gt; — Suggérer un token au débat IA\n` +
         `  → Tu proposes un CA, Bull / Bear / Momentum / Whale débattent\n` +
         `/analyse &lt;adresse&gt; — Analyse complète d'un token\n` +
@@ -572,6 +584,33 @@ class Bot {
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
       }
+    });
+
+    bot.command('recurring', async (ctx) => {
+      const top = tokenHistory.getTopRecurring(10);
+      const stats = tokenHistory.getStats();
+
+      if (top.length === 0) {
+        return ctx.reply(
+          `🔄 <b>Tokens récidivistes</b>\n\n` +
+          `📭 Aucun récidiviste détecté pour l'instant.\n\n` +
+          `<i>Le bot surveille les tokens qui réapparaissent régulièrement sous le même ticker/nom (souvent avec une nouvelle adresse). Reviens après quelques cycles de scan.</i>`,
+          { parse_mode: 'HTML' }
+        );
+      }
+
+      let msg = `🔄 <b>Top tokens récidivistes</b>  <code>(${stats.total} suivis, ${stats.recurring} récidivistes)</code>\n\n`;
+      for (const t of top) {
+        const dayStr  = t.daysSinceLast < 1 ? "vu aujourd'hui" : `vu il y a ${t.daysSinceLast}j`;
+        const addrNb  = t.addresses > 1 ? ` · ${t.addresses} adresses distinctes` : '';
+        const peakStr = t.avgPeakPct != null ? `\n  📈 Peak moyen: <b>+${t.avgPeakPct}%</b>  (${t.totalCycles} cycle(s) clôturé(s))` : '';
+        msg += `<b>$${this._esc(t.symbol)}</b>${t.name ? ` — ${this._esc(t.name)}` : ''}\n`;
+        msg += `  🔁 <b>${t.sightings}x</b> boosté${addrNb}  ·  ${dayStr}${peakStr}\n`;
+        if (t.lastAddress) msg += `  <code>${this._esc(t.lastAddress)}</code>\n`;
+        msg += '\n';
+      }
+
+      await ctx.reply(msg.trim(), { parse_mode: 'HTML' });
     });
 
     bot.command('sell', async (ctx) => {
