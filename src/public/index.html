@@ -58,6 +58,19 @@
     }
     @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 
+    /* ── ARIA chat bubbles ───────────────────────────────────────────── */
+    .aria-bubble { max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .aria-bubble.user     { background: var(--blue); color: #fff; align-self: flex-end; border-bottom-right-radius: 3px; }
+    .aria-bubble.assistant { background: var(--bg2); border: 1px solid var(--border); align-self: flex-start; border-bottom-left-radius: 3px; }
+    .aria-bubble.proactive { background: rgba(240,136,62,.12); border: 1px solid rgba(240,136,62,.35); align-self: flex-start; border-bottom-left-radius: 3px; }
+    .aria-msg-wrap { display: flex; flex-direction: column; }
+    .aria-ts { font-size: 10px; color: var(--txt-muted); margin-top: 2px; }
+    .aria-ts.right { align-self: flex-end; }
+    .trait-pill { background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px; font-size: 11px; color: var(--txt-muted); }
+    .watch-item { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+    .watch-item:last-child { border-bottom: none; }
+    .btn-rm { background: none; border: none; color: var(--red); cursor: pointer; font-size: 14px; padding: 0 2px; opacity: .6; }
+    .btn-rm:hover { opacity: 1; }
     /* ── Tab navigation ──────────────────────────────────────────────── */
     .tab-nav {
       display: flex;
@@ -625,8 +638,10 @@
 <!-- ── Tab navigation ──────────────────────────────────────────────────── -->
 <nav class="tab-nav">
   <button class="tab-nav-btn active" data-page="dashboard">📊 Dashboard</button>
-  <button class="tab-nav-btn"        data-page="floor">💬 Trading Floor</button>
+  <button class="tab-nav-btn"        data-page="aria">🤖 ARIA</button>
   <button class="tab-nav-btn"        data-page="paper">🧪 Paper Trading</button>
+  <!-- Trading Floor suspendu — bouton conservé mais caché (réactivable) -->
+  <button class="tab-nav-btn" data-page="floor" style="display:none">💬 Trading Floor</button>
 </nav>
 
 <div class="main">
@@ -828,6 +843,125 @@
   <!-- ═══════════════════════════════════════════════════════════════════
        PAGE : TRADING FLOOR
   ════════════════════════════════════════════════════════════════════ -->
+  <!-- ══════════════════════════════════════════════════════════════════════
+       PAGE : ARIA — Agent IA Personnel
+  ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="page-aria">
+    <div style="display:grid; grid-template-columns:260px 1fr 280px; gap:16px; align-items:start">
+
+      <!-- ── Colonne gauche : Personnalité ─────────────────────────────── -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>🤖 ARIA</h2><span id="ariaMoodBadge" class="c-muted" style="font-size:12px">—</span></div>
+          <div class="sec-body" style="padding:12px 16px">
+            <div style="text-align:center; padding:8px 0 16px">
+              <div id="ariaAvatar" style="font-size:48px; line-height:1">🤖</div>
+              <div id="ariaName" style="font-size:16px; font-weight:700; margin-top:6px">ARIA</div>
+              <div id="ariaStyle" class="c-muted" style="font-size:12px; margin-top:2px">style: —</div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:8px">
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:3px">
+                  <span class="c-muted">Confiance</span><span id="ariaConfidence" class="c-blue">—</span>
+                </div>
+                <div style="height:4px; background:var(--border); border-radius:2px">
+                  <div id="barConfidence" style="height:100%; background:var(--blue); border-radius:2px; width:50%; transition:width .4s"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:3px">
+                  <span class="c-muted">Risque</span><span id="ariaRisk" class="c-yellow">—</span>
+                </div>
+                <div style="height:4px; background:var(--border); border-radius:2px">
+                  <div id="barRisk" style="height:100%; background:#f0883e; border-radius:2px; width:50%; transition:width .4s"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:3px">
+                  <span class="c-muted">Agressivité</span><span id="ariaAggr" class="c-red">—</span>
+                </div>
+                <div style="height:4px; background:var(--border); border-radius:2px">
+                  <div id="barAggr" style="height:100%; background:#f85149; border-radius:2px; width:50%; transition:width .4s"></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-top:14px">
+              <div class="c-muted" style="font-size:11px; margin-bottom:6px">Traits de personnalité</div>
+              <div id="ariaTraits" style="display:flex; flex-wrap:wrap; gap:5px"></div>
+            </div>
+
+            <div id="ariaLessons" style="margin-top:14px; display:none">
+              <div class="c-muted" style="font-size:11px; margin-bottom:6px">📚 Leçons apprises</div>
+              <div id="ariaLessonsList" style="font-size:11px; color:var(--txt-muted)"></div>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border); display:flex; justify-content:space-between; font-size:11px">
+              <span class="c-muted">Analyses</span><span id="ariaStatAnalyses" class="c-blue">0</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:11px">
+              <span class="c-muted">Correct</span><span id="ariaStatCorrect" class="c-green">0</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:11px">
+              <span class="c-muted">Win streak</span><span id="ariaStatWin" class="c-green">0</span>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /colonne gauche -->
+
+      <!-- ── Colonne centre : Chat ──────────────────────────────────────── -->
+      <div class="section" style="margin-bottom:0; display:flex; flex-direction:column; height:calc(100vh - 160px)">
+        <div class="sec-head"><h2>💬 Conversation</h2></div>
+        <div id="ariaChat" style="flex:1; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:10px; min-height:0"></div>
+        <div style="padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px">
+          <input id="ariaChatInput" type="text" placeholder="Parle avec ARIA…"
+            style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:8px 12px; color:var(--txt); font-size:13px; outline:none"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAriaChat()}"
+          >
+          <button onclick="sendAriaChat()" class="btn-primary" style="white-space:nowrap">Envoyer</button>
+        </div>
+      </div><!-- /chat -->
+
+      <!-- ── Colonne droite : Watchlist ─────────────────────────────────── -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+
+        <!-- Tokens surveillés -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>👁 Tokens suivis</h2></div>
+          <div class="sec-body" style="padding:8px 12px">
+            <div style="display:flex; gap:6px; margin-bottom:8px">
+              <input id="watchTokenAddr" type="text" placeholder="Adresse CA…"
+                style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <input id="watchTokenSym" type="text" placeholder="Ticker"
+                style="width:60px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <button onclick="addWatchItem('token')" class="btn-primary" style="padding:5px 8px; font-size:11px">+</button>
+            </div>
+            <div id="watchTokenList"><div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun token suivi</div></div>
+          </div>
+        </div>
+
+        <!-- Wallets surveillés -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>🔭 Wallets suivis</h2></div>
+          <div class="sec-body" style="padding:8px 12px">
+            <div style="display:flex; gap:6px; margin-bottom:8px">
+              <input id="watchWalletAddr" type="text" placeholder="Adresse wallet…"
+                style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <input id="watchWalletLabel" type="text" placeholder="Label"
+                style="width:70px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <button onclick="addWatchItem('wallet')" class="btn-primary" style="padding:5px 8px; font-size:11px">+</button>
+            </div>
+            <div id="watchWalletList"><div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun wallet suivi</div></div>
+          </div>
+        </div>
+
+      </div><!-- /colonne droite -->
+    </div>
+  </div><!-- /page-aria -->
+
   <div class="tab-page" id="page-floor">
 
     <!-- ── Toggle + état des agents ─────────────────────────────────────── -->
@@ -1205,6 +1339,10 @@ document.querySelectorAll('.tab-nav-btn').forEach(btn => {
     if (page === 'floor') {
       fetchFloor();
       startSSE();
+    }
+    if (page === 'aria') {
+      fetchAgent();
+      startSSE(); // SSE pour recevoir les messages proactifs d'ARIA
     }
   });
 });
@@ -1723,6 +1861,11 @@ function startSSE() {
   sseSource.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
+      // Toujours traiter les messages ARIA (quel que soit l'onglet actif)
+      if (msg.type === 'aria_response' || msg.type === 'aria_proactive') {
+        handleAriaSSE(msg);
+        return;
+      }
       if (activePage === 'floor') {
         appendChatMessage(msg);
         // Met aussi à jour les sections si un débat vient de finir
@@ -1736,7 +1879,7 @@ function startSSE() {
     sseSource.close();
     sseSource = null;
     // Reconnexion automatique dans 5s
-    setTimeout(() => { if (activePage === 'floor') startSSE(); }, 5000);
+    setTimeout(() => { if (activePage === 'floor' || activePage === 'aria') startSSE(); }, 5000);
   };
 }
 
@@ -1901,6 +2044,211 @@ function esc(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ARIA — AGENT IA PERSONNEL
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ARIA_MOOD_EMOJI = { focused:'🎯', excited:'🚀', cautious:'🛡️', concerned:'😟', satisfied:'😊' };
+
+async function fetchAgent() {
+  try {
+    const r    = await fetch('/api/agent');
+    const data = await r.json();
+    renderAriaState(data.state);
+    renderAriaConversation(data.conversation);
+  } catch (err) {
+    console.error('fetchAgent error:', err);
+  }
+}
+
+function renderAriaState(s) {
+  if (!s) return;
+  const emoji = ARIA_MOOD_EMOJI[s.mood] || '🤖';
+  document.getElementById('ariaAvatar').textContent   = emoji;
+  document.getElementById('ariaName').textContent     = s.name;
+  document.getElementById('ariaStyle').textContent    = `style: ${s.tradingStyle}`;
+  document.getElementById('ariaMoodBadge').textContent = s.moodLabel;
+  document.getElementById('ariaConfidence').textContent = `${s.confidence}/10`;
+  document.getElementById('ariaRisk').textContent       = `${s.riskTolerance}/10`;
+  document.getElementById('ariaAggr').textContent       = `${s.aggressiveness}/10`;
+  document.getElementById('barConfidence').style.width  = `${s.confidence * 10}%`;
+  document.getElementById('barRisk').style.width        = `${s.riskTolerance * 10}%`;
+  document.getElementById('barAggr').style.width        = `${s.aggressiveness * 10}%`;
+  document.getElementById('ariaStatAnalyses').textContent = s.stats.tradesAnalyzed;
+  document.getElementById('ariaStatCorrect').textContent  = s.stats.correctCalls;
+  document.getElementById('ariaStatWin').textContent      = s.stats.winStreak > 0 ? `🔥 ${s.stats.winStreak}` : s.stats.winStreak;
+
+  const traitsEl = document.getElementById('ariaTraits');
+  traitsEl.innerHTML = s.traits.map(t => `<span class="trait-pill">${esc(t)}</span>`).join('');
+
+  const lessonsEl = document.getElementById('ariaLessons');
+  if (s.lessons && s.lessons.length > 0) {
+    lessonsEl.style.display = '';
+    document.getElementById('ariaLessonsList').innerHTML = s.lessons.map(l => `<div style="margin-bottom:4px">• ${esc(l)}</div>`).join('');
+  } else {
+    lessonsEl.style.display = 'none';
+  }
+
+  renderAriaWatchlist(s.watchlist);
+}
+
+function renderAriaConversation(conv) {
+  const chat = document.getElementById('ariaChat');
+  if (!conv || conv.length === 0) {
+    chat.innerHTML = `<div class="c-muted" style="text-align:center; margin:auto; font-size:13px">
+      ARIA attend que tu lui parles 👋<br><br>
+      <span style="font-size:11px">Tu peux lui poser des questions, lui donner des tokens à surveiller,<br>lui demander son avis sur le marché…</span>
+    </div>`;
+    return;
+  }
+  chat.innerHTML = conv.map(m => {
+    const bubbleClass = m.proactive ? 'proactive' : m.role === 'user' ? 'user' : 'assistant';
+    const tsClass     = m.role === 'user' ? 'right' : '';
+    const prefix      = m.proactive ? '🔔 ' : '';
+    const time        = m.timestamp ? new Date(m.timestamp).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }) : '';
+    return `<div class="aria-msg-wrap">
+      <div class="aria-bubble ${bubbleClass}">${prefix}${esc(m.content)}</div>
+      <div class="aria-ts ${tsClass}">${time}</div>
+    </div>`;
+  }).join('');
+  // Scroll en bas
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function renderAriaWatchlist(wl) {
+  const tokenEl = document.getElementById('watchTokenList');
+  const walletEl = document.getElementById('watchWalletList');
+
+  if (!wl.tokens || wl.tokens.length === 0) {
+    tokenEl.innerHTML = `<div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun token suivi</div>`;
+  } else {
+    tokenEl.innerHTML = wl.tokens.map(t => `
+      <div class="watch-item">
+        <div>
+          <span style="font-weight:600">${esc(t.symbol || '?')}</span>
+          <span class="c-muted" style="margin-left:4px">${esc(t.address.slice(0,6))}…</span>
+          ${t.reason ? `<div class="c-muted" style="font-size:10px">${esc(t.reason)}</div>` : ''}
+        </div>
+        <button class="btn-rm" onclick="removeWatchItem('token','${esc(t.address)}')" title="Retirer">✕</button>
+      </div>`).join('');
+  }
+
+  if (!wl.wallets || wl.wallets.length === 0) {
+    walletEl.innerHTML = `<div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun wallet suivi</div>`;
+  } else {
+    walletEl.innerHTML = wl.wallets.map(w => `
+      <div class="watch-item">
+        <div>
+          <span style="font-weight:600">${esc(w.label || w.address.slice(0,8)+'…')}</span>
+          <div class="c-muted" style="font-size:10px">${esc(w.address.slice(0,10))}…</div>
+        </div>
+        <button class="btn-rm" onclick="removeWatchItem('wallet','${esc(w.address)}')" title="Retirer">✕</button>
+      </div>`).join('');
+  }
+}
+
+let ariaSending = false;
+async function sendAriaChat() {
+  if (ariaSending) return;
+  const input = document.getElementById('ariaChatInput');
+  const msg   = input.value.trim();
+  if (!msg) return;
+
+  ariaSending = true;
+  input.value = '';
+
+  // Affiche le message utilisateur immédiatement
+  const chat = document.getElementById('ariaChat');
+  const time  = new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+  chat.innerHTML += `<div class="aria-msg-wrap">
+    <div class="aria-bubble user">${esc(msg)}</div>
+    <div class="aria-ts right">${time}</div>
+  </div>
+  <div id="ariaTyping" class="aria-msg-wrap">
+    <div class="aria-bubble assistant c-muted">…</div>
+  </div>`;
+  chat.scrollTop = chat.scrollHeight;
+
+  try {
+    const r    = await fetch('/api/agent/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    const data = await r.json();
+
+    document.getElementById('ariaTyping')?.remove();
+    if (data.ok) {
+      const t = new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+      chat.innerHTML += `<div class="aria-msg-wrap">
+        <div class="aria-bubble assistant">${esc(data.reply)}</div>
+        <div class="aria-ts">${t}</div>
+      </div>`;
+      if (data.ariaState) renderAriaState(data.ariaState);
+    } else {
+      chat.innerHTML += `<div class="aria-bubble assistant c-red">Erreur: ${esc(data.error)}</div>`;
+    }
+  } catch (err) {
+    document.getElementById('ariaTyping')?.remove();
+    chat.innerHTML += `<div class="aria-bubble assistant c-red">Erreur réseau</div>`;
+  } finally {
+    ariaSending = false;
+    chat.scrollTop = chat.scrollHeight;
+  }
+}
+
+async function addWatchItem(type) {
+  const addrEl   = document.getElementById(type === 'token' ? 'watchTokenAddr' : 'watchWalletAddr');
+  const labelEl  = document.getElementById(type === 'token' ? 'watchTokenSym'  : 'watchWalletLabel');
+  const address  = addrEl.value.trim();
+  const labelVal = labelEl.value.trim();
+  if (!address) return;
+
+  const body = { action: 'add', type, address };
+  if (type === 'token')  body.symbol = labelVal || '?';
+  if (type === 'wallet') body.label  = labelVal;
+
+  try {
+    const r = await fetch('/api/agent/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      addrEl.value = ''; labelEl.value = '';
+      renderAriaWatchlist(data.watchlist);
+    }
+  } catch (err) { console.error('addWatchItem:', err); }
+}
+
+async function removeWatchItem(type, address) {
+  try {
+    const r = await fetch('/api/agent/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'remove', type, address }),
+    });
+    const data = await r.json();
+    if (data.ok) renderAriaWatchlist(data.watchlist);
+  } catch (err) { console.error('removeWatchItem:', err); }
+}
+
+// Écoute les messages proactifs d'ARIA via SSE
+function handleAriaSSE(entry) {
+  if (entry.type !== 'aria_response' && entry.type !== 'aria_proactive') return;
+  const chat = document.getElementById('ariaChat');
+  if (!chat) return;
+  const bubbleClass = entry.type === 'aria_proactive' ? 'proactive' : 'assistant';
+  const prefix      = entry.type === 'aria_proactive' ? '🔔 ' : '';
+  const time        = new Date(entry.timestamp || Date.now()).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+  chat.innerHTML += `<div class="aria-msg-wrap">
+    <div class="aria-bubble ${bubbleClass}">${prefix}${esc(entry.content)}</div>
+    <div class="aria-ts">${time}</div>
+  </div>`;
+  chat.scrollTop = chat.scrollHeight;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

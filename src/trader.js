@@ -17,9 +17,10 @@ const bs58        = require('bs58');
 const fs          = require('fs');
 const https       = require('https');
 const path        = require('path');
-const agentMemory  = require('./agentMemory');
-const tokenHistory = require('./tokenHistory');
-const logger       = require('./logger');
+const agentMemory   = require('./agentMemory');
+const tokenHistory  = require('./tokenHistory');
+const personalAgent = require('./personalAgent');
+const logger        = require('./logger');
 
 const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
@@ -374,13 +375,13 @@ class Trader {
       }
       this.positions.delete(tokenMint);
 
-      // Enregistre l'outcome dans la mémoire des agents (pour apprentissage)
+      // Enregistre l'outcome + fait évoluer la personnalité d'ARIA
       if (pos && pnlSol != null) {
         const pnlPct  = (pnlSol / pos.solSpent) * 100;
         const outcome = pnlPct >= 0 ? 'WIN' : 'LOSS';
         agentMemory.recordOutcome(tokenMint, pnlPct, exitReason);
-        // Enregistre la fin du cycle dans l'historique des récidivistes
         tokenHistory.recordCycleEnd(pos.symbol || '', tokenMint, pnlPct, outcome);
+        personalAgent.evolvePersonality(outcome, pnlPct);
       }
     }
     this._save();

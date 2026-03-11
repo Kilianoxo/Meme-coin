@@ -6,12 +6,12 @@
  */
 
 const { EventEmitter } = require('events');
-const dex          = require('./dexscreener');
-const { runDebate } = require('./agents');
-const birdeye      = require('./birdeye');
-const gecko        = require('./geckoterminal');
-const rugcheck     = require('./rugcheck');
-const tokenHistory = require('./tokenHistory');
+const dex           = require('./dexscreener');
+const personalAgent = require('./personalAgent');
+const birdeye       = require('./birdeye');
+const gecko         = require('./geckoterminal');
+const rugcheck      = require('./rugcheck');
+const tokenHistory  = require('./tokenHistory');
 
 // Nombre max de tokens envoyés en débat IA par cycle de scan
 // Les candidats sont triés par pertinence avant sélection
@@ -281,7 +281,8 @@ class Scanner extends EventEmitter {
       console.log(`[Scanner] 🔄 RÉCIDIVISTE $${symbol} — vu ${recurringInfo.sightings}x (${dayStr})${peakStr}`);
     }
 
-    const debate = await runDebate(token, security, rugReport, overview, lpLock);
+    // ARIA — agent unique remplace le système multi-agents
+    const debate = await personalAgent.analyzeToken(token, security, rugReport, overview, lpLock);
     if (debate) this.emit('debate', debate);
   }
 

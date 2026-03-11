@@ -20,8 +20,9 @@ const fs    = require('fs');
 const path  = require('path');
 const url   = require('url');
 
-const state       = require('./state');
-const agentMemory = require('./agentMemory');
+const state         = require('./state');
+const agentMemory   = require('./agentMemory');
+const personalAgent = require('./personalAgent');
 const { agentBus, runDebate } = require('./agents');
 const dex      = require('./dexscreener');
 const birdeye  = require('./birdeye');
@@ -45,6 +46,9 @@ class Dashboard {
     // Écoute le bus des agents → alimente le chatLog et les SSE
     agentBus.on('message', (msg) => this._onAgentMessage(msg));
     agentBus.on('system',  (msg) => this._onSystemMessage(msg));
+
+    // ARIA → push SSE en temps réel vers le dashboard
+    personalAgent.setSSECallback((entry) => this._broadcastSSE(entry));
   }
 
   start() {
@@ -160,6 +164,23 @@ class Dashboard {
 
     if (pathname === '/api/debate' && req.method === 'POST') {
       this._apiDebate(req, res);
+      return;
+    }
+
+    // ── Agent ARIA ───────────────────────────────────────────────────────────
+
+    if (pathname === '/api/agent' && req.method === 'GET') {
+      this._apiAgent(res);
+      return;
+    }
+
+    if (pathname === '/api/agent/chat' && req.method === 'POST') {
+      this._apiAgentChat(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/watchlist' && req.method === 'POST') {
+      this._apiAgentWatchlist(req, res);
       return;
     }
 
@@ -602,6 +623,50 @@ class Dashboard {
         this._pushChat({ type: 'system', content: `❌ Erreur débat : ${err.message}`, timestamp: Date.now() });
         this._jsonOk(res, { ok: false, error: err.message });
       }
+    });
+  }
+
+  // ─── API /api/agent ────────────────────────────────────────────────────────
+
+  _apiAgent(res) {
+    this._jsonOk(res, {
+      state:        personalAgent.getState(),
+      conversation: personalAgent.getConversation(40),
+    });
+  }
+
+  _apiAgentChat(req, res) {
+    this._readBody(req, async ({ message, balance, positions }) => {
+      if (!message || typeof message !== 'string' || !message.trim()) {
+        this._jsonOk(res, { ok: false, error: 'Message vide' });
+        return;
+      }
+      try {
+        const ctx   = { balance, positions };
+        const reply = await personalAgent.chat(message.trim(), ctx);
+        this._jsonOk(res, { ok: true, reply, ariaState: personalAgent.getState() });
+      } catch (err) {
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
+    });
+  }
+
+  _apiAgentWatchlist(req, res) {
+    this._readBody(req, ({ action, type, address, symbol, name, label, reason }) => {
+      if (!address || !['add', 'remove'].includes(action) || !['token', 'wallet'].includes(type)) {
+        this._jsonOk(res, { ok: false, error: 'Paramètres invalides' });
+        return;
+      }
+      let ok = false;
+      if (action === 'add' && type === 'token')
+        ok = personalAgent.addWatchToken(address, symbol || '?', name || '', reason || '');
+      else if (action === 'remove' && type === 'token')
+        { personalAgent.removeWatchToken(address); ok = true; }
+      else if (action === 'add' && type === 'wallet')
+        ok = personalAgent.addWatchWallet(address, label || '');
+      else if (action === 'remove' && type === 'wallet')
+        { personalAgent.removeWatchWallet(address); ok = true; }
+      this._jsonOk(res, { ok, watchlist: personalAgent.getState().watchlist });
     });
   }
 
