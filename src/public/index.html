@@ -896,7 +896,7 @@
 
         <!-- Précision agents -->
         <div class="section" style="margin-bottom:0">
-          <div class="sec-head"><h2>🧠 Précision des agents</h2></div>
+          <div class="sec-head"><h2>🧠 Précision des agents</h2><span class="c-muted" style="font-size:12px" id="weightsStatus">poids fixes (manque de données)</span></div>
           <div class="sec-body">
             <div class="agent-stats-grid" id="agentStatsGrid">
               <div class="agent-stat-card"><div class="agent-icon">📈</div><div class="agent-name">Momentum</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
@@ -1602,8 +1602,18 @@ async function fetchFloor() {
     chatMessages = d.chatLog || [];
     renderChatLog();
 
-    // Stats agents
-    renderAgentStats(d.agentStats);
+    // Stats agents + statut poids dynamiques
+    renderAgentStats(d.agentStats, d.dynamicWeights);
+    const wStatus = document.getElementById('weightsStatus');
+    if (wStatus && d.dynamicWeights) {
+      if (d.dynamicWeights.adapted) {
+        wStatus.textContent  = '⚡ poids adaptatifs actifs';
+        wStatus.style.color  = '#f0883e';
+      } else {
+        wStatus.textContent  = 'poids fixes (< 5 signaux/agent)';
+        wStatus.style.color  = '';
+      }
+    }
 
     // Lessons
     renderLessons(d.lessons);
@@ -1739,18 +1749,29 @@ const AGENT_DEFS = [
   { key: 'bear',     icon: '🐻', name: 'Bear',     colorClass: 'c-red' },
 ];
 
-function renderAgentStats(stats) {
+function renderAgentStats(stats, dynWeights) {
   if (!stats) return;
   const grid = document.getElementById('agentStatsGrid');
+  const w    = dynWeights?.weights   || {};
+  const defs = dynWeights?.defaults  || { momentum: 25, bull: 20, bear: 25, whale: 15 };
   grid.innerHTML = AGENT_DEFS.map(a => {
-    const s   = stats[a.key] || { accuracy: null, total: 0, correct: 0 };
-    const acc = s.accuracy != null ? s.accuracy + '%' : '—';
-    const cl  = s.accuracy == null ? 'c-muted' : s.accuracy >= 60 ? 'c-green' : s.accuracy >= 40 ? 'c-yellow' : 'c-red';
+    const s          = stats[a.key] || { accuracy: null, total: 0, correct: 0 };
+    const acc        = s.accuracy != null ? s.accuracy + '%' : '—';
+    const cl         = s.accuracy == null ? 'c-muted' : s.accuracy >= 60 ? 'c-green' : s.accuracy >= 40 ? 'c-yellow' : 'c-red';
+    const curW       = w[a.key]    ?? defs[a.key];
+    const defW       = defs[a.key] ?? curW;
+    const adapted    = dynWeights?.adapted && w[a.key] != null && Math.abs(curW - defW) >= 0.2;
+    const weightDir  = curW > defW ? '↑' : curW < defW ? '↓' : '';
+    const weightCl   = !adapted ? 'c-muted' : curW > defW ? 'c-green' : 'c-red';
+    const weightHint = adapted
+      ? `poids: <span class="${weightCl}">${curW.toFixed(1)} ${weightDir}</span> <span class="c-muted">(déf: ${defW})</span>`
+      : `<span class="c-muted">poids: ${defW} (défaut)</span>`;
     return `<div class="agent-stat-card">
       <div class="agent-icon">${a.icon}</div>
       <div class="agent-name">${a.name}</div>
       <div class="agent-acc ${cl}">${acc}</div>
       <div class="agent-sub">${s.total} signal${s.total !== 1 ? 's' : ''} · ${s.correct} ✓</div>
+      <div class="agent-sub" style="margin-top:4px">${weightHint}</div>
     </div>`;
   }).join('');
 }

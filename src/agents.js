@@ -334,6 +334,7 @@ Réponds UNIQUEMENT avec ce JSON (pas d'autre texte):
 
 /**
  * Composante sécurité on-chain — 0 à 15 points, 100% déterministe (pas de LLM)
+ * Reste fixe et n'est pas sujet aux poids dynamiques.
  */
 function calcSecurityScore(security, rugReport, lpLock) {
   if (rugReport?.rugged) return 0; // token déjà rugpull → 0 pt sec
@@ -360,26 +361,35 @@ function calcSecurityScore(security, rugReport, lpLock) {
 }
 
 /**
- * Calcule le score global 0-100 à partir des 4 analyses agents + sécurité
- * Pondération: Momentum 25 | Bull 20 | Bear 25 (inversé) | Whale 15 | Sécurité 15
- * @returns {{ score: number, breakdown: Object }}
+ * Calcule le score global 0-100 à partir des 4 analyses agents + sécurité.
+ * Les poids des 4 agents (somme = 85) sont dynamiques — calculés par agentMemory
+ * selon la précision historique de chaque agent (min 5 signaux requis pour adapter).
+ * La sécurité est toujours fixe à 15 pts max.
+ *
+ * @returns {{ score: number, breakdown: Object, weights: Object }}
  */
 function calcGlobalScore(bull, bear, momentum, whale, security, rugReport, lpLock) {
   // Hard blocks → score 0 immédiatement
   if (rugReport?.rugged || security?.mintAuthority) {
-    return { score: 0, breakdown: { momentum: 0, bull: 0, bear: 0, whale: 0, security: 0 } };
+    return { score: 0, breakdown: { momentum: 0, bull: 0, bear: 0, whale: 0, security: 0 }, weights: null };
+  }
+
+  const { weights, adapted, log } = agentMemory.getDynamicWeights();
+
+  if (adapted) {
+    console.log(`[Agents] Poids dynamiques actifs — ${log.join(' | ')}`);
   }
 
   const breakdown = {
-    momentum: (momentum.score / 10) * 25,
-    bull:     (bull.score / 10) * 20,
-    bear:     ((10 - bear.riskScore) / 10) * 25,
-    whale:    (whale.score / 10) * 15,
+    momentum: (momentum.score / 10) * weights.momentum,
+    bull:     (bull.score / 10) * weights.bull,
+    bear:     ((10 - bear.riskScore) / 10) * weights.bear,
+    whale:    (whale.score / 10) * weights.whale,
     security: calcSecurityScore(security, rugReport, lpLock),
   };
 
   const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
-  return { score: Math.round(Math.min(100, Math.max(0, total))), breakdown };
+  return { score: Math.round(Math.min(100, Math.max(0, total))), breakdown, weights };
 }
 
 /** Décision déterministe depuis le score + hard rules */
@@ -419,7 +429,7 @@ function scoreToParams(score, momentum) {
  *             suggestedAmountPct, stopLossPct, takeProfitPct, reasoning }
  */
 async function runCoordinator(token, bull, bear, momentum, whale, security, rugReport, lpLock) {
-  const { score, breakdown } = calcGlobalScore(bull, bear, momentum, whale, security, rugReport, lpLock);
+  const { score, breakdown, weights } = calcGlobalScore(bull, bear, momentum, whale, security, rugReport, lpLock);
   const decision             = scoreToDecision(score, bear, whale);
   const params               = scoreToParams(score, momentum);
   const confidence           = Math.round(score / 10);
@@ -446,6 +456,7 @@ Texte brut uniquement, pas de JSON, pas de markdown.`;
   return {
     score,
     breakdown,
+    weights,
     decision,
     confidence,
     ...params,

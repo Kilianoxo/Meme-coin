@@ -283,6 +283,69 @@ class AgentMemory {
     return ctx;
   }
 
+  /**
+   * Calcule les poids dynamiques des 4 agents en fonction de leur précision historique.
+   * Les poids sont normalisés pour sommer à 85 (les 15 pts restants = sécurité fixe).
+   *
+   * Nécessite MIN_SAMPLES signaux par agent pour activer l'adaptation.
+   * En dessous du seuil → poids par défaut conservé.
+   *
+   * @returns {{ weights: Object, defaults: Object, adapted: boolean, log: string[] }}
+   */
+  getDynamicWeights() {
+    const MIN_SAMPLES = 5;
+    const DEFAULTS = { momentum: 25, bull: 20, bear: 25, whale: 15 }; // somme = 85
+
+    const raw = {};
+    const log = [];
+    let anyAdapted = false;
+
+    for (const [agent, def] of Object.entries(DEFAULTS)) {
+      const s     = this.data.agentStats[agent];
+      const total = s.correct + s.wrong;
+
+      if (total < MIN_SAMPLES) {
+        raw[agent] = def; // pas assez de données → valeur par défaut
+        continue;
+      }
+
+      const acc = s.correct / total;
+
+      // Multiplicateur : plus l'agent a raison, plus son poids augmente
+      let multiplier;
+      if      (acc >= 0.75) multiplier = 1.40;
+      else if (acc >= 0.60) multiplier = 1.20;
+      else if (acc >= 0.45) multiplier = 1.00;
+      else if (acc >= 0.30) multiplier = 0.75;
+      else                  multiplier = 0.55;
+
+      raw[agent] = def * multiplier;
+
+      if (multiplier !== 1.00) {
+        anyAdapted = true;
+        const dir = multiplier > 1.00 ? '↑' : '↓';
+        log.push(`${agent}: ${Math.round(acc * 100)}% acc → ×${multiplier} ${dir}`);
+      }
+    }
+
+    // Renormalise pour que la somme soit exactement 85
+    const sum   = Object.values(raw).reduce((a, b) => a + b, 0);
+    const scale = 85 / sum;
+    const weights = {};
+    for (const k of Object.keys(raw)) {
+      weights[k] = parseFloat((raw[k] * scale).toFixed(1));
+    }
+
+    // Corrige l'arrondi résiduel sur l'agent au plus fort poids
+    const drift = parseFloat((85 - Object.values(weights).reduce((a, b) => a + b, 0)).toFixed(1));
+    if (drift !== 0) {
+      const top = Object.entries(weights).sort((a, b) => b[1] - a[1])[0][0];
+      weights[top] = parseFloat((weights[top] + drift).toFixed(1));
+    }
+
+    return { weights, defaults: DEFAULTS, adapted: anyAdapted, log };
+  }
+
   getLessons(limit = 30) {
     return this.data.lessons.slice(-limit).reverse();
   }

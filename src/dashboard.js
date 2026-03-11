@@ -204,9 +204,10 @@ class Dashboard {
     const data = {
       agentsEnabled: state.agentsEnabled,
       chatLog:       this.chatLog,
-      lessons:       agentMemory.getLessons(20),
-      agentStats:    agentMemory.getStats(),
-      suggestions:   agentMemory.getSuggestions(),
+      lessons:        agentMemory.getLessons(20),
+      agentStats:     agentMemory.getStats(),
+      dynamicWeights: agentMemory.getDynamicWeights(),
+      suggestions:    agentMemory.getSuggestions(),
     };
     res.writeHead(200, {
       'Content-Type':                'application/json',
