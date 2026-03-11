@@ -454,15 +454,30 @@ class Dashboard {
   // ─── Prix live Jupiter ────────────────────────────────────────────────────
 
   async _fetchPrices(mints) {
+    const out = {};
     try {
       const ids  = mints.join(',');
       const data = await this._get(`https://lite-api.jup.ag/price/v2?ids=${ids}`);
-      const out  = {};
       for (const [mint, info] of Object.entries(data?.data ?? {})) {
         if (info?.price) out[mint] = parseFloat(info.price);
       }
-      return out;
-    } catch { return {}; }
+    } catch { /* silencieux */ }
+
+    // Fallback DexScreener pour les mints sans prix (tokens inconnus de Jupiter)
+    const missing = mints.filter(m => !out[m]);
+    if (missing.length > 0) {
+      try {
+        const resp = await dex.getTokensByAddress(missing);
+        for (const pair of (resp?.pairs ?? [])) {
+          const mint = pair?.baseToken?.address;
+          if (mint && pair?.priceUsd && !out[mint]) {
+            out[mint] = parseFloat(pair.priceUsd);
+          }
+        }
+      } catch { /* silencieux */ }
+    }
+
+    return out;
   }
 
   _get(targetUrl) {
