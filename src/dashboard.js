@@ -636,18 +636,31 @@ class Dashboard {
   }
 
   _apiAgentChat(req, res) {
-    this._readBody(req, async ({ message, balance, positions }) => {
+    this._readBody(req, async ({ message }) => {
       if (!message || typeof message !== 'string' || !message.trim()) {
         this._jsonOk(res, { ok: false, error: 'Message vide' });
         return;
       }
       try {
-        const wl  = personalAgent.getState().watchlist;
-        const ctx = {
-          balance,
-          positions,
-          watching: (wl.tokens?.length || 0) + (wl.wallets?.length || 0),
-        };
+        // Le serveur injecte lui-même le contexte live — pas besoin que le frontend le passe
+        let balance   = null;
+        let positions = [];
+        if (this.trader?.isReady()) {
+          balance = await this.trader.getSolBalance().catch(() => null);
+          // Positions enrichies avec PnL si dispo
+          const raw    = Array.from(this.trader.positions?.values?.() || []);
+          const mints  = raw.map(p => p.tokenMint).filter(Boolean);
+          const prices = mints.length > 0 ? await this._fetchPrices(mints).catch(() => ({})) : {};
+          positions = raw.map(p => {
+            const cur    = prices[p.tokenMint] ?? null;
+            const pnlPct = p.entryPriceUsd && cur
+              ? ((cur - p.entryPriceUsd) / p.entryPriceUsd) * 100
+              : null;
+            return { ...p, currentPrice: cur, pnlPct };
+          });
+        }
+
+        const ctx   = { balance, positions };
         const reply = await personalAgent.chat(message.trim(), ctx);
         this._jsonOk(res, { ok: true, reply, ariaState: personalAgent.getState() });
       } catch (err) {
