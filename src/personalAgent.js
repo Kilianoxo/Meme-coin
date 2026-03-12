@@ -15,6 +15,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { createMessage, ask } = require('./anthropic');
+const dex  = require('./dexscreener');
 
 const DATA_PATH  = path.join(__dirname, '../data/agent.json');
 const MODEL      = 'claude-haiku-4-5-20251001';
@@ -50,6 +51,8 @@ class PersonalAgent {
     this.data        = this._load();
     this._notify     = null;     // fn(msg: string) → Telegram
     this._pushSSE    = null;     // fn(entry: object) → SSE dashboard
+    this._trader     = null;     // référence trader pour heartbeat
+    this._hbTimer    = null;     // setInterval heartbeat
   }
 
   /** Callback pour envoyer un message Telegram (haute priorité) */
@@ -57,6 +60,9 @@ class PersonalAgent {
 
   /** Callback pour pusher un événement SSE au dashboard */
   setSSECallback(fn)    { this._pushSSE = fn; }
+
+  /** Donne accès au trader pour la surveillance autonome */
+  setTrader(trader)     { this._trader = trader; }
 
   get name() { return this.data.name; }
 
@@ -99,8 +105,17 @@ class PersonalAgent {
     ];
     if (p.lessonsLearned.length > 0)
       lines.push(`Tes leçons récentes : ${p.lessonsLearned.slice(-3).join(' / ')}`);
-    if (ctx.balance    != null) lines.push(`Balance wallet : ${ctx.balance.toFixed(4)} SOL`);
-    if (ctx.positions  != null) lines.push(`${ctx.positions} position(s) ouverte(s)`);
+    if (ctx.balance   != null) lines.push(`Balance wallet : ${ctx.balance.toFixed(4)} SOL`);
+    if (ctx.positions != null) lines.push(`${ctx.positions} position(s) ouverte(s)`);
+    if (ctx.watching)          lines.push(`Watchlist : ${ctx.watching} token(s) / wallet(s) surveillé(s)`);
+    lines.push('');
+    lines.push(`IMPORTANT — tu as un système de surveillance actif qui tourne toutes les quelques minutes.`);
+    lines.push(`Tu PEUX et tu DOIS envoyer des messages de ta propre initiative si tu détectes quelque chose d'important :`);
+    lines.push(`- une position qui approche du stop-loss ou take-profit`);
+    lines.push(`- un token watchlist qui bouge fortement`);
+    lines.push(`- une série de pertes préoccupante`);
+    lines.push(`- n'importe quelle situation qui mérite l'attention du trader`);
+    lines.push(`Ces alertes proactives arrivent directement sur le dashboard et sur Telegram si urgentes.`);
     lines.push('');
     lines.push(`Règles : réponds en français, tutois l'utilisateur, sois concise (2-4 phrases sauf si analyse demandée).`);
     lines.push(`Tu as de vraies opinions. 1-2 emojis max. Si une action te semble risquée, dis-le franchement.`);
@@ -268,9 +283,8 @@ class PersonalAgent {
       // Détecte automatiquement les adresses Solana pour auto-ajout watchlist
       this._autoWatch(userMessage);
 
-      // Push SSE en temps réel vers le dashboard
-      if (this._pushSSE)
-        this._pushSSE({ type: 'aria_response', content: text, timestamp: Date.now() });
+      // NE PAS pusher via SSE ici : le frontend reçoit déjà la réponse via HTTP
+      // Le SSE est réservé aux messages PROACTIFS (sendMessage)
 
       return text;
     } catch (err) {
@@ -312,6 +326,104 @@ class PersonalAgent {
 
     if (priority === 'high' && this._notify)
       this._notify(`🤖 <b>ARIA</b>\n${content}`);
+  }
+
+  // ─── Heartbeat — surveillance autonome ────────────────────────────────────
+
+  /**
+   * Lance la boucle de surveillance proactive.
+   * - Toutes les 3 min : contrôle positions (SL/TP approche)
+   * - Toutes les 5 min : contrôle watchlist tokens (prix)
+   * Appelle Claude seulement si quelque chose mérite une alerte.
+   */
+  startHeartbeat() {
+    if (this._hbTimer) return;
+    console.log('[ARIA] Surveillance autonome démarrée (heartbeat 3 min)');
+
+    let tick = 0;
+    this._hbTimer = setInterval(async () => {
+      tick++;
+      try {
+        await this._checkPositions();
+        if (tick % 2 === 0) await this._checkWatchlist(); // toutes les ~6 min
+      } catch (err) {
+        console.error('[ARIA] Erreur heartbeat:', err.message);
+      }
+    }, 3 * 60 * 1000);
+  }
+
+  /** Vérifie les positions ouvertes — alerte si SL ou TP proche */
+  async _checkPositions() {
+    if (!this._trader) return;
+    const positions = Array.from(this._trader.positions?.values?.() || []);
+    if (positions.length === 0) return;
+
+    const alerts = [];
+    for (const pos of positions) {
+      if (!pos.entryPriceUsd || !pos.currentPrice) continue;
+      const pnlPct = ((pos.currentPrice - pos.entryPriceUsd) / pos.entryPriceUsd) * 100;
+      const sl     = pos.stopLossPct  || 20;
+      const tp     = pos.takeProfitPct || 50;
+      const sym    = pos.symbol || pos.tokenMint?.slice(0, 6) || '?';
+
+      // SL à moins de 5% → alerte haute priorité
+      if (pnlPct < 0 && Math.abs(pnlPct) >= sl * 0.85) {
+        alerts.push({ sym, pnlPct, type: 'SL', priority: 'high' });
+      }
+      // TP à moins de 10% → alerte normale
+      else if (pnlPct > 0 && pnlPct >= tp * 0.85) {
+        alerts.push({ sym, pnlPct, type: 'TP', priority: 'normal' });
+      }
+    }
+
+    for (const a of alerts) {
+      const sign    = a.pnlPct >= 0 ? '+' : '';
+      const emoji   = a.type === 'SL' ? '🚨' : '🎯';
+      const content = a.type === 'SL'
+        ? `${emoji} $${a.sym} approche du stop-loss (${sign}${a.pnlPct.toFixed(1)}%). Je surveille de près.`
+        : `${emoji} $${a.sym} approche du take-profit (${sign}${a.pnlPct.toFixed(1)}%). Tu veux sécuriser ?`;
+      await this.sendMessage(content, a.priority);
+    }
+  }
+
+  /** Vérifie les tokens de la watchlist — alerte si gros mouvement de prix */
+  async _checkWatchlist() {
+    const tokens = this.data.watchlist.tokens;
+    if (tokens.length === 0) return;
+
+    for (const tok of tokens) {
+      try {
+        const pairs = await dex.getTokenPairs('solana', tok.address);
+        if (!pairs || pairs.length === 0) continue;
+        const pair     = pairs[0];
+        const price    = parseFloat(pair.priceUsd || 0);
+        const ch1h     = pair.priceChange?.h1  || 0;
+        const ch24h    = pair.priceChange?.h24 || 0;
+        const lastPrice = tok.lastPrice;
+
+        // Met à jour le dernier prix connu
+        tok.lastPrice = price;
+        this._save();
+
+        // Alerte si variation 1h > ±15%
+        if (Math.abs(ch1h) >= 15) {
+          const dir     = ch1h > 0 ? '🚀 +' : '📉 ';
+          const sym     = tok.symbol || pair.baseToken?.symbol || tok.address.slice(0, 6);
+          const priority = Math.abs(ch1h) >= 25 ? 'high' : 'normal';
+          await this.sendMessage(
+            `${dir}${ch1h.toFixed(1)}% sur $${sym} en 1h (watchlist). Vol 24h: ${ch24h.toFixed(1)}%.`,
+            priority
+          );
+        }
+        // Alerte si mouvement de prix depuis le dernier check > 20% (par rapport au prix enregistré)
+        else if (lastPrice && Math.abs((price - lastPrice) / lastPrice) >= 0.20) {
+          const pct  = ((price - lastPrice) / lastPrice * 100).toFixed(1);
+          const sym  = tok.symbol || pair.baseToken?.symbol || tok.address.slice(0, 6);
+          const dir  = price > lastPrice ? '📈 +' : '📉 ';
+          await this.sendMessage(`${dir}${pct}% sur $${sym} depuis mon dernier check (watchlist).`, 'normal');
+        }
+      } catch { /* token non trouvé — silencieux */ }
+    }
   }
 
   // ─── Watchlist ─────────────────────────────────────────────────────────────

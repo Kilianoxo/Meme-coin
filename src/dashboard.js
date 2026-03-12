@@ -642,7 +642,12 @@ class Dashboard {
         return;
       }
       try {
-        const ctx   = { balance, positions };
+        const wl  = personalAgent.getState().watchlist;
+        const ctx = {
+          balance,
+          positions,
+          watching: (wl.tokens?.length || 0) + (wl.wallets?.length || 0),
+        };
         const reply = await personalAgent.chat(message.trim(), ctx);
         this._jsonOk(res, { ok: true, reply, ariaState: personalAgent.getState() });
       } catch (err) {
