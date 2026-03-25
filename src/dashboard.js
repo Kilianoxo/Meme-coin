@@ -23,7 +23,7 @@ const url   = require('url');
 const state         = require('./state');
 const agentMemory   = require('./agentMemory');
 const personalAgent = require('./personalAgent');
-const { agentBus, runDebate } = require('./agents');
+const { agentBus } = require('./agents');
 const dex      = require('./dexscreener');
 const birdeye  = require('./birdeye');
 const rugcheck = require('./rugcheck');
@@ -603,18 +603,12 @@ class Dashboard {
           rugcheck.getLpLockData(addr),
         ]);
 
-        const debate = await runDebate(pair, security, rugReport, overview, lpLock);
-
-        if (!debate) {
-          this._pushChat({ type: 'system', content: `⏸️ Débats IA désactivés — débat ignoré.`, timestamp: Date.now() });
-          this._jsonOk(res, { ok: false, error: 'Débats IA désactivés' });
-          return;
-        }
+        const debate = await personalAgent.analyzeToken(pair, security, rugReport, overview, lpLock);
 
         const sym = pair.baseToken?.symbol || addr.slice(0, 6);
         this._pushChat({
           type:      'system',
-          content:   `📊 Débat terminé — <b>$${sym}</b> → ${debate.decision?.decision} (${debate.decision?.score ?? '?'}/100)`,
+          content:   `📊 ARIA — <b>$${sym}</b> → ${debate.decision?.decision} (${debate.decision?.score ?? '?'}/100)`,
           timestamp: Date.now(),
         });
 

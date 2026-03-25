@@ -364,7 +364,7 @@ class Trader {
     const pos = this.positions.get(tokenMint);
     const solReceived = parseFloat(quote.outAmount) / LAMPORTS_PER_SOL;
     const pnlSol = pos ? solReceived - pos.solSpent : null;
-    const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol };
+    const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol, exitReason };
     this.history.push(trade);
 
     if (pct === 100) {

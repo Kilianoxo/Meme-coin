@@ -114,8 +114,10 @@ class PersonalAgent {
     // Patterns récurrents
     const patterns  = tokenHistory.getTopRecurring?.(5) || [];
 
-    // Leçons de l'ancienne mémoire d'agents
-    const memLessons = agentMemory.getLessons?.(5) || [];
+    // Leçons de l'ancienne mémoire d'agents (objets {symbol, decision, reasoning, outcome...})
+    const memLessons = (agentMemory.getLessons?.(5) || [])
+      .filter(l => l.outcome && l.outcome !== 'RUNNING')
+      .map(l => `${l.symbol} ${l.decision} → ${l.outcome}${l.pnlPct != null ? ` (${l.pnlPct > 0 ? '+' : ''}${l.pnlPct.toFixed(0)}%)` : ''}`);
 
     return {
       ...extra,
@@ -219,7 +221,7 @@ class PersonalAgent {
     ].filter(Boolean);
     if (allLessons.length > 0) {
       lines.push(`=== LEÇONS MÉMORISÉES ===`);
-      allLessons.forEach(l => lines.push(`  · ${l}`));
+      allLessons.forEach(l => lines.push(`  · ${typeof l === 'string' ? l : JSON.stringify(l)}`));
       lines.push(``);
     }
 
