@@ -9,7 +9,8 @@ Le propriétaire trade aussi manuellement sur GMGN — positions importables via
 ## Architecture
 - `index.js` — Point d'entrée, charge le wallet et démarre Bot + Scanner + Dashboard + Watchdog + ARIA
 - `src/bot.js` — Interface Telegram (commandes + callbacks + délégation autonomie ARIA)
-- `src/scanner.js` — Détecte les tokens (DexScreener top-boosted + GeckoTerminal trending UNIQUEMENT — Pump.fun supprimé)
+- `src/scanner.js` — Détecte les tokens (DexScreener top-boosted + GeckoTerminal trending + GMGN trending si configuré — Pump.fun supprimé)
+- `src/gmgn.js` — Client GMGN via gmgn-cli (smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite) — optionnel, dégradé propre sans clé
 - `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop, persistance disque
 - `src/personalAgent.js` — ARIA : analyse, chat, autonomie (achat/vente auto), journal, apprentissage, heartbeat
 - `src/paperTrader.js` — Simulation sans risque (positions fictives, mêmes analyses)
@@ -43,6 +44,17 @@ gestion active des positions (~9 min, cooldown 20 min/position, décisions HOLD/
 apprentissage (~30 min), rapport quotidien à 20h Paris.
 Tout est journalisé dans agent_journal.json + push SSE `aria_journal`.
 
+## Intégration GMGN (méthodo du demo officiel GMGNAI/skillmarket-demos)
+- gates durs déterministes AVANT le LLM : honeypot, mint non abandonnée, taxes >10%,
+  rug ratio >60%, bundlers >30%, dev >10%, top10 >40%, consensus smart money+KOL < 1
+- verdict momentum "golden runner vs bag-holder" (pur code) : 1h+5m en baisse → reject ;
+  buy ratio <42% → reject (distribution) ; ≥50% et 5m qui tient → pass même si déjà haut
+- monitoring de fuite des positions (heartbeat, PUR CODE, jamais de LLM) : snapshot sécurité
+  à l'entrée vs actuel — honeypot apparu (+60), mint retrouvée (+55), top10 +15pts (+22) ;
+  sévérité ≥70 → vente d'urgence (liveTrading) ou alerte critique. exitReason: ESCAPE_SIGNAL
+- anti prompt-injection : les noms de tokens sont désinfectés (sanitizeName) avant tout prompt LLM
+- Les données `_gmgn` (smart money, KOL, snipers, buy ratio, verdict) enrichissent le prompt d'ARIA
+
 ## Commandes Telegram implémentées
 /start, /help, /status, /balance, /scan, /positions, /history
 /auto — Toggle du trading réel autonome d'ARIA
@@ -67,6 +79,8 @@ WALLET_PRIVATE_KEY (optionnel — trading désactivé sans)
 SOLANA_RPC_URL (défaut: mainnet-beta public)
 BIRDEYE_API_KEY (optionnel — sécurité on-chain désactivée sans)
 JUPITER_API_KEY (optionnel)
+GMGN_API_KEY (optionnel — nécessite npm i -g gmgn-cli ; aussi lu depuis ~/.config/gmgn/.env)
+GMGN_TRENDING_ARGS, GMGN_MIN_CONFLUENCE (optionnels — tuning source GMGN)
 MIN_LIQUIDITY_USD (défaut: 5000), MIN_VOLUME_24H_USD (défaut: 20000), MIN_MARKET_CAP_USD (défaut: 30000)
 MIN_TOKEN_AGE_HOURS (défaut: 6), MAX_TOKEN_AGE_HOURS (défaut: 72)
 MAX_POSITION_SOL (défaut: 0.1)

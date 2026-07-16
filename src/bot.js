@@ -247,6 +247,16 @@ class Bot {
       msg += `\n🔄 <b>RÉCIDIVISTE</b> — vu <b>${rec.sightings}x</b>  |  ${dayStr}${peakStr}\n`;
     }
 
+    // Données GMGN (smart money, KOL, buy ratio) si le token vient de cette source
+    const g = token._gmgn;
+    if (g) {
+      msg += `\n🧠 <b>GMGN</b>: ${g.smartDegen} smart money + ${g.renowned} KOL`;
+      if (g.sniper > 0) msg += `  |  🎯 ${g.sniper} snipers`;
+      msg += `  |  🛒 buy ratio ${(g.buyRatio * 100).toFixed(0)}%`;
+      if (g.verdict) msg += `\n  ↳ momentum: <b>${g.verdict.verdict.toUpperCase()}</b> (${this._esc(g.verdict.crowd)})`;
+      msg += '\n';
+    }
+
     // Sécurité condensée
     const sec = formatSecurity(debate.security, debate.overview);
     const rug = rugcheck.formatReport(debate.rugReport);

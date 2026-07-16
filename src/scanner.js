@@ -1,7 +1,8 @@
 /**
- * Scanner de tokens — Interroge DexScreener toutes les 30s
+ * Scanner de tokens — Interroge les sources toutes les 30s
  * Émet des événements: 'candidate' (token brut) et 'debate' (résultat IA)
- * Sources: DexScreener top-boosted + GeckoTerminal trending uniquement
+ * Sources: DexScreener top-boosted + GeckoTerminal trending
+ *          + GMGN trending (si gmgn-cli + GMGN_API_KEY configurés)
  * Pump.fun désactivé — trop aléatoire, analyse impossible sur des tokens de quelques minutes
  */
 
@@ -10,6 +11,7 @@ const dex           = require('./dexscreener');
 const personalAgent = require('./personalAgent');
 const birdeye       = require('./birdeye');
 const gecko         = require('./geckoterminal');
+const gmgn          = require('./gmgn');
 const rugcheck      = require('./rugcheck');
 const tokenHistory  = require('./tokenHistory');
 const state         = require('./state');
@@ -187,24 +189,64 @@ class Scanner extends EventEmitter {
     return results;
   }
 
+  /**
+   * Scanne le trending GMGN (si gmgn-cli + clé API disponibles).
+   * Les lignes portent des champs de due-diligence riches (smart money, KOL,
+   * bundlers, taxes…) → gates durs GMGN appliqués AVANT les filtres génériques.
+   * skipAgeFilter = true : le filtre MIN d'âge s'applique quand même.
+   */
+  async _scanGmgnTrending() {
+    if (!(await gmgn.isAvailable())) return [];
+
+    let rows = [];
+    try {
+      rows = await gmgn.getTrending();
+    } catch (err) {
+      console.error('[Scanner] Erreur GMGN trending:', err.message);
+      return [];
+    }
+
+    const results = [];
+    for (const pair of rows) {
+      const addr = pair.baseToken?.address;
+      if (!addr || this._isSeen(addr)) continue;
+
+      // Gates durs GMGN (honeypot, mint, taxes, bundlers, dev, top10, consensus)
+      const gate = gmgn.hardGates(pair._gmgn);
+      if (!gate.ok) {
+        console.log(`[Scanner] ⛔ ${pair.baseToken.symbol} — ${gate.reason}`);
+        this._markSeen(addr);
+        continue;
+      }
+
+      if (this._passesFilters(pair, true)) {
+        results.push(pair);
+        this._markSeen(addr);
+      }
+    }
+    return results;
+  }
+
   /** Un cycle de scan complet */
   async scan() {
     this.scanCount++;
     console.log(`[Scanner] Scan #${this.scanCount} (${new Date().toLocaleTimeString('fr-FR')})`);
 
     let candidates = [];
-    let trending = [], topBoosted = [];
+    let trending = [], topBoosted = [], gmgnTrending = [];
     try {
-      // Deux sources uniquement : trending + top-boosted
-      // Les deux ignorent le filtre d'âge MAX (tokens établis avec momentum)
-      // mais le filtre MIN s'applique partout (ignore les < 1h)
-      [trending, topBoosted] = await Promise.all([
+      // Trois sources : GMGN trending (si configuré) + GeckoTerminal + top-boosted
+      // Toutes ignorent le filtre d'âge MAX (tokens établis avec momentum)
+      // mais le filtre MIN s'applique partout
+      [gmgnTrending, trending, topBoosted] = await Promise.all([
+        this._scanGmgnTrending(),
         this._scanTrending(),
         this._scanTopBoosted(),
       ]);
-      // Déduplique par adresse de token (les 2 sources peuvent se chevaucher)
+      // Déduplique par adresse — GMGN en premier : ses paires portent les
+      // données riches (_gmgn) et doivent gagner en cas de chevauchement
       const seen = new Set();
-      for (const pair of [...trending, ...topBoosted]) {
+      for (const pair of [...gmgnTrending, ...trending, ...topBoosted]) {
         const addr = pair.baseToken?.address;
         if (addr && !seen.has(addr)) {
           seen.add(addr);
@@ -221,7 +263,8 @@ class Scanner extends EventEmitter {
     candidates.sort((a, b) => this._relevanceScore(b) - this._relevanceScore(a));
     const toAnalyze = candidates.slice(0, MAX_CANDIDATES_PER_SCAN);
 
-    console.log(`[Scanner] ${candidates.length} candidat(s) [${trending.length} trending, ${topBoosted.length} top-boosted] — top ${toAnalyze.length} en débat IA`);
+    const srcStr = `${gmgnTrending.length} gmgn, ${trending.length} trending, ${topBoosted.length} top-boosted`;
+    console.log(`[Scanner] ${candidates.length} candidat(s) [${srcStr}] — top ${toAnalyze.length} en débat IA`);
 
     for (const token of toAnalyze) {
       // Émet immédiatement le candidat (pour l'alerte Telegram brute)
