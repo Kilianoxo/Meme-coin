@@ -10,11 +10,13 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --bg:      #0d1117;
+      --bg2:     #10161d;
       --card:    #161b22;
       --card2:   #1c2128;
       --border:  #21262d;
       --txt:     #e6edf3;
       --txt2:    #7d8590;
+      --txt-muted: #7d8590;
       --green:   #3fb950;
       --red:     #f85149;
       --blue:    #58a6ff;
@@ -71,6 +73,136 @@
     .watch-item:last-child { border-bottom: none; }
     .btn-rm { background: none; border: none; color: var(--red); cursor: pointer; font-size: 14px; padding: 0 2px; opacity: .6; }
     .btn-rm:hover { opacity: 1; }
+
+    /* ── Boutons primaires (chat ARIA, watchlist) ────────────────────── */
+    .btn-primary {
+      background: var(--blue);
+      border: 1px solid var(--blue);
+      color: #0d1117;
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-primary:hover { opacity: .85; }
+    .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── ARIA autonomie ──────────────────────────────────────────────── */
+    .auto-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 0;
+      font-size: 12px;
+    }
+    .auto-row + .auto-row { border-top: 1px solid var(--border); }
+    .auto-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--txt);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 4px 8px;
+      width: 70px;
+      text-align: right;
+    }
+    .auto-input:focus { outline: none; border-color: var(--blue); }
+    .auto-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      letter-spacing: .4px;
+    }
+    .auto-badge.on   { background: rgba(63,185,80,.15);  color: var(--green); }
+    .auto-badge.off  { background: rgba(125,133,144,.15); color: var(--txt2); }
+    .auto-badge.live { background: rgba(248,81,73,.15);  color: var(--red); }
+    .mini-toggle {
+      position: relative;
+      display: inline-block;
+      width: 34px; height: 19px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .mini-toggle input { opacity: 0; width: 0; height: 0; }
+    .mini-toggle .track {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 19px;
+      transition: background .2s;
+    }
+    .mini-toggle input:checked + .track { background: var(--green); }
+    .mini-toggle input:checked + .track.danger { background: var(--red); }
+    .mini-toggle .thumb {
+      position: absolute;
+      top: 2.5px; left: 3px;
+      width: 14px; height: 14px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform .2s;
+      pointer-events: none;
+    }
+    .mini-toggle input:checked ~ .thumb { transform: translateX(14px); }
+
+    /* ── Journal d'activité ARIA ─────────────────────────────────────── */
+    .journal-feed {
+      max-height: 340px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .journal-feed::-webkit-scrollbar { width: 5px; }
+    .journal-feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .journal-item {
+      display: flex;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      line-height: 1.5;
+      animation: fadeIn .25s ease;
+    }
+    .journal-item:last-child { border-bottom: none; }
+    .journal-icon { flex-shrink: 0; font-size: 13px; }
+    .journal-detail { flex: 1; min-width: 0; color: var(--txt); word-break: break-word; }
+    .journal-ts { color: var(--txt2); font-size: 10px; white-space: nowrap; }
+    .journal-item.j-BUY    .journal-detail { color: var(--green); }
+    .journal-item.j-SELL   .journal-detail { color: var(--red); }
+    .journal-item.j-PAUSE  .journal-detail { color: var(--orange); }
+    .journal-item.j-ERROR  .journal-detail { color: var(--red); }
+
+    /* ── Header : chip ARIA ──────────────────────────────────────────── */
+    .aria-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--txt2);
+    }
+    .aria-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--txt2); }
+    .aria-chip.on   .dot { background: var(--green); animation: pulse 2s ease-in-out infinite; }
+    .aria-chip.live .dot { background: var(--red);   animation: pulse 2s ease-in-out infinite; }
+
+    /* ── ARIA layout responsive ──────────────────────────────────────── */
+    .aria-grid {
+      display: grid;
+      grid-template-columns: 280px 1fr 300px;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 1100px) {
+      .aria-grid { grid-template-columns: 1fr; }
+      .aria-grid .aria-chat-col { height: 60vh !important; }
+    }
     /* ── Tab navigation ──────────────────────────────────────────────── */
     .tab-nav {
       display: flex;
@@ -627,6 +759,10 @@
 <header class="header">
   <h1>🪙 Meme Coin Bot</h1>
   <div class="header-right">
+    <span class="aria-chip" id="ariaChip" title="État de l'autonomie ARIA">
+      <span class="dot"></span>
+      <span id="ariaChipText">ARIA…</span>
+    </span>
     <span>
       <span class="status-dot" id="sDot"></span>
       <span id="sText" style="margin-left:6px">Connexion…</span>
@@ -787,21 +923,6 @@
       </div>
     </div>
 
-    <!-- ── Évolution holders ─────────────────────────────────────────────── -->
-    <div class="section">
-      <div class="sec-head"><h2>👥 Évolution des Holders</h2></div>
-      <div class="sec-body">
-        <div class="holder-ph">
-          <div class="icon">📡</div>
-          <strong>Tracking continu des holders</strong><br>
-          Le bot enregistre le nombre de holders au moment de chaque scan.<br>
-          Les données s'afficheront ici au fil des positions ouvertes.<br>
-          <br>
-          <span style="font-size:12px">Requiert <code>BIRDEYE_API_KEY</code> — sécurité on-chain activée.</span>
-        </div>
-      </div>
-    </div>
-
     <!-- ── Historique trades ─────────────────────────────────────────────── -->
     <div class="section">
       <div class="sec-head">
@@ -817,11 +938,12 @@
               <th>Action</th>
               <th>SOL</th>
               <th>PnL</th>
+              <th>Raison</th>
               <th>Résultat</th>
             </tr>
           </thead>
           <tbody id="histBody">
-            <tr><td colspan="6" class="empty">Aucun trade dans l'historique</td></tr>
+            <tr><td colspan="7" class="empty">Aucun trade dans l'historique</td></tr>
           </tbody>
         </table>
       </div>
@@ -847,9 +969,9 @@
        PAGE : ARIA — Agent IA Personnel
   ═══════════════════════════════════════════════════════════════════════ -->
   <div class="tab-page" id="page-aria">
-    <div style="display:grid; grid-template-columns:260px 1fr 280px; gap:16px; align-items:start">
+    <div class="aria-grid">
 
-      <!-- ── Colonne gauche : Personnalité ─────────────────────────────── -->
+      <!-- ── Colonne gauche : Personnalité + Autonomie ─────────────────── -->
       <div style="display:flex; flex-direction:column; gap:12px">
 
         <div class="section" style="margin-bottom:0">
@@ -910,10 +1032,68 @@
           </div>
         </div>
 
+        <!-- Autonomie -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head">
+            <h2>⚡ Autonomie</h2>
+            <span class="auto-badge off" id="autoBadge">—</span>
+          </div>
+          <div class="sec-body" style="padding:8px 16px 14px">
+
+            <div class="auto-row">
+              <span>Autonomie (signaux, watchlist, gestion)</span>
+              <label class="mini-toggle">
+                <input type="checkbox" id="autoEnabled" onchange="saveAutonomy()">
+                <span class="track"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+
+            <div class="auto-row">
+              <span class="c-red" style="font-weight:600">Trading réel (achète/vend seule)</span>
+              <label class="mini-toggle">
+                <input type="checkbox" id="autoLive" onchange="confirmLiveTrading(this)">
+                <span class="track danger"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+
+            <div class="auto-row">
+              <span class="c-muted">Score min BUY auto</span>
+              <input class="auto-input" id="autoMinScore" type="number" min="40" max="95" step="1">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted">Confiance min /10</span>
+              <input class="auto-input" id="autoMinConf" type="number" min="1" max="10" step="1">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted">SOL max / trade</span>
+              <input class="auto-input" id="autoMaxSol" type="number" min="0.001" max="10" step="0.01">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted">Positions max</span>
+              <input class="auto-input" id="autoMaxPos" type="number" min="1" max="10" step="1">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted">Perte max / jour (SOL)</span>
+              <input class="auto-input" id="autoMaxLoss" type="number" min="0.01" max="50" step="0.05">
+            </div>
+
+            <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
+              <button class="btn-primary" style="padding:6px 14px; font-size:12px" onclick="saveAutonomy()">💾 Sauvegarder</button>
+              <span id="autoSaveMsg" style="font-size:11px"></span>
+            </div>
+            <div class="c-muted" style="font-size:10px; margin-top:8px; line-height:1.5">
+              Trading réel OFF : ARIA envoie les signaux BUY sur Telegram avec confirmation.<br>
+              ON : elle achète, gère et vend seule dans les plafonds ci-dessus.
+            </div>
+          </div>
+        </div>
+
       </div><!-- /colonne gauche -->
 
       <!-- ── Colonne centre : Chat ──────────────────────────────────────── -->
-      <div class="section" style="margin-bottom:0; display:flex; flex-direction:column; height:calc(100vh - 160px)">
+      <div class="section aria-chat-col" style="margin-bottom:0; display:flex; flex-direction:column; height:calc(100vh - 160px)">
         <div class="sec-head"><h2>💬 Conversation</h2></div>
         <div id="ariaChat" style="flex:1; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:10px; min-height:0"></div>
         <div style="padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px">
@@ -955,6 +1135,21 @@
               <button onclick="addWatchItem('wallet')" class="btn-primary" style="padding:5px 8px; font-size:11px">+</button>
             </div>
             <div id="watchWalletList"><div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun wallet suivi</div></div>
+          </div>
+        </div>
+
+        <!-- Journal d'activité autonome -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head">
+            <h2>📜 Journal d'activité</h2>
+            <span class="c-muted" id="journalCount" style="font-size:11px">—</span>
+          </div>
+          <div class="sec-body" style="padding:4px 14px 10px">
+            <div class="journal-feed" id="journalFeed">
+              <div class="c-muted" style="font-size:11px; text-align:center; padding:14px">
+                Les actions autonomes d'ARIA<br>(achats, ventes, alertes, apprentissage)<br>apparaîtront ici.
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1245,7 +1440,7 @@
             </div>
           </div>
           <div style="margin-top:12px; font-size:12px; color:var(--txt2); line-height:1.7">
-            <strong style="color:var(--yellow)">Mode agressif</strong> : seuil d'entrée à <span id="ppMinScore">60</span>/100 (vs 70 pour le vrai bot).<br>
+            <strong style="color:var(--yellow)">Mode agressif</strong> : seuil d'entrée à <span id="ppMinScore">60</span>/100 (vs le seuil autonomie d'ARIA pour le vrai wallet).<br>
             Utilise les mêmes analyses IA — seulement le seuil et les paramètres diffèrent.
           </div>
         </div>
@@ -1653,9 +1848,14 @@ function renderHistory(history) {
 
   const tbody = document.getElementById('histBody');
   if (history.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucun trade dans l\'historique</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucun trade dans l\'historique</td></tr>';
     return;
   }
+
+  const reasonMap = {
+    STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 Take-Profit', TRAILING_STOP: '📐 Trailing',
+    MANUAL: '👆 Manuel', ARIA_DECISION: '🤖 ARIA',
+  };
 
   tbody.innerHTML = history.map(h => {
     const isSell = h.action === 'SELL';
@@ -1668,6 +1868,9 @@ function renderHistory(history) {
     const badge  = isSell
       ? '<span class="badge b-sell">SELL</span>'
       : '<span class="badge b-buy">BUY</span>';
+    const reason = isSell
+      ? (reasonMap[h.exitReason] || esc(h.exitReason || '—'))
+      : (h.imported ? '📥 Importé' : '—');
     const result = isSell && h.pnlSol != null
       ? (h.pnlSol > 0
           ? '<span class="badge b-win">✅ WIN</span>'
@@ -1681,6 +1884,7 @@ function renderHistory(history) {
         <td>${badge}</td>
         <td class="c-muted">${sol}</td>
         <td>${pnlStr}</td>
+        <td class="c-muted">${reason}</td>
         <td>${result}</td>
       </tr>`;
   }).join('');
@@ -1866,6 +2070,11 @@ function startSSE() {
         handleAriaSSE(msg);
         return;
       }
+      // Journal d'activité autonome — live
+      if (msg.type === 'aria_journal') {
+        prependJournalEntry(msg.entry);
+        return;
+      }
       if (activePage === 'floor') {
         appendChatMessage(msg);
         // Met aussi à jour les sections si un débat vient de finir
@@ -1878,8 +2087,8 @@ function startSSE() {
   sseSource.onerror = () => {
     sseSource.close();
     sseSource = null;
-    // Reconnexion automatique dans 5s
-    setTimeout(() => { if (activePage === 'floor' || activePage === 'aria') startSSE(); }, 5000);
+    // Reconnexion automatique dans 5s (toujours — le journal et les alertes sont globaux)
+    setTimeout(() => startSSE(), 5000);
   };
 }
 
@@ -2058,9 +2267,141 @@ async function fetchAgent() {
     const data = await r.json();
     renderAriaState(data.state);
     renderAriaConversation(data.conversation);
+    renderAutonomy(data.autonomy);
+    renderJournal(data.journal);
   } catch (err) {
     console.error('fetchAgent error:', err);
   }
+}
+
+// ─── Autonomie ──────────────────────────────────────────────────────────────
+
+let currentAutonomy = null;
+
+function renderAutonomy(a) {
+  if (!a) return;
+  currentAutonomy = a;
+
+  document.getElementById('autoEnabled').checked = a.enabled;
+  document.getElementById('autoLive').checked    = a.liveTrading;
+  document.getElementById('autoMinScore').value  = a.minScore;
+  document.getElementById('autoMinConf').value   = a.minConfidence;
+  document.getElementById('autoMaxSol').value    = a.maxSolPerTrade;
+  document.getElementById('autoMaxPos').value    = a.maxOpenPositions;
+  document.getElementById('autoMaxLoss').value   = a.maxDailyLossSol;
+
+  const badge = document.getElementById('autoBadge');
+  if (a.liveTrading && a.enabled) {
+    badge.textContent = '🔴 TRADING RÉEL';
+    badge.className   = 'auto-badge live';
+  } else if (a.enabled) {
+    badge.textContent = '✅ ACTIVE (signaux)';
+    badge.className   = 'auto-badge on';
+  } else {
+    badge.textContent = 'OFF';
+    badge.className   = 'auto-badge off';
+  }
+
+  updateAriaChip(a);
+}
+
+function updateAriaChip(a) {
+  const chip = document.getElementById('ariaChip');
+  const txt  = document.getElementById('ariaChipText');
+  if (!chip || !a) return;
+  if (a.liveTrading && a.enabled) {
+    chip.className = 'aria-chip live';
+    txt.textContent = 'ARIA · trading réel';
+  } else if (a.enabled) {
+    chip.className = 'aria-chip on';
+    txt.textContent = 'ARIA · autonome';
+  } else {
+    chip.className = 'aria-chip';
+    txt.textContent = 'ARIA · off';
+  }
+}
+
+function confirmLiveTrading(cb) {
+  if (cb.checked) {
+    const ok = confirm(
+      '⚠️ TRADING RÉEL\n\nARIA va acheter et vendre SEULE avec les vrais SOL de ton wallet, ' +
+      'dans les plafonds configurés.\n\nActiver ?'
+    );
+    if (!ok) { cb.checked = false; return; }
+  }
+  saveAutonomy();
+}
+
+async function saveAutonomy() {
+  const patch = {
+    enabled:          document.getElementById('autoEnabled').checked,
+    liveTrading:      document.getElementById('autoLive').checked,
+    minScore:         parseFloat(document.getElementById('autoMinScore').value),
+    minConfidence:    parseFloat(document.getElementById('autoMinConf').value),
+    maxSolPerTrade:   parseFloat(document.getElementById('autoMaxSol').value),
+    maxOpenPositions: parseFloat(document.getElementById('autoMaxPos').value),
+    maxDailyLossSol:  parseFloat(document.getElementById('autoMaxLoss').value),
+  };
+  const msg = document.getElementById('autoSaveMsg');
+  try {
+    const r = await fetch('/api/agent/autonomy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      renderAutonomy(d.autonomy);
+      msg.textContent = '✅ Sauvegardé';
+      msg.className   = 'c-green';
+    } else {
+      msg.textContent = '❌ ' + (d.error || 'Erreur');
+      msg.className   = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className   = 'c-red';
+  }
+  setTimeout(() => { msg.textContent = ''; }, 2500);
+}
+
+// ─── Journal d'activité ─────────────────────────────────────────────────────
+
+const JOURNAL_ICONS = {
+  SIGNAL: '📡', BUY: '🟢', SELL: '🔴', ADJUST: '🛠', WATCHLIST: '👁',
+  ALERT: '🔔', REPORT: '📊', LEARN: '📚', PAUSE: '⏸', CONFIG: '⚙️', ERROR: '❌',
+};
+
+function journalItemHtml(e) {
+  const icon = JOURNAL_ICONS[e.type] || '·';
+  const ts   = new Date(e.ts).toLocaleString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  return `<div class="journal-item j-${esc(e.type)}">
+    <span class="journal-icon">${icon}</span>
+    <span class="journal-detail">${esc(e.detail)}</span>
+    <span class="journal-ts">${ts}</span>
+  </div>`;
+}
+
+function renderJournal(journal) {
+  const feed  = document.getElementById('journalFeed');
+  const count = document.getElementById('journalCount');
+  if (!feed) return;
+  if (!journal || journal.length === 0) {
+    feed.innerHTML = `<div class="c-muted" style="font-size:11px; text-align:center; padding:14px">
+      Les actions autonomes d'ARIA<br>(achats, ventes, alertes, apprentissage)<br>apparaîtront ici.
+    </div>`;
+    if (count) count.textContent = '0 action';
+    return;
+  }
+  feed.innerHTML = journal.map(journalItemHtml).join('');
+  if (count) count.textContent = journal.length + ' action' + (journal.length > 1 ? 's' : '');
+}
+
+function prependJournalEntry(entry) {
+  const feed = document.getElementById('journalFeed');
+  if (!feed) return;
+  if (feed.querySelector('.c-muted')) feed.innerHTML = '';
+  feed.insertAdjacentHTML('afterbegin', journalItemHtml(entry));
 }
 
 function renderAriaState(s) {
@@ -2128,6 +2469,7 @@ function renderAriaWatchlist(wl) {
       <div class="watch-item">
         <div>
           <span style="font-weight:600">${esc(t.symbol || '?')}</span>
+          ${t.auto ? '<span title="Ajouté automatiquement par ARIA" style="font-size:10px">🤖</span>' : ''}
           <span class="c-muted" style="margin-left:4px">${esc(t.address.slice(0,6))}…</span>
           ${t.reason ? `<div class="c-muted" style="font-size:10px">${esc(t.reason)}</div>` : ''}
         </div>
@@ -2631,7 +2973,10 @@ async function manualBuyPaper() {
 initCharts();
 initPaperCharts();
 fetchData();
+fetchAgent();      // état ARIA + autonomie + journal dès le chargement
+startSSE();        // alertes proactives + journal en temps réel sur tous les onglets
 setInterval(fetchData, 15_000);
+setInterval(() => { if (activePage === 'aria') fetchAgent(); }, 30_000);
 
 // Charge le paper trading quand on clique sur l'onglet
 document.querySelector('[data-page="paper"]').addEventListener('click', () => {

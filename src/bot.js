@@ -17,7 +17,6 @@
 
 const { Telegraf, Markup } = require('telegraf');
 const dex           = require('./dexscreener');
-const { runDebate }  = require('./agents');
 const personalAgent  = require('./personalAgent');
 const { formatSecurity } = require('./birdeye');
 const rugcheck      = require('./rugcheck');
@@ -31,7 +30,6 @@ class Bot {
     this.trader = trader;
     this.scanner = scanner;
     this.adminId = parseInt(process.env.TELEGRAM_ADMIN_ID, 10);
-    this.autoTrade = false;
     this.maxPositionSol = parseFloat(process.env.MAX_POSITION_SOL || '0.1');
 
     // Guard anti-doublon : adresses de tokens dont l'achat est en cours
@@ -268,7 +266,9 @@ class Bot {
         const usdStr = usd >= 1000 ? `$${(usd/1000).toFixed(1)}K` : `$${usd.toFixed(0)}`;
         secLine2.push(`${pct >= 80 ? '🔐' : pct >= 50 ? '⚠️' : '🔓'} LP: ${pct.toFixed(0)}% (${usdStr})`);
       }
-      if (rug?.level) secLine2.push(`${rug.emoji} ${rug.level}`);
+      if (rug) {
+        secLine2.push(rug.rugged ? `🔴 <b>RUGPULL DÉTECTÉ</b>` : `${rug.scoreEmoji} RC: ${rug.score}/1000`);
+      }
       if (secLine2.length > 0) msg += secLine2.join('  |  ') + '\n';
       if (rug?.dangers?.length > 0) msg += `  🔴 ${rug.dangers.map((d) => this._esc(d)).join(', ')}\n`;
     }
@@ -276,31 +276,6 @@ class Bot {
     if (decision.decision === 'BUY') {
       msg += `\n💸 Taille: ${decision.suggestedAmountPct}%  |  🛑 SL: -${decision.stopLossPct}%  |  🎯 TP: +${decision.takeProfitPct}%`;
     }
-
-    return msg;
-  }
-
-  /** Alerte légère pour un nouveau token sur la bonding curve Pump.fun */
-  _formatPumpNew(token) {
-    const sym = this._esc(token.symbol || '???');
-    const name = this._esc(token.name || '');
-    const mcSol = token.marketCapSol ? `~${parseFloat(token.marketCapSol).toFixed(1)} SOL` : '?';
-    const initialBuy = token.initialBuy ? `${parseFloat(token.initialBuy).toFixed(2)} SOL` : null;
-    const pumpUrl = `https://pump.fun/coin/${token.mint}`;
-
-    const links = [];
-    if (token.twitter) links.push(`<a href="${token.twitter}">𝕏</a>`);
-    if (token.telegram) links.push(`<a href="${token.telegram}">TG</a>`);
-    if (token.website) links.push(`<a href="${token.website}">🌐</a>`);
-
-    let msg = `🆕 <b>$${sym}</b> — ${name}\n`;
-    msg += `👶 Bonding curve Pump.fun\n`;
-    msg += `💰 Market cap: ${mcSol}`;
-    if (initialBuy) msg += `  |  🛒 Initial buy: ${initialBuy}`;
-    msg += `\n`;
-    if (links.length > 0) msg += `${links.join('  |  ')}\n`;
-    msg += `📍 <code>${this._esc(token.mint)}</code>\n`;
-    msg += `<a href="${pumpUrl}">🔗 Voir sur Pump.fun</a>`;
 
     return msg;
   }
@@ -347,7 +322,7 @@ class Bot {
         `/balance — Balance SOL du wallet\n\n` +
 
         `<b>Trading</b>\n` +
-        `/auto — Activer/désactiver le trading automatique\n` +
+        `/auto — Activer/désactiver le trading réel autonome d'ARIA\n` +
         `/scan — Lancer un scan manuel toutes sources\n` +
         `/recurring — Tokens récidivistes (boostés plusieurs fois)\n` +
         `/debat &lt;adresse&gt; — Suggérer un token au débat IA\n` +
@@ -378,6 +353,7 @@ class Bot {
     bot.command('status', async (ctx) => {
       const stats = this.scanner.getStats();
       const positions = this.trader.getPositions();
+      const auto = personalAgent.getAutonomy();
       let balance = 'Wallet non chargé';
       if (this.trader.isReady()) {
         balance = `${(await this.trader.getSolBalance()).toFixed(4)} SOL`;
@@ -388,8 +364,11 @@ class Bot {
         `🔄 Scans: ${stats.scanCount}\n` +
         `👁 Tokens vus: ${stats.seenTokens}\n` +
         `📈 Sources: DexScreener top-boosted + GeckoTerminal trending\n` +
-        `\n🤖 Auto-trade: ${this.autoTrade ? '✅ Activé' : '❌ Désactivé'}\n` +
-        `💼 Positions: ${positions.length}\n` +
+        `\n🤖 ARIA autonomie: ${auto.enabled ? '✅ Active' : '❌ Off'}\n` +
+        `💸 Trading réel: ${auto.liveTrading ? '✅ Activé' : '❌ Désactivé (signaux + confirmation)'}\n` +
+        `🎚 Seuil BUY auto: ${auto.minScore}/100  |  Max: ${auto.maxSolPerTrade} SOL/trade, ${auto.maxOpenPositions} positions\n` +
+        `⛔ Stop journalier: -${auto.maxDailyLossSol} SOL\n` +
+        `\n💼 Positions: ${positions.length}\n` +
         `💰 Balance: ${balance}`,
         { parse_mode: 'HTML' }
       );
@@ -523,7 +502,8 @@ class Bot {
       switch (key.toLowerCase()) {
         case 'maxsol':
           this.maxPositionSol = val;
-          await ctx.reply(`✅ Max position mis à jour: <b>${val} SOL</b>`, { parse_mode: 'HTML' });
+          personalAgent.setAutonomy({ maxSolPerTrade: val }); // synchronise le plafond ARIA
+          await ctx.reply(`✅ Max position mis à jour: <b>${val} SOL</b> (plafond ARIA synchronisé)`, { parse_mode: 'HTML' });
           break;
         case 'sl':
           process.env.DEFAULT_STOP_LOSS_PCT = String(val);
@@ -539,11 +519,13 @@ class Bot {
     });
 
     bot.command('auto', async (ctx) => {
-      this.autoTrade = !this.autoTrade;
+      const cur  = personalAgent.getAutonomy();
+      const next = personalAgent.setAutonomy({ liveTrading: !cur.liveTrading });
       await ctx.reply(
-        this.autoTrade
-          ? `🤖 Auto-trade <b>ACTIVÉ</b>\n⚠️ Le bot va exécuter les BUY automatiquement.`
-          : `🤖 Auto-trade <b>DÉSACTIVÉ</b>\nLes trades devront être confirmés manuellement.`,
+        next.liveTrading
+          ? `🤖 Trading réel <b>ACTIVÉ</b>\n⚠️ ARIA achète et vend seule sur ton wallet.\n` +
+            `Garde-fous : max ${next.maxSolPerTrade} SOL/trade, ${next.maxOpenPositions} positions, stop journalier -${next.maxDailyLossSol} SOL.`
+          : `🤖 Trading réel <b>DÉSACTIVÉ</b>\nARIA continue de scanner et d'envoyer les signaux — tu confirmes chaque achat.`,
         { parse_mode: 'HTML' }
       );
     });
@@ -555,12 +537,15 @@ class Bot {
 
       if (!msg) {
         const s = personalAgent.getState();
+        const a = s.autonomy;
         const moodEmoji = { focused: '🎯', excited: '🚀', cautious: '🛡️', concerned: '😟', satisfied: '😊' }[s.mood] || '🤖';
         return ctx.reply(
           `🤖 <b>${s.name}</b> ${moodEmoji}\n` +
           `Humeur: ${s.moodLabel}  |  Style: ${s.tradingStyle}\n` +
-          `Confiance: ${s.confidence}/10  |  Risque: ${s.riskTolerance}/10\n` +
-          `${s.lessons.length > 0 ? `\n📚 <i>${this._esc(s.lessons[s.lessons.length-1])}</i>` : ''}\n\n` +
+          `Confiance: ${s.confidence}/10  |  Risque: ${s.riskTolerance}/10\n\n` +
+          `⚡ Autonomie: ${a.enabled ? '✅' : '❌'}  |  Trading réel: ${a.liveTrading ? '✅' : '❌'} (/auto)\n` +
+          `🎚 Seuil BUY: ${a.minScore}/100  |  Max ${a.maxSolPerTrade} SOL/trade` +
+          `${s.lessons.length > 0 ? `\n\n📚 <i>${this._esc(s.lessons[s.lessons.length-1])}</i>` : ''}\n\n` +
           `Pour parler avec moi: <code>/agent bonjour ARIA!</code>`,
           { parse_mode: 'HTML' }
         );
@@ -617,7 +602,9 @@ class Bot {
         await ctx.reply(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {
-          const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
+          const a          = personalAgent.getAutonomy();
+          const confFactor = Math.max(0.3, Math.min(1, (debate.decision.confidence || 5) / 10));
+          const solAmt     = parseFloat((a.maxSolPerTrade * confFactor).toFixed(4));
           const sl     = debate.decision.stopLossPct  || 20;
           const tp     = debate.decision.takeProfitPct || 50;
           await ctx.reply(
@@ -802,48 +789,52 @@ class Bot {
           timestamp: Date.now(),
         });
 
+        // Journal + watchlist automatique d'ARIA (BUY et WATCH)
+        personalAgent.onAnalysis(debate).catch(() => {});
+
         if (debate.decision.decision !== 'BUY') {
           this._hourlyRejected++;
           return; // Pas de notif Telegram pour les tokens refusés
         }
 
+        // Tentative d'exécution autonome AVANT les notifications
+        // (point d'entrée unique → pas de double achat)
+        const auto = await personalAgent.maybeAutoTrade(debate);
+
         // Envoi du débat complet uniquement pour les BUY
         await this._send(this._formatDebate(debate), { parse_mode: 'HTML' });
 
-        const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
+        if (auto.executed) {
+          await this._send(
+            `🤖 <b>ARIA — ACHAT AUTONOME</b>\n${auto.solAmt} SOL investis\n<a href="https://solscan.io/tx/${auto.txId}">Voir la tx</a>`,
+            { parse_mode: 'HTML', disable_web_page_preview: true }
+          );
+          return;
+        }
 
-        if (this.autoTrade && this.trader.isReady()) {
-          try {
-            const { txId } = await this.trader.buy(
-              debate.token.baseToken?.address,
-              solAmt,
-              {
-                stopLossPct: debate.decision.stopLossPct,
-                takeProfitPct: debate.decision.takeProfitPct,
-              }
-            );
-            await this._send(
-              `🤖 <b>AUTO-TRADE EXÉCUTÉ</b>\nAchat: ${solAmt} SOL\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
-              { parse_mode: 'HTML', disable_web_page_preview: true }
-            );
-          } catch (err) {
-            await this._send(`❌ Auto-trade échoué: ${err.message}`);
-          }
-        } else {
-          const sl = debate.decision.stopLossPct || 20;
-          const tp = debate.decision.takeProfitPct || 50;
-          await this.bot.telegram.sendMessage(
-            this.adminId,
-            '💡 Confirmer l\'achat?',
-            Markup.inlineKeyboard([
+        // Non exécuté → boutons de confirmation manuelle
+        const a          = personalAgent.getAutonomy();
+        const confFactor = Math.max(0.3, Math.min(1, (debate.decision.confidence || 5) / 10));
+        const solAmt     = parseFloat((a.maxSolPerTrade * confFactor).toFixed(4));
+        const sl = debate.decision.stopLossPct || 20;
+        const tp = debate.decision.takeProfitPct || 50;
+        const reasonLine = a.liveTrading && auto.reason
+          ? `\n<i>ARIA n'a pas acheté seule : ${this._esc(auto.reason)}</i>`
+          : '';
+        await this.bot.telegram.sendMessage(
+          this.adminId,
+          `💡 Confirmer l'achat?${reasonLine}`,
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
               Markup.button.callback(
                 `✅ Acheter (${solAmt.toFixed(3)} SOL)`,
                 `buy:${debate.token.baseToken?.address}:${solAmt.toFixed(4)}:${sl}:${tp}`
               ),
               Markup.button.callback('❌ Passer', 'skip'),
-            ])
-          );
-        }
+            ]),
+          }
+        );
       } catch (err) {
         console.error('[Bot] Erreur alerte débat:', err.message);
       }

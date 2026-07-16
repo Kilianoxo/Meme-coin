@@ -184,6 +184,16 @@ class Dashboard {
       return;
     }
 
+    if (pathname === '/api/agent/autonomy' && req.method === 'POST') {
+      this._apiAgentAutonomy(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/journal' && req.method === 'GET') {
+      this._jsonOk(res, { journal: personalAgent.getJournal(80) });
+      return;
+    }
+
     // ── Fichiers statiques depuis src/public/ ─────────────────────────────
 
     const filePath = pathname === '/' ? '/index.html' : pathname;
@@ -525,11 +535,12 @@ class Dashboard {
       const prices    = addresses.length > 0 ? await this._fetchPrices(addresses) : {};
 
       data.positions = data.positions.map(p => {
-        const currentPrice = prices[p.address] ?? null;
+        // Prix live si dispo, sinon dernier prix connu du moniteur paper
+        const currentPrice = prices[p.address] ?? p.currentPrice ?? null;
         const pnlPct = currentPrice
           ? ((currentPrice - p.entryPrice) / p.entryPrice) * 100
-          : null;
-        const pnlSol = pnlPct !== null ? p.amountSolIn * (pnlPct / 100) : null;
+          : (p.pnlPct ?? null);
+        const pnlSol = pnlPct !== null ? p.amountSolIn * (pnlPct / 100) : (p.pnlSol ?? null);
         return { ...p, currentPrice, pnlPct, pnlSol };
       });
 
@@ -626,6 +637,19 @@ class Dashboard {
     this._jsonOk(res, {
       state:        personalAgent.getState(),
       conversation: personalAgent.getConversation(40),
+      autonomy:     personalAgent.getAutonomy(),
+      journal:      personalAgent.getJournal(60),
+    });
+  }
+
+  _apiAgentAutonomy(req, res) {
+    this._readBody(req, (body) => {
+      try {
+        const autonomy = personalAgent.setAutonomy(body || {});
+        this._jsonOk(res, { ok: true, autonomy });
+      } catch (err) {
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
     });
   }
 

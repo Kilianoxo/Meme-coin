@@ -1,59 +1,83 @@
 # Meme Coin Bot — Notes pour Claude
 
 ## Contexte du projet
-Bot de trading automatique de meme coins Solana via Telegram.
-Stack: Node.js, Telegraf, Jupiter API (swaps), DexScreener, GeckoTerminal, Birdeye, Pump.fun WebSocket.
+Bot de trading automatique de meme coins Solana via Telegram + dashboard web.
+Piloté par ARIA, un agent IA personnel 100% autonome (Claude Haiku).
+Stack: Node.js, Telegraf, Jupiter API (swaps), DexScreener, GeckoTerminal, Birdeye, RugCheck.
+Le propriétaire trade aussi manuellement sur GMGN — positions importables via /addposition.
 
 ## Architecture
-- `index.js` — Point d'entrée, charge le wallet et démarre Bot + Scanner
-- `src/bot.js` — Interface Telegram (commandes + callbacks)
-- `src/scanner.js` — Détecte les tokens (DexScreener boosted/profiles + GeckoTerminal + Pump.fun WS)
-- `src/trader.js` — Exécute les trades Jupiter, gère SL/TP/trailing stop, persistance disque
-- `src/agents.js` — Débat Bull vs Bear vs Risk Manager (Claude Haiku)
+- `index.js` — Point d'entrée, charge le wallet et démarre Bot + Scanner + Dashboard + Watchdog + ARIA
+- `src/bot.js` — Interface Telegram (commandes + callbacks + délégation autonomie ARIA)
+- `src/scanner.js` — Détecte les tokens (DexScreener top-boosted + GeckoTerminal trending UNIQUEMENT — Pump.fun supprimé)
+- `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop, persistance disque
+- `src/personalAgent.js` — ARIA : analyse, chat, autonomie (achat/vente auto), journal, apprentissage, heartbeat
+- `src/paperTrader.js` — Simulation sans risque (positions fictives, mêmes analyses)
+- `src/agents.js` — Ancien système multi-agents (suspendu — gardé pour agentBus/dashboard floor)
+- `src/agentMemory.js` — Mémoire des débats + poids dynamiques + suggestions
+- `src/tokenHistory.js` — Détection des tokens récidivistes (mêmes tickers, nouvelles adresses)
 - `src/birdeye.js` — Sécurité on-chain (mint authority, freeze, concentration holders)
+- `src/rugcheck.js` — Détection rugpull / LP lock
 - `src/dexscreener.js` — Client DexScreener API
 - `src/geckoterminal.js` — Client GeckoTerminal API
-- `src/pumpfun.js` — WebSocket PumpPortal (nouveaux tokens + graduations)
-- `src/anthropic.js` — Wrapper Anthropic API
-- `data/positions.json` — Persistance positions + historique (créé au runtime)
+- `src/dashboard.js` — Serveur web (HTTP natif) : API + SSE temps réel
+- `src/public/index.html` — Dashboard (onglets Dashboard / ARIA / Paper Trading)
+- `src/watchdog.js` — Redémarre le scanner s'il bloque, capture les erreurs fatales
+- `src/logger.js` — Log JSON dans logs/bot.log
+- `src/state.js` — Flags globaux (agentsEnabled, recentAnalyses)
+- `data/positions.json` — Positions + historique trader réel
+- `data/agent.json` — Personnalité + autonomie + watchlist + conversation ARIA
+- `data/agent_journal.json` — Journal des actions autonomes d'ARIA
+- `data/paper_positions.json` — Paper trading
+- `data/tokenHistory.json` — Tokens récurrents
+
+## ARIA — Autonomie
+Config persistée dans agent.json (`autonomy`), modifiable via dashboard (POST /api/agent/autonomy) ou /auto :
+- `enabled` — signaux, watchlist auto, gestion de positions, alertes, rapport quotidien
+- `liveTrading` — exécution réelle sur le wallet (OFF par défaut, opt-in)
+- `minScore` (70), `minConfidence` (6) — seuils d'achat autonome
+- `maxSolPerTrade` (0.1), `maxOpenPositions` (3), `maxDailyLossSol` (0.5 = circuit breaker)
+Flux : scanner → analyse ARIA → bot.js appelle `personalAgent.maybeAutoTrade(debate)` (point d'entrée unique).
+Heartbeat 3 min : alertes SL/TP (cooldown 30 min), watchlist (~6 min, cooldown 1h),
+gestion active des positions (~9 min, cooldown 20 min/position, décisions HOLD/SELL/TIGHTEN_SL),
+apprentissage (~30 min), rapport quotidien à 20h Paris.
+Tout est journalisé dans agent_journal.json + push SSE `aria_journal`.
 
 ## Commandes Telegram implémentées
-/start, /status, /balance, /scan, /positions, /history, /auto
+/start, /help, /status, /balance, /scan, /positions, /history
+/auto — Toggle du trading réel autonome d'ARIA
 /pnl — PnL réalisé + non réalisé en temps réel
-/settings — Affiche maxSol, SL%, TP%
-/set <maxsol|sl|tp> <valeur> — Modifie les paramètres à la volée
-/analyse <adresse>, /buy <adresse> <sol>, /sell <adresse> [%]
+/settings, /set <maxsol|sl|tp> <valeur> (maxsol synchronise le plafond ARIA)
+/analyse <adresse>, /debat <adresse> — Analyse ARIA
+/buy <adresse> <sol>, /sell <adresse> [%]
+/addposition <adresse> <sol> — Importer une position externe (ex: achetée sur GMGN)
+/recurring — Tokens récidivistes
+/agent [message] — Parler avec ARIA
 
-## Features implémentées
-- Scan multi-sources : DexScreener (boosted + profiles) + GeckoTerminal + Pump.fun WS
-- Filtres : liquidité, volume 24h, market cap, âge du token
-- Birdeye hard filter : mint authority active, créateur >20%, top10 holders >90%
-- Débat IA 3 agents (Bull / Bear / Risk Manager) avec Claude Haiku
-- Jupiter swaps (buy/sell) avec SL/TP automatique
-- Trailing stop-loss : activé après +20% de gain, recul depuis le plus haut
-- Persistance disque (positions.json) : survie aux redémarrages
-- Messages Telegram en HTML (parse_mode: 'HTML')
-- Auto-trade toggle (/auto)
-- PnL réalisé tracké dans l'historique (champ pnlSol sur les SELL)
+## Dashboard (port 3000)
+- Onglet Dashboard : balance wallet, tokens SPL, positions, PnL cumulé (bot + manuel), historique avec raison de sortie, analyses récentes
+- Onglet ARIA : personnalité, panneau Autonomie (toggles + plafonds), chat, watchlists, journal d'activité live
+- Onglet Paper Trading : simulation complète avec config indépendante
+- Header : chip d'état ARIA (off / autonome / trading réel)
+- SSE /api/events : aria_proactive, aria_journal, messages agents
 
 ## Variables d'environnement (.env)
 TELEGRAM_TOKEN, TELEGRAM_ADMIN_ID, ANTHROPIC_API_KEY (obligatoires)
 WALLET_PRIVATE_KEY (optionnel — trading désactivé sans)
 SOLANA_RPC_URL (défaut: mainnet-beta public)
 BIRDEYE_API_KEY (optionnel — sécurité on-chain désactivée sans)
-MIN_LIQUIDITY_USD (défaut: 10000)
-MIN_VOLUME_24H_USD (défaut: 50000)
-MIN_MARKET_CAP_USD (défaut: 100000)
-MAX_TOKEN_AGE_HOURS (défaut: 24)
+JUPITER_API_KEY (optionnel)
+MIN_LIQUIDITY_USD (défaut: 5000), MIN_VOLUME_24H_USD (défaut: 20000), MIN_MARKET_CAP_USD (défaut: 30000)
+MIN_TOKEN_AGE_HOURS (défaut: 6), MAX_TOKEN_AGE_HOURS (défaut: 72)
 MAX_POSITION_SOL (défaut: 0.1)
-DEFAULT_STOP_LOSS_PCT (défaut: 20)
-DEFAULT_TAKE_PROFIT_PCT (défaut: 50)
+DEFAULT_STOP_LOSS_PCT (défaut: 20), DEFAULT_TAKE_PROFIT_PCT (défaut: 50)
+DASHBOARD_PORT (défaut: 3000)
 
 ## Branche de dev
-claude/french-greeting-wOjHx
+claude/meme-coin-development-MhZiV
 
 ## À faire / idées futures
-- Filtre anti-rug amélioré (nombre de holders depuis Birdeye overview)
-- Alertes hebdomadaires de perf (PnL total de la semaine)
-- Dashboard web simple (Express + HTML)
+- Suivi des wallets de la watchlist (transactions on-chain, copy-trade)
 - Backtest sur données historiques DexScreener
+- Prise de profit partielle automatique (vendre 50% au TP, laisser courir le reste)
+- Nettoyage : retirer agents.js/pumpfun.js quand le Trading Floor sera définitivement abandonné

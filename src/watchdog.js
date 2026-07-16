@@ -4,8 +4,6 @@
  * Fonctions :
  *   - Vérifie toutes les 60s que le scanner progresse (scanCount augmente)
  *   - Si bloqué depuis > 3 min → redémarre le scanner + alerte Telegram
- *   - Vérifie la connexion PumpFun toutes les 60s
- *   - Si PumpFun déconnecté depuis > 5 min → alerte Telegram (reconnexion auto via pumpfun.js)
  *   - Capture uncaughtException + unhandledRejection → log fichier + alerte Telegram
  */
 
@@ -14,7 +12,6 @@ const logger = require('./logger');
 const CHECK_INTERVAL_MS    = 60_000;      // vérification toutes les 60s
 const STARTUP_GRACE_MS     = 2 * 60_000; // attente avant surveillance (cold start)
 const SCAN_STALE_MS        = 3 * 60_000; // scanner bloqué si aucun scan depuis 3 min
-const PUMP_STALE_MS        = 5 * 60_000; // alerte si PumpFun déco depuis 5 min
 
 class Watchdog {
   /**
@@ -25,9 +22,8 @@ class Watchdog {
     this.scanner   = scanner;
     this.sendAlert = sendAlert;
 
-    this._lastScanCount      = -1;
-    this._lastScanChangeAt   = Date.now();
-    this._pumpDisconnectedAt = null;
+    this._lastScanCount    = -1;
+    this._lastScanChangeAt = Date.now();
 
     this._interval = null;
   }
@@ -38,8 +34,8 @@ class Watchdog {
       this._lastScanCount    = this.scanner.scanCount;
       this._lastScanChangeAt = Date.now();
 
-      this._interval = setInterval(() => this._check(), CHECK_INTERVAL_MS);
-      console.log('[Watchdog] 🐕 Surveillance active (scanner + PumpFun + erreurs critiques).');
+      this._interval = setInterval(() => this._checkScanner(), CHECK_INTERVAL_MS);
+      console.log('[Watchdog] 🐕 Surveillance active (scanner + erreurs critiques).');
     }, STARTUP_GRACE_MS);
 
     // Capture des erreurs non gérées au niveau du process
@@ -55,13 +51,6 @@ class Watchdog {
       clearInterval(this._interval);
       this._interval = null;
     }
-  }
-
-  // ─── Vérification périodique ─────────────────────────────────────────────
-
-  async _check() {
-    await this._checkScanner();
-    await this._checkPumpFun();
   }
 
   // ── Scanner stall detection ───────────────────────────────────────────────
@@ -104,38 +93,6 @@ class Watchdog {
         `🔴 <b>Watchdog</b>: Échec du redémarrage scanner\n<code>${err.message}</code>`
       );
     }
-  }
-
-  // ── PumpFun disconnect detection ─────────────────────────────────────────
-
-  async _checkPumpFun() {
-    const now       = Date.now();
-    const connected = this.scanner.getStats().pumpFunConnected;
-
-    if (connected) {
-      this._pumpDisconnectedAt = null; // reconnecté, on remet à zéro
-      return;
-    }
-
-    if (!this._pumpDisconnectedAt) {
-      this._pumpDisconnectedAt = now;
-      return;
-    }
-
-    const downMs = now - this._pumpDisconnectedAt;
-    if (downMs <= PUMP_STALE_MS) return;
-
-    const downMin = Math.round(downMs / 60_000);
-    console.warn(`[Watchdog] ⚠️ PumpFun déconnecté depuis ${downMin} min`);
-    logger.error('watchdog', `PumpFun déconnecté depuis ${downMin} min`);
-
-    await this._alert(
-      `⚠️ <b>Watchdog</b>: PumpFun WebSocket déconnecté depuis ${downMin} min\n` +
-      `La reconnexion automatique est en cours (pumpfun.js).`
-    );
-
-    // Reset : on réattend PUMP_STALE_MS avant de ré-alerter
-    this._pumpDisconnectedAt = now;
   }
 
   // ── Erreurs non catchées ─────────────────────────────────────────────────

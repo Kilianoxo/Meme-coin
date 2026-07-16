@@ -363,7 +363,10 @@ class Trader {
 
     const pos = this.positions.get(tokenMint);
     const solReceived = parseFloat(quote.outAmount) / LAMPORTS_PER_SOL;
-    const pnlSol = pos ? solReceived - pos.solSpent : null;
+    // PnL comparé au coût de la fraction vendue (et pas au coût total —
+    // sinon une vente partielle affiche une fausse perte)
+    const costBasis = pos ? pos.solSpent * (pct / 100) : null;
+    const pnlSol    = costBasis != null ? solReceived - costBasis : null;
     const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol, exitReason };
     this.history.push(trade);
 
@@ -383,6 +386,9 @@ class Trader {
         tokenHistory.recordCycleEnd(pos.symbol || '', tokenMint, pnlPct, outcome);
         personalAgent.evolvePersonality(outcome, pnlPct);
       }
+    } else if (pos && costBasis != null) {
+      // Vente partielle : réduit le coût restant de la position
+      pos.solSpent = parseFloat((pos.solSpent - costBasis).toFixed(9));
     }
     this._save();
 

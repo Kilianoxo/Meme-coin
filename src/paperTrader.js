@@ -61,7 +61,7 @@ class PaperTrader extends EventEmitter {
 
   async _fetchPrice(address) {
     try {
-      const res = await fetch(`https://api.jup.ag/price/v2?ids=${address}`, {
+      const res = await fetch(`https://lite-api.jup.ag/price/v2?ids=${address}`, {
         signal: AbortSignal.timeout(8_000),
       });
       if (!res.ok) return null;
@@ -175,8 +175,9 @@ class PaperTrader extends EventEmitter {
     const pos = this.state.positions[address];
     if (!pos) return;
 
-    const price       = await this._fetchPrice(address);
-    const exitPrice   = price ?? pos.entryPrice;
+    const fetched     = await this._fetchPriceWithFallback(address);
+    // Dernier prix connu du moniteur en secours — jamais le prix d'entrée si évitable
+    const exitPrice   = fetched?.price ?? pos.currentPrice ?? pos.entryPrice;
     const solReceived = pos.tokensHeld * exitPrice;
     const pnlSol      = solReceived - pos.amountSolIn;
     const pnlPct      = (pnlSol / pos.amountSolIn) * 100;

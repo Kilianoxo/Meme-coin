@@ -12,6 +12,7 @@ const birdeye       = require('./birdeye');
 const gecko         = require('./geckoterminal');
 const rugcheck      = require('./rugcheck');
 const tokenHistory  = require('./tokenHistory');
+const state         = require('./state');
 
 // Nombre max de tokens envoyés en débat IA par cycle de scan
 // Les candidats sont triés par pertinence avant sélection
@@ -238,6 +239,12 @@ class Scanner extends EventEmitter {
   async _analyzeToken(token) {
     const address = token.baseToken?.address;
     const symbol = token.baseToken?.symbol || '???';
+
+    // Toggle dashboard : analyses IA suspendues → aucun crédit API consommé
+    if (!state.agentsEnabled) {
+      console.log(`[Scanner] ⏸️ ${symbol} non analysé — analyses IA désactivées (dashboard)`);
+      return;
+    }
 
     // Enrichissement Birdeye + RugCheck (summary + LP lock) en parallèle
     const [{ security, overview }, rugReport, lpLock] = await Promise.all([
