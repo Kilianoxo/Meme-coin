@@ -18,11 +18,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @param {number} params.maxTokens     - Tokens max en réponse
  * @param {string} [params.system]      - System prompt
  * @param {Array}  params.messages      - Historique [{role, content}]
+ * @param {Array}  [params.tools]       - Définitions d'outils (tool use)
  * @returns {Promise<Object>}           - Réponse complète de l'API
  */
-async function createMessage({ model = 'claude-haiku-4-5-20251001', maxTokens = 512, system, messages }) {
+async function createMessage({ model = 'claude-haiku-4-5-20251001', maxTokens = 512, system, messages, tools }) {
   const body = { model, max_tokens: maxTokens, messages };
   if (system) body.system = system;
+  if (Array.isArray(tools) && tools.length > 0) body.tools = tools;
 
   const headers = {
     'Content-Type':      'application/json',

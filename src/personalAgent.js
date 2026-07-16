@@ -28,6 +28,9 @@ const path = require('path');
 const { createMessage, ask } = require('./anthropic');
 const dex         = require('./dexscreener');
 const gmgn        = require('./gmgn');
+const gecko       = require('./geckoterminal');
+const birdeye     = require('./birdeye');
+const rugcheck    = require('./rugcheck');
 const agentMemory = require('./agentMemory');
 const tokenHistory = require('./tokenHistory');
 const state       = require('./state');
@@ -61,6 +64,89 @@ const MOOD_LABELS = {
   concerned: 'Inquiète',
   satisfied: 'Satisfaite',
 };
+
+// ─── Outils du chat (tool use) — ARIA appelle les APIs elle-même ────────────
+const MAX_TOOL_ROUNDS = 6;
+
+const TOOL_DEFS = [
+  {
+    name: 'rechercher_token',
+    description: "Trouve un token Solana par son nom ou ticker (ex: 'BONK', 'pepe'). Retourne les meilleures correspondances avec leur adresse, prix, liquidité. À utiliser dès que le trader mentionne un token sans donner l'adresse.",
+    input_schema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Nom ou ticker du token' } },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'tokens_tendance',
+    description: 'Les tokens Solana qui bougent en ce moment : GeckoTerminal trending + GMGN trending (avec smart money/KOL si disponible).',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'donnees_token',
+    description: "Due diligence complète d'un token à partir de son adresse : prix, variations, liquidité, volume, market cap, sécurité on-chain (Birdeye), risque rugpull (RugCheck), LP lock.",
+    input_schema: {
+      type: 'object',
+      properties: { address: { type: 'string', description: 'Adresse du token (mint)' } },
+      required: ['address'],
+    },
+  },
+  {
+    name: 'analyser_token',
+    description: "Ton analyse de trading complète sur un token (la même que pour le scanner) : décision BUY/WATCH/SKIP, score /100, confiance, SL/TP suggérés.",
+    input_schema: {
+      type: 'object',
+      properties: { address: { type: 'string', description: 'Adresse du token (mint)' } },
+      required: ['address'],
+    },
+  },
+  {
+    name: 'etat_portefeuille',
+    description: 'Balance SOL fraîche + positions ouvertes avec PnL live + PnL réalisé du jour.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'acheter',
+    description: "Achète un token avec des SOL du wallet réel (swap Jupiter). Uniquement si le trader le demande ou l'approuve clairement dans la conversation. Le montant est plafonné à maxSolPerTrade.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        address: { type: 'string', description: 'Adresse du token à acheter' },
+        sol:     { type: 'number', description: 'Montant en SOL' },
+        symbol:  { type: 'string', description: 'Ticker (optionnel, pour le suivi)' },
+      },
+      required: ['address', 'sol'],
+    },
+  },
+  {
+    name: 'vendre',
+    description: "Vend un token du wallet réel (swap Jupiter). Uniquement si le trader le demande ou l'approuve clairement, ou en cas de danger immédiat sur une position.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        address: { type: 'string', description: 'Adresse du token à vendre' },
+        pct:     { type: 'number', description: 'Pourcentage à vendre (défaut 100)' },
+      },
+      required: ['address'],
+    },
+  },
+  {
+    name: 'watchlist',
+    description: 'Ajoute ou retire un token/wallet de ta watchlist de surveillance continue.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action:  { type: 'string', enum: ['add', 'remove'] },
+        type:    { type: 'string', enum: ['token', 'wallet'] },
+        address: { type: 'string' },
+        symbol:  { type: 'string', description: 'Ticker (tokens)' },
+        reason:  { type: 'string', description: 'Pourquoi tu le surveilles' },
+      },
+      required: ['action', 'type', 'address'],
+    },
+  },
+];
 
 const DEFAULTS = {
   name: 'ARIA',
@@ -390,6 +476,16 @@ class PersonalAgent {
     lines.push(`- Telegram : alertes directes sur le téléphone du trader`);
     lines.push(`Ne dis JAMAIS que tu n'as pas accès aux données live ou aux APIs. C'est faux.`);
     lines.push(``);
+    lines.push(`=== TES OUTILS (appelle-les TOI-MÊME, sans demander) ===`);
+    lines.push(`- rechercher_token : trouve l'adresse d'un token par son nom/ticker — si le trader dit "$PEPE" ou "le token machin", CHERCHE-LE, ne demande jamais l'adresse`);
+    lines.push(`- tokens_tendance : ce qui bouge en ce moment (GeckoTerminal + GMGN smart money)`);
+    lines.push(`- donnees_token : due diligence complète (prix, Birdeye, RugCheck, LP lock)`);
+    lines.push(`- analyser_token : ton analyse complète BUY/WATCH/SKIP avec score et SL/TP`);
+    lines.push(`- etat_portefeuille : balance + positions + PnL en temps réel`);
+    lines.push(`- acheter / vendre : exécution réelle sur le wallet (plafond ${a.maxSolPerTrade} SOL/trade) — uniquement sur demande ou accord clair du trader dans la conversation`);
+    lines.push(`- watchlist : gérer toi-même ta liste de surveillance`);
+    lines.push(`Enchaîne les outils si besoin (chercher → analyser → répondre). Réponds avec les CHIFFRES obtenus, pas des généralités.`);
+    lines.push(``);
 
     // ── Autonomie ──
     lines.push(`=== TON AUTONOMIE ===`);
@@ -710,49 +806,226 @@ class PersonalAgent {
     return { token, security, rugReport, overview, lpLock, decision, _ariaMode: true };
   }
 
-  // ─── Chat ──────────────────────────────────────────────────────────────────
+  // ─── Outils du chat — ARIA appelle les APIs elle-même ─────────────────────
+
+  /** Meilleure paire DexScreener d'un token (par liquidité) */
+  async _fetchBestPair(address) {
+    const pairs = await dex.getTokenPairs('solana', address);
+    if (!Array.isArray(pairs) || pairs.length === 0) return null;
+    return pairs
+      .filter(p => p.chainId === 'solana')
+      .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0] || null;
+  }
+
+  /** Résumé compact d'une paire pour les résultats d'outils */
+  _pairSummary(p) {
+    return {
+      symbol:       p.baseToken?.symbol,
+      name:         sanitizeName(p.baseToken?.name),
+      address:      p.baseToken?.address,
+      priceUsd:     parseFloat(p.priceUsd || 0),
+      var1h:        p.priceChange?.h1  ?? null,
+      var24h:       p.priceChange?.h24 ?? null,
+      liquidityUsd: Math.round(p.liquidity?.usd || 0),
+      volume24hUsd: Math.round(p.volume?.h24 || 0),
+      marketCapUsd: Math.round(p.marketCap || p.fdv || 0),
+    };
+  }
+
+  /** Exécute un outil demandé par ARIA. Retourne toujours un objet sérialisable. */
+  async _execTool(name, input = {}) {
+    try {
+      switch (name) {
+        case 'rechercher_token': {
+          const resp  = await dex.searchPairs(String(input.query || '').slice(0, 50));
+          const pairs = (resp?.pairs || [])
+            .filter(p => p.chainId === 'solana')
+            .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
+            .slice(0, 5);
+          if (pairs.length === 0) return { resultat: 'Aucun token Solana trouvé pour cette recherche' };
+          return { tokens: pairs.map(p => this._pairSummary(p)) };
+        }
+
+        case 'tokens_tendance': {
+          const [geckoPools, gmgnPairs] = await Promise.all([
+            gecko.getTrendingPools().catch(() => []),
+            gmgn.isAvailable().then(av => av ? gmgn.getTrending() : []).catch(() => []),
+          ]);
+          const out = { geckoterminal: geckoPools.slice(0, 8).map(p => this._pairSummary(p)) };
+          if (gmgnPairs.length > 0) {
+            out.gmgn = gmgnPairs.slice(0, 8).map(p => ({
+              ...this._pairSummary(p),
+              smartMoney: p._gmgn?.smartDegen,
+              kol:        p._gmgn?.renowned,
+              buyRatio:   p._gmgn ? Math.round(p._gmgn.buyRatio * 100) + '%' : null,
+              verdict:    p._gmgn?.verdict?.verdict,
+            }));
+          }
+          return out;
+        }
+
+        case 'donnees_token': {
+          const addr = String(input.address || '').trim();
+          const pair = await this._fetchBestPair(addr);
+          if (!pair) return { erreur: 'Token introuvable sur DexScreener' };
+          const [{ security, overview }, rugReport, lpLock] = await Promise.all([
+            birdeye.getTokenData(addr),
+            rugcheck.getTokenReport(addr),
+            rugcheck.getLpLockData(addr),
+          ]);
+          return {
+            ...this._pairSummary(pair),
+            securite: security ? {
+              mintAuthority:   !!security.mintAuthority,
+              freezeAuthority: !!security.freezeAuthority,
+              top10Pct:        security.top10HolderPercent ?? null,
+              creatorPct:      security.creatorPercentage ?? null,
+              holders:         overview?.holder ?? null,
+            } : 'indisponible (pas de clé Birdeye)',
+            rugcheck: rugReport ? {
+              score:   rugReport.score,
+              rugged:  rugReport.rugged,
+              risques: rugReport.risks.filter(r => r.level !== 'info').slice(0, 4).map(r => r.name),
+            } : 'indisponible',
+            lpLockPct: lpLock ? Math.round(lpLock.lpLockedPct) : null,
+          };
+        }
+
+        case 'analyser_token': {
+          const addr = String(input.address || '').trim();
+          const pair = await this._fetchBestPair(addr);
+          if (!pair) return { erreur: 'Token introuvable sur DexScreener' };
+          const [{ security, overview }, rugReport, lpLock] = await Promise.all([
+            birdeye.getTokenData(addr),
+            rugcheck.getTokenReport(addr),
+            rugcheck.getLpLockData(addr),
+          ]);
+          const debate = await this.analyzeToken(pair, security, rugReport, overview, lpLock);
+          return { ...this._pairSummary(pair), decision: debate.decision };
+        }
+
+        case 'etat_portefeuille': {
+          if (!this._trader?.isReady()) return { erreur: 'Wallet non chargé' };
+          const balance   = await this._trader.getSolBalance().catch(() => null);
+          const positions = [];
+          for (const pos of Array.from(this._trader.positions?.values?.() || []).slice(0, 8)) {
+            const cur    = await this._trader.getCurrentPrice(pos.tokenMint).catch(() => null);
+            const pnlPct = pos.entryPriceUsd && cur
+              ? Math.round(((cur - pos.entryPriceUsd) / pos.entryPriceUsd) * 1000) / 10
+              : null;
+            positions.push({
+              symbol: pos.symbol || pos.tokenMint.slice(0, 6),
+              address: pos.tokenMint,
+              solInvesti: pos.solSpent,
+              pnlPct,
+              slPct: pos.stopLossPct, tpPct: pos.takeProfitPct,
+            });
+          }
+          return { balanceSol: balance, positions, pnlJourSol: parseFloat(this._dailyRealizedPnl().toFixed(4)) };
+        }
+
+        case 'acheter': {
+          if (!this._trader?.isReady()) return { erreur: 'Wallet non chargé (WALLET_PRIVATE_KEY manquante)' };
+          const addr = String(input.address || '').trim();
+          let   sol  = parseFloat(input.sol);
+          if (!addr || isNaN(sol) || sol <= 0) return { erreur: 'Adresse ou montant invalide' };
+          const cap = this.data.autonomy.maxSolPerTrade;
+          const clamped = sol > cap;
+          if (clamped) sol = cap;
+          const sym = sanitizeName(input.symbol || addr.slice(0, 6));
+          const { txId } = await this._trader.buy(addr, sol, { symbol: input.symbol || null });
+          this.logAction('BUY', `Achat via chat $${sym} — ${sol} SOL`, { symbol: sym, address: addr, txId, solAmt: sol });
+          return { ok: true, txId, solInvestis: sol, ...(clamped ? { note: `montant plafonné à ${cap} SOL (maxSolPerTrade)` } : {}) };
+        }
+
+        case 'vendre': {
+          if (!this._trader?.isReady()) return { erreur: 'Wallet non chargé' };
+          const addr = String(input.address || '').trim();
+          const pct  = Math.max(1, Math.min(100, parseInt(input.pct, 10) || 100));
+          const pos  = this._trader.positions.get(addr);
+          const sym  = sanitizeName(pos?.symbol || addr.slice(0, 6));
+          const { txId } = await this._trader.sell(addr, pct, 300, 'MANUAL');
+          this.logAction('SELL', `Vente via chat $${sym} — ${pct}%`, { symbol: sym, address: addr, txId });
+          return { ok: true, txId, pctVendu: pct };
+        }
+
+        case 'watchlist': {
+          const { action, type, address, symbol, reason } = input;
+          if (action === 'add' && type === 'token') {
+            const ok = this.addWatchToken(address, sanitizeName(symbol || '?'), '', sanitizeName(reason || 'via chat'));
+            if (ok) this.logAction('WATCHLIST', `Ajout $${sanitizeName(symbol || address?.slice(0, 6))} via chat`, { address });
+            return { ok, note: ok ? 'ajouté' : 'déjà présent ou watchlist pleine' };
+          }
+          if (action === 'remove' && type === 'token') { this.removeWatchToken(address); return { ok: true }; }
+          if (action === 'add' && type === 'wallet')   { return { ok: this.addWatchWallet(address, sanitizeName(symbol || reason || '')) }; }
+          if (action === 'remove' && type === 'wallet') { this.removeWatchWallet(address); return { ok: true }; }
+          return { erreur: 'action/type invalide' };
+        }
+
+        default:
+          return { erreur: `Outil inconnu: ${name}` };
+      }
+    } catch (err) {
+      return { erreur: err.message?.slice(0, 200) || 'erreur inconnue' };
+    }
+  }
+
+  // ─── Chat (boucle agentique avec outils) ───────────────────────────────────
 
   async chat(userMessage, extra = {}) {
     this.data.conversation.push({ role: 'user', content: userMessage, timestamp: Date.now() });
     if (this.data.conversation.length > MAX_CONV)
       this.data.conversation = this.data.conversation.slice(-MAX_CONV);
 
-    const ctx      = this._buildContext(extra);
-    const messages = this.data.conversation.slice(-24).map(m => ({ role: m.role, content: m.content }));
+    const ctx    = this._buildContext(extra);
+    const system = this._systemPrompt(ctx);
+    // Historique texte pour l'API (les blocs d'outils ne sont pas persistés)
+    const loopMessages = this.data.conversation.slice(-24).map(m => ({ role: m.role, content: m.content }));
 
     try {
-      const resp = await createMessage({
-        model:     MODEL,
-        maxTokens: 450,
-        system:    this._systemPrompt(ctx),
-        messages,
-      });
-      const text = resp.content[0].text;
+      let text = '';
+      for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        const resp = await createMessage({
+          model:     MODEL,
+          maxTokens: 700,
+          system,
+          messages:  loopMessages,
+          tools:     TOOL_DEFS,
+        });
+
+        const toolUses = (resp.content || []).filter(b => b.type === 'tool_use');
+        const textPart = (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+
+        if (resp.stop_reason !== 'tool_use' || toolUses.length === 0 || round === MAX_TOOL_ROUNDS) {
+          text = textPart || text || "J'ai récupéré les données mais je n'ai pas su conclure, reformule ?";
+          break;
+        }
+
+        // Exécute les outils demandés puis reboucle avec les résultats
+        loopMessages.push({ role: 'assistant', content: resp.content });
+        const results = [];
+        for (const tu of toolUses) {
+          console.log(`[ARIA] 🔧 Outil: ${tu.name}(${JSON.stringify(tu.input || {}).slice(0, 120)})`);
+          const result = await this._execTool(tu.name, tu.input || {});
+          results.push({
+            type:        'tool_result',
+            tool_use_id: tu.id,
+            content:     JSON.stringify(result).slice(0, 4000),
+          });
+        }
+        loopMessages.push({ role: 'user', content: results });
+      }
 
       this.data.conversation.push({ role: 'assistant', content: text, timestamp: Date.now() });
       if (this.data.conversation.length > MAX_CONV)
         this.data.conversation = this.data.conversation.slice(-MAX_CONV);
       this._save();
 
-      this._autoWatch(userMessage);
       // SSE réservé aux messages proactifs — réponse chat arrive via HTTP
       return text;
     } catch (err) {
       console.error('[ARIA] Erreur chat:', err.message);
       return "Désolée, j'ai eu un bug technique. Réessaie.";
-    }
-  }
-
-  _autoWatch(msg) {
-    const lower = msg.toLowerCase();
-    const watch = lower.includes('watch') || lower.includes('surveill') || lower.includes('suis') || lower.includes('ajoute');
-    if (!watch) return;
-    const addrs = msg.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g) || [];
-    for (const addr of addrs) {
-      if (lower.includes('wallet') || lower.includes('portefeuille'))
-        this.addWatchWallet(addr, 'via chat');
-      else
-        this.addWatchToken(addr, '?', '', 'via chat');
     }
   }
 

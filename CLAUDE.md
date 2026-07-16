@@ -12,7 +12,7 @@ Le propriétaire trade aussi manuellement sur GMGN — positions importables via
 - `src/scanner.js` — Détecte les tokens (DexScreener top-boosted + GeckoTerminal trending + GMGN trending si configuré — Pump.fun supprimé)
 - `src/gmgn.js` — Client GMGN via gmgn-cli (smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite) — optionnel, dégradé propre sans clé
 - `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop, persistance disque
-- `src/personalAgent.js` — ARIA : analyse, chat, autonomie (achat/vente auto), journal, apprentissage, heartbeat
+- `src/personalAgent.js` — ARIA : analyse, chat agentique avec outils (tool use), autonomie (achat/vente auto), journal, apprentissage, heartbeat
 - `src/paperTrader.js` — Simulation sans risque (positions fictives, mêmes analyses)
 - `src/agents.js` — Ancien système multi-agents (suspendu — gardé pour agentBus/dashboard floor)
 - `src/agentMemory.js` — Mémoire des débats + poids dynamiques + suggestions
@@ -43,6 +43,20 @@ Heartbeat 3 min : alertes SL/TP (cooldown 30 min), watchlist (~6 min, cooldown 1
 gestion active des positions (~9 min, cooldown 20 min/position, décisions HOLD/SELL/TIGHTEN_SL),
 apprentissage (~30 min), rapport quotidien à 20h Paris.
 Tout est journalisé dans agent_journal.json + push SSE `aria_journal`.
+
+## ARIA — Outils du chat (tool use)
+Le chat d'ARIA (dashboard + /agent Telegram) est une boucle agentique (max 6 tours d'outils,
+`MAX_TOOL_ROUNDS`) : elle appelle les APIs elle-même, sans qu'on lui donne les adresses.
+Outils (`TOOL_DEFS` + `_execTool` dans personalAgent.js) :
+- `rechercher_token` — DexScreener search par nom/ticker → adresse, prix, liq
+- `tokens_tendance` — GeckoTerminal trending + GMGN trending (smart money/KOL)
+- `donnees_token` — due diligence complète (DexScreener + Birdeye + RugCheck + LP lock)
+- `analyser_token` — pipeline d'analyse complet → décision BUY/WATCH/SKIP
+- `etat_portefeuille` — balance + positions avec PnL live + PnL du jour
+- `acheter` / `vendre` — swaps Jupiter réels (achat plafonné à maxSolPerTrade, journalisé)
+- `watchlist` — gestion autonome de la liste de surveillance
+Les blocs tool_use/tool_result ne sont PAS persistés dans la conversation (texte seul).
+Chaque trade via chat est journalisé dans agent_journal.json.
 
 ## Intégration GMGN (méthodo du demo officiel GMGNAI/skillmarket-demos)
 - gates durs déterministes AVANT le LLM : honeypot, mint non abandonnée, taxes >10%,
