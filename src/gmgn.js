@@ -333,6 +333,242 @@ async function searchToken(query) {
   return out.slice(0, 5);
 }
 
+// ─── Wallets : stats, positions, activité (portfolio) ────────────────────────
+
+const _walletStatsCache    = new Map(); // wallet|period → { ts, stats }
+const _walletActivityCache = new Map(); // wallet → { ts, acts }
+const _holdingsCache       = new Map(); // wallet → { ts, holdings }
+const WALLET_STATS_TTL_MS  = 5 * 60_000;
+const WALLET_ACT_TTL_MS    = 60_000;
+
+/** Extrait un tableau de lignes d'une réponse CLI quelle que soit l'enveloppe */
+function _rows(resp) {
+  const d = resp?.data ?? resp;
+  if (Array.isArray(d)) return d;
+  if (d && typeof d === 'object') {
+    for (const k of ['rank', 'list', 'holdings', 'activities', 'tokens', 'records', 'trades']) {
+      if (Array.isArray(d[k])) return d[k];
+    }
+  }
+  return [];
+}
+
+/**
+ * Statistiques de trading d'un wallet (portfolio stats, cache 5 min).
+ * @returns {Promise<Object|null>} winrate, PnL réalisé, ROI, volumétrie, répartition
+ */
+async function getWalletStats(wallet, period = '7d') {
+  const key    = `${wallet}|${period}`;
+  const cached = _walletStatsCache.get(key);
+  if (cached && Date.now() - cached.ts < WALLET_STATS_TTL_MS) return cached.stats;
+
+  try {
+    const resp = await _cli(['portfolio', 'stats', '--wallet', wallet, '--period', period]);
+    let d = resp?.data ?? resp;
+    if (Array.isArray(d)) d = d[0] || {};          // multi-wallet → première entrée
+    if (!d || typeof d !== 'object') return null;
+    const ps = d.pnl_stat || {};
+    const stats = {
+      wallet,
+      period,
+      balanceNative:   _f(d.native_balance),
+      realizedProfit:  _f(d.realized_profit),
+      roi:             _f(d.realized_profit_pnl),
+      buys:            Math.round(_f(d.buy)),
+      sells:           Math.round(_f(d.sell)),
+      boughtCostUsd:   _f(d.bought_cost),
+      soldIncomeUsd:   _f(d.sold_income),
+      tokensTraded:    Math.round(_f(ps.token_num)),
+      winrate:         _f(ps.winrate),
+      avgHoldingSec:   Math.round(_f(ps.avg_holding_period)),
+      // Répartition des PnL par token : grosses pertes → gros multiples
+      pnl:             {
+        bigLoss:  Math.round(_f(ps.pnl_lt_nd5_num)),   // < -50%
+        loss:     Math.round(_f(ps.pnl_nd5_0x_num)),   // -50% à 0
+        small:    Math.round(_f(ps.pnl_0x_2x_num)),    // 0 à 2x
+        x2to5:    Math.round(_f(ps.pnl_2x_5x_num)),    // 2x à 5x
+        moon:     Math.round(_f(ps.pnl_gt_5x_num)),    // > 5x
+      },
+      tags:            (d.common?.tags || []).slice(0, 5),
+      twitterFans:     Math.round(_f(d.common?.twitter_fans_num || d.common?.followers_count)),
+      createdTokens:   Math.round(_f(d.common?.created_token_count)),
+      raw:             d,
+    };
+    _walletStatsCache.set(key, { ts: Date.now(), stats });
+    return stats;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Activité (trades) d'un wallet (portfolio activity, cache 60s).
+ * @returns {Promise<Array<{type, ts, tokenAddress, tokenSymbol, costUsd, priceUsd}>>}
+ */
+async function getWalletActivity(wallet, { limit = 30, token = null, types = null } = {}) {
+  const cached = _walletActivityCache.get(wallet);
+  if (!token && !types && cached && Date.now() - cached.ts < WALLET_ACT_TTL_MS) return cached.acts;
+
+  try {
+    const args = ['portfolio', 'activity', '--wallet', wallet, '--limit', String(limit)];
+    if (token) args.push('--token', token);
+    for (const t of types || []) args.push('--type', t);
+    const resp = await _cli(args);
+    const acts = _rows(resp).map(a => {
+      let ts = _f(a.timestamp || a.ts || a.created_at);
+      if (ts > 1e12) ts = ts / 1000; // millisecondes → secondes
+      return {
+        type:         a.event_type || a.side || a.type || '?',
+        ts:           Math.round(ts),
+        tokenAddress: a.token?.address || a.token_address || a.address || null,
+        tokenSymbol:  a.token?.symbol  || a.token_symbol  || a.symbol  || '?',
+        costUsd:      _f(a.cost_usd || a.amount_usd || a.usd_amount || a.volume),
+        priceUsd:     _f(a.price_usd || a.price),
+      };
+    }).filter(a => a.tokenAddress);
+    if (!token && !types) _walletActivityCache.set(wallet, { ts: Date.now(), acts });
+    return acts;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Positions d'un wallet avec PnL réalisé/non réalisé (portfolio holdings, cache 60s).
+ * @returns {Promise<Array<{tokenAddress, symbol, usdValue, realizedProfit, unrealizedProfit, totalProfit}>>}
+ */
+async function getWalletHoldings(wallet, limit = 20) {
+  const cached = _holdingsCache.get(wallet);
+  if (cached && Date.now() - cached.ts < WALLET_ACT_TTL_MS) return cached.holdings;
+
+  try {
+    const resp = await _cli(['portfolio', 'holdings', '--wallet', wallet,
+      '--limit', String(Math.min(limit, 50)), '--order-by', 'usd_value', '--direction', 'desc']);
+    const holdings = _rows(resp).map(h => {
+      const tok = h.token || {};
+      return {
+        tokenAddress:     tok.address || h.token_address || h.address || null,
+        symbol:           tok.symbol  || h.symbol || '?',
+        usdValue:         _f(h.usd_value),
+        amount:           _f(h.balance || h.amount),
+        avgCostUsd:       _f(h.avg_cost || h.history_bought_cost),
+        realizedProfit:   _f(h.realized_profit),
+        unrealizedProfit: _f(h.unrealized_profit),
+        totalProfit:      _f(h.total_profit),
+        lastActiveTs:     Math.round(_f(h.last_active_timestamp)),
+      };
+    }).filter(h => h.tokenAddress);
+    _holdingsCache.set(wallet, { ts: Date.now(), holdings });
+    return holdings;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Classification déterministe du style de trading d'un wallet (pur code,
+ * inspirée du wallet-eval du demo GMGN). Retourne des tags lisibles.
+ */
+function classifyWallet(stats, activity = []) {
+  if (!stats) return [];
+  const tags = [];
+  const holdH = stats.avgHoldingSec / 3600;
+
+  if (stats.createdTokens > 0 && stats.createdTokens >= stats.tokensTraded / 2) tags.push('dev / créateur de tokens');
+  if (stats.tokensTraded >= 500 && holdH < 1)      tags.push('bot / scientifique haute fréquence');
+  else if (holdH < 0.5 && stats.tokensTraded >= 50) tags.push('flip rapide / sniper');
+  else if (holdH >= 96)                             tags.push('diamond hands (positions longues)');
+  if (stats.boughtCostUsd / Math.max(1, stats.buys) >= 5000) tags.push('whale (grosses positions)');
+  if (stats.winrate >= 0.55 && stats.realizedProfit > 0)     tags.push('performant (winrate élevé + PnL positif)');
+  if (stats.winrate < 0.3 && stats.realizedProfit < 0)       tags.push('bag-holder / degen perdant');
+  const totalPnlBuckets = Object.values(stats.pnl).reduce((s, v) => s + v, 0);
+  if (totalPnlBuckets > 0 && stats.pnl.bigLoss / totalPnlBuckets > 0.3) tags.push('⚠️ >30% de tokens en perte sévère');
+  if (stats.pnl.moon > 0) tags.push(`${stats.pnl.moon} token(s) à +500%`);
+  if ((stats.tags || []).includes('smart_degen')) tags.push('🧠 taggé smart money par GMGN');
+
+  return tags.length > 0 ? tags : ['profil neutre / peu de données'];
+}
+
+// ─── Track : smart money + KOL en live ───────────────────────────────────────
+
+let _smartCache = { ts: 0, rows: [] };
+let _kolCache   = { ts: 0, rows: [] };
+const TRACK_TTL_MS = 60_000;
+
+function _normalizeTrackRow(t, source) {
+  const tok = t.token || {};
+  return {
+    source,                                            // 'smart' | 'kol'
+    wallet:       t.wallet_address || t.wallet || t.address || null,
+    walletName:   t.wallet_name || t.name || t.twitter_username || null,
+    side:         (t.event_type || t.side || t.type || '?').toLowerCase(),
+    tokenAddress: tok.address || t.token_address || null,
+    tokenSymbol:  tok.symbol  || t.token_symbol  || t.symbol || '?',
+    amountUsd:    _f(t.amount_usd || t.usd_amount || t.cost_usd || t.volume),
+    ts:           Math.round(_f(t.timestamp || t.ts || t.created_at)),
+  };
+}
+
+/** Trades smart money récents (track smartmoney, cache 60s) */
+async function getSmartMoneyTrades(limit = 100) {
+  if (Date.now() - _smartCache.ts < TRACK_TTL_MS) return _smartCache.rows;
+  try {
+    const resp = await _cli(['track', 'smartmoney', '--limit', String(limit)]);
+    const rows = _rows(resp).map(t => _normalizeTrackRow(t, 'smart')).filter(t => t.tokenAddress);
+    _smartCache = { ts: Date.now(), rows };
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+/** Trades KOL récents (track kol, cache 60s) */
+async function getKolTrades(limit = 100) {
+  if (Date.now() - _kolCache.ts < TRACK_TTL_MS) return _kolCache.rows;
+  try {
+    const resp = await _cli(['track', 'kol', '--limit', String(limit)]);
+    const rows = _rows(resp).map(t => _normalizeTrackRow(t, 'kol')).filter(t => t.tokenAddress);
+    _kolCache = { ts: Date.now(), rows };
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Agrège les trades smart money + KOL par token : qui achète QUOI maintenant.
+ * @returns {Promise<Array<{tokenAddress, symbol, buys, sells, wallets, volumeUsd, kols}>>}
+ */
+async function getSmartMoneyMoves() {
+  const [smart, kol] = await Promise.all([getSmartMoneyTrades(), getKolTrades()]);
+  const byToken = new Map();
+  for (const t of [...smart, ...kol]) {
+    let e = byToken.get(t.tokenAddress);
+    if (!e) {
+      e = { tokenAddress: t.tokenAddress, symbol: t.tokenSymbol, buys: 0, sells: 0,
+            wallets: new Set(), volumeUsd: 0, kols: 0, lastTs: 0 };
+      byToken.set(t.tokenAddress, e);
+    }
+    if (t.side.includes('buy')) e.buys++; else if (t.side.includes('sell')) e.sells++;
+    if (t.wallet) e.wallets.add(t.wallet);
+    if (t.source === 'kol') e.kols++;
+    e.volumeUsd += t.amountUsd;
+    if (t.ts > e.lastTs) e.lastTs = t.ts;
+  }
+  return [...byToken.values()]
+    .map(e => ({ ...e, wallets: e.wallets.size }))
+    .sort((a, b) => (b.buys - b.sells) - (a.buys - a.sells) || b.volumeUsd - a.volumeUsd);
+}
+
+/**
+ * Flux smart money/KOL LIVE pour un token précis (depuis les caches track).
+ * Utilisé pour enrichir les analyses autonomes d'ARIA.
+ */
+async function getSmartMoneyForToken(address) {
+  const moves = await getSmartMoneyMoves().catch(() => []);
+  return moves.find(m => m.tokenAddress === address) || null;
+}
+
 // ─── Gates durs (méthodo GMGN — déterministe, avant tout appel LLM) ──────────
 
 /**
@@ -480,5 +716,14 @@ module.exports = {
   judge,
   getTokenSecurity,
   assessEscape,
+  // Wallets + smart money live
+  getWalletStats,
+  getWalletActivity,
+  getWalletHoldings,
+  classifyWallet,
+  getSmartMoneyTrades,
+  getKolTrades,
+  getSmartMoneyMoves,
+  getSmartMoneyForToken,
   GATES,
 };

@@ -129,7 +129,7 @@ const TOOL_DEFS = [
   },
   {
     name: 'watchlist',
-    description: 'Ajoute ou retire un token/wallet de ta watchlist de surveillance continue.',
+    description: "Ajoute ou retire un token/wallet de ta watchlist de surveillance continue. Les wallets suivis sont trackés en live : tu alertes le trader à chaque nouveau swap qu'ils font.",
     input_schema: {
       type: 'object',
       properties: {
@@ -141,6 +141,23 @@ const TOOL_DEFS = [
       },
       required: ['action', 'type', 'address'],
     },
+  },
+  {
+    name: 'analyser_wallet',
+    description: "Analyse complète d'un wallet Solana via GMGN : stats de trading (winrate, PnL réalisé, ROI, répartition des gains/pertes), positions actuelles avec PnL non réalisé, derniers trades, et classification du style (sniper, bot, diamond hands, whale, bag-holder, dev…). Pour répondre à 'ce wallet est-il bon ?' ou 'faut-il le copier ?'.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        address: { type: 'string', description: 'Adresse du wallet' },
+        periode: { type: 'string', enum: ['7d', '30d'], description: 'Période des stats (défaut 7d)' },
+      },
+      required: ['address'],
+    },
+  },
+  {
+    name: 'smart_money_moves',
+    description: "Ce que les smart money et les KOLs achètent/vendent EN CE MOMENT (flux live GMGN, agrégé par token) : nombre d'achats vs ventes, wallets distincts, volume USD. Pour détecter les rotations et les entrées coordonnées.",
+    input_schema: { type: 'object', properties: {} },
   },
 ];
 
@@ -463,6 +480,7 @@ class PersonalAgent {
     lines.push(`- Portefeuille Solana live : balance SOL, positions ouvertes avec PnL, tokens détenus`);
     lines.push(`- Historique complet des trades : tous les BUY/SELL avec PnL réalisé`);
     lines.push(`- GMGN (ta source de données unique) : trending, hot searches, prix, smart money, KOLs, snipers, bundlers, sécurité on-chain (honeypot/mint/freeze/top10), monitoring de fuite des positions`);
+    lines.push(`- GMGN wallets : stats de n'importe quel wallet (winrate, PnL réalisé/non réalisé, positions), historique de trades, flux smart money/KOL en direct — les wallets de ta watchlist sont trackés en live (alerte à chaque swap)`);
     lines.push(`- Jupiter : exécution de swaps buy/sell`);
     lines.push(`- Patterns historiques : tokens récurrents et leurs performances passées`);
     lines.push(`- Telegram : alertes directes sur le téléphone du trader`);
@@ -474,8 +492,10 @@ class PersonalAgent {
     lines.push(`- donnees_token : due diligence GMGN complète (prix, sécurité, snipers, bundlers, buy ratio)`);
     lines.push(`- analyser_token : ton analyse complète BUY/WATCH/SKIP avec score et SL/TP`);
     lines.push(`- etat_portefeuille : balance + positions + PnL en temps réel`);
+    lines.push(`- analyser_wallet : stats/positions/historique/style d'un wallet (winrate, PnL, sniper/bot/whale/diamond hands…)`);
+    lines.push(`- smart_money_moves : ce que les smart money et KOLs achètent/vendent EN CE MOMENT`);
     lines.push(`- acheter / vendre : exécution réelle sur le wallet (plafond ${a.maxSolPerTrade} SOL/trade) — uniquement sur demande ou accord clair du trader dans la conversation`);
-    lines.push(`- watchlist : gérer toi-même ta liste de surveillance`);
+    lines.push(`- watchlist : gérer toi-même ta liste de surveillance (les wallets ajoutés sont trackés en live)`);
     lines.push(`Enchaîne les outils si besoin (chercher → analyser → répondre). Réponds avec les CHIFFRES obtenus, pas des généralités.`);
     lines.push(``);
 
@@ -740,6 +760,19 @@ class PersonalAgent {
       g.verdict ? `GMGN verdict momentum: ${g.verdict.verdict.toUpperCase()} (${g.verdict.crowd}, conviction ${g.verdict.conviction}) — ${g.verdict.thesis}` : '',
     ].filter(Boolean) : [];
 
+    // Flux smart money LIVE pour ce token (track GMGN, cache 60s — best effort)
+    let smartFlowLine = '';
+    try {
+      if (await gmgn.isAvailable()) {
+        const flow = await gmgn.getSmartMoneyForToken(addr);
+        if (flow && (flow.buys + flow.sells) > 0) {
+          smartFlowLine = `Flux smart money LIVE: ${flow.buys} achats / ${flow.sells} ventes` +
+            ` (${flow.wallets} wallets${flow.kols ? `, dont ${flow.kols} trades KOL` : ''}` +
+            `${flow.volumeUsd > 0 ? `, ~$${(flow.volumeUsd / 1000).toFixed(1)}K` : ''})`;
+        }
+      }
+    } catch { /* best effort */ }
+
     // Contexte personnel d'ARIA pour l'analyse
     const history  = this._trader?.history || [];
     const sells    = history.filter(h => h.action === 'SELL' && h.pnlSol != null);
@@ -756,6 +789,7 @@ class PersonalAgent {
       secLine,
       `Historique: ${recLine}`,
       ...gmgnLines,
+      smartFlowLine,
       ``,
       `Ton profil: risque ${pers.riskTolerance.toFixed(1)}/10, style ${pers.tradingStyle}${winRate != null ? `, win rate actuel ${winRate}%` : ''}.`,
       winRate != null && winRate < 40 ? `(Tu es en difficulté récemment, sois plus sélective.)` : '',
@@ -846,7 +880,8 @@ class PersonalAgent {
   async _execTool(name, input = {}) {
     try {
       if (!(await gmgn.isAvailable()) &&
-          ['rechercher_token', 'tokens_tendance', 'donnees_token', 'analyser_token'].includes(name)) {
+          ['rechercher_token', 'tokens_tendance', 'donnees_token', 'analyser_token',
+           'analyser_wallet', 'smart_money_moves'].includes(name)) {
         return { erreur: 'GMGN non configuré (gmgn-cli + GMGN_API_KEY requis)' };
       }
 
@@ -969,6 +1004,74 @@ class PersonalAgent {
           return { erreur: 'action/type invalide' };
         }
 
+        case 'analyser_wallet': {
+          const addr   = String(input.address || '').trim();
+          const period = input.periode === '30d' ? '30d' : '7d';
+          if (!addr) return { erreur: 'Adresse de wallet manquante' };
+
+          const [stats, holdings, activity] = await Promise.all([
+            gmgn.getWalletStats(addr, period),
+            gmgn.getWalletHoldings(addr, 10),
+            gmgn.getWalletActivity(addr, { limit: 15 }),
+          ]);
+          if (!stats && holdings.length === 0 && activity.length === 0) {
+            return { erreur: 'Wallet introuvable ou sans activité sur GMGN' };
+          }
+
+          const out = { wallet: addr, periode: period };
+          if (stats) {
+            out.stats = {
+              winrate:        Math.round((stats.winrate || 0) * 100) + '%',
+              pnlRealiseUsd:  Math.round(stats.realizedProfit),
+              roi:            Math.round((stats.roi || 0) * 100) + '%',
+              trades:         `${stats.buys} achats / ${stats.sells} ventes`,
+              tokensTrades:   stats.tokensTraded,
+              dureeMoyenne:   stats.avgHoldingSec >= 3600
+                ? Math.round(stats.avgHoldingSec / 3600) + 'h'
+                : Math.round(stats.avgHoldingSec / 60) + 'min',
+              repartitionPnl: stats.pnl,
+              tagsGmgn:       stats.tags,
+            };
+            out.style = gmgn.classifyWallet(stats, activity);
+          }
+          if (holdings.length > 0) {
+            out.positions = holdings.slice(0, 8).map(h => ({
+              symbol:            sanitizeName(h.symbol),
+              address:           h.tokenAddress,
+              valeurUsd:         Math.round(h.usdValue),
+              pnlRealiseUsd:     Math.round(h.realizedProfit),
+              pnlNonRealiseUsd:  Math.round(h.unrealizedProfit),
+            }));
+          }
+          if (activity.length > 0) {
+            out.derniersTrades = activity.slice(0, 10).map(a => ({
+              type:    a.type,
+              symbol:  sanitizeName(a.tokenSymbol),
+              address: a.tokenAddress,
+              montantUsd: Math.round(a.costUsd),
+              quand:   a.ts ? new Date(a.ts * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?',
+            }));
+          }
+          return out;
+        }
+
+        case 'smart_money_moves': {
+          const moves = await gmgn.getSmartMoneyMoves();
+          if (moves.length === 0) return { resultat: 'Aucun trade smart money/KOL récent (ou flux indisponible)' };
+          return {
+            fluxLive: moves.slice(0, 12).map(m => ({
+              symbol:      sanitizeName(m.symbol),
+              address:     m.tokenAddress,
+              achats:      m.buys,
+              ventes:      m.sells,
+              wallets:     m.wallets,
+              dontKols:    m.kols,
+              volumeUsd:   Math.round(m.volumeUsd),
+            })),
+            note: 'Trié par pression acheteuse nette (achats - ventes). Croise avec analyser_token avant toute décision.',
+          };
+        }
+
         default:
           return { erreur: `Outil inconnu: ${name}` };
       }
@@ -1063,7 +1166,8 @@ class PersonalAgent {
       try {
         await this._escapeMonitor();                           // signaux de fuite GMGN (prioritaire)
         await this._checkPositions();                          // alertes SL/TP
-        if (tick % 2  === 0) await this._checkWatchlist();     // ~6 min
+        if (tick % 2  === 0) await this._checkWatchlist();     // ~6 min — tokens suivis
+        if (tick % 2  === 0) await this._checkWalletWatchlist(); // ~6 min — wallets suivis (live)
         if (tick % 3  === 0) await this._managePositions();    // ~9 min — gestion active
         if (tick % 10 === 0) await this._learnFromHistory();   // ~30 min
         await this._maybeDailyReport();                        // check léger, envoi 1x/jour à 20h
@@ -1282,6 +1386,58 @@ class PersonalAgent {
           }
         }
       } catch { /* token non trouvé — silencieux */ }
+    }
+  }
+
+  /**
+   * Tracking LIVE des wallets suivis (pur code — méthodo GMGN, pas de LLM).
+   * Toutes les ~6 min : compare l'activité de chaque wallet suivi avec le
+   * dernier trade vu → alerte proactive sur chaque nouveau swap + journal.
+   */
+  async _checkWalletWatchlist() {
+    const wallets = this.data.watchlist.wallets;
+    if (wallets.length === 0) return;
+    if (!(await gmgn.isAvailable())) return;
+
+    for (const w of wallets) {
+      try {
+        const acts = await gmgn.getWalletActivity(w.address, { limit: 10 });
+        if (acts.length === 0) continue;
+
+        const label  = w.label || w.address.slice(0, 6) + '…';
+        const lastTs = w.lastActivityTs || 0;
+
+        // Premier passage : on fige le curseur sans alerter (évite le spam à l'ajout)
+        if (!lastTs) {
+          w.lastActivityTs = acts[0].ts || Math.floor(Date.now() / 1000);
+          this._save();
+          continue;
+        }
+
+        const fresh = acts
+          .filter(a => a.ts > lastTs && ['buy', 'sell'].includes(a.type))
+          .slice(0, 4)          // max 4 alertes par wallet par cycle
+          .reverse();           // chronologique
+
+        if (fresh.length === 0) continue;
+        w.lastActivityTs = Math.max(...acts.map(a => a.ts || 0));
+        this._save();
+
+        for (const a of fresh) {
+          const sym    = sanitizeName(a.tokenSymbol);
+          const action = a.type === 'buy' ? 'acheté' : 'vendu';
+          const emoji  = a.type === 'buy' ? '🟢' : '🔴';
+          const amount = a.costUsd > 0 ? ` (~$${Math.round(a.costUsd)})` : '';
+          this.logAction('WALLET', `${emoji} Wallet ${label} a ${action} $${sym}${amount}`, {
+            wallet: w.address, symbol: sym, address: a.tokenAddress,
+          });
+          await this.sendMessage(
+            `🔭 Wallet suivi ${label} vient d'${a.type === 'buy' ? 'acheter' : 'vendre'} $${sym}${amount}.` +
+            (a.type === 'buy' ? ` Je peux analyser le token si tu veux.` : ''),
+            a.costUsd >= 1000 ? 'high' : 'normal'
+          );
+        }
+      } catch { /* wallet illisible — silencieux */ }
     }
   }
 
