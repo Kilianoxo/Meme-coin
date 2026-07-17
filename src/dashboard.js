@@ -24,9 +24,7 @@ const state         = require('./state');
 const agentMemory   = require('./agentMemory');
 const personalAgent = require('./personalAgent');
 const { agentBus } = require('./agents');
-const dex      = require('./dexscreener');
-const birdeye  = require('./birdeye');
-const rugcheck = require('./rugcheck');
+const gmgn          = require('./gmgn');
 
 const PUBLIC_DIR   = path.join(__dirname, 'public');
 const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
@@ -495,18 +493,14 @@ class Dashboard {
       }
     } catch { /* silencieux */ }
 
-    // Fallback DexScreener pour les mints sans prix (tokens inconnus de Jupiter)
-    const missing = mints.filter(m => !out[m]);
-    if (missing.length > 0) {
-      try {
-        const resp = await dex.getTokensByAddress(missing);
-        for (const pair of (resp?.pairs ?? [])) {
-          const mint = pair?.baseToken?.address;
-          if (mint && pair?.priceUsd && !out[mint]) {
-            out[mint] = parseFloat(pair.priceUsd);
-          }
-        }
-      } catch { /* silencieux */ }
+    // Fallback GMGN (token info, caché 60s) pour les mints inconnus de Jupiter —
+    // limité aux 5 premiers pour préserver le quota CLI
+    const missing = mints.filter(m => !out[m]).slice(0, 5);
+    if (missing.length > 0 && await gmgn.isAvailable()) {
+      for (const mint of missing) {
+        const price = await gmgn.getTokenPrice(mint).catch(() => null);
+        if (price) out[mint] = price;
+      }
     }
 
     return out;
@@ -601,20 +595,26 @@ class Dashboard {
       });
 
       try {
-        const pairs = await dex.getTokenPairs('solana', addr);
-        if (!pairs || pairs.length === 0) {
-          this._jsonOk(res, { ok: false, error: 'Token introuvable sur DexScreener' });
+        if (!(await gmgn.isAvailable())) {
+          this._jsonOk(res, { ok: false, error: 'GMGN non configuré (gmgn-cli + GMGN_API_KEY requis)' });
           return;
         }
-        const pair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+        const pair = await personalAgent._fetchPair(addr);
+        if (!pair) {
+          this._jsonOk(res, { ok: false, error: 'Token introuvable sur GMGN' });
+          return;
+        }
 
-        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
-          birdeye.getTokenData(addr),
-          rugcheck.getTokenReport(addr),
-          rugcheck.getLpLockData(addr),
-        ]);
+        const sec = await gmgn.getTokenSecurity(addr);
+        const g   = pair._gmgn || {};
+        const security = sec ? {
+          mintAuthority:      sec.renouncedMint   ? null : 'active',
+          freezeAuthority:    sec.renouncedFreeze ? null : 'active',
+          top10HolderPercent: (sec.top10 || 0) * 100,
+        } : null;
+        const overview = { holder: g.holderCount || null };
 
-        const debate = await personalAgent.analyzeToken(pair, security, rugReport, overview, lpLock);
+        const debate = await personalAgent.analyzeToken(pair, security, null, overview, null);
 
         const sym = pair.baseToken?.symbol || addr.slice(0, 6);
         this._pushChat({

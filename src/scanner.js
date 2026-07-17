@@ -1,18 +1,18 @@
 /**
- * Scanner de tokens — Interroge les sources toutes les 30s
+ * Scanner de tokens — 100% données GMGN
  * Émet des événements: 'candidate' (token brut) et 'debate' (résultat IA)
- * Sources: DexScreener top-boosted + GeckoTerminal trending
- *          + GMGN trending (si gmgn-cli + GMGN_API_KEY configurés)
- * Pump.fun désactivé — trop aléatoire, analyse impossible sur des tokens de quelques minutes
+ *
+ * Source unique : GMGN trending (gmgn-cli + GMGN_API_KEY requis).
+ * Chaque ligne trending porte déjà toute la due-diligence (smart money, KOL,
+ * snipers, bundlers, taxes, rug ratio, mint/freeze, holders) → zéro appel
+ * supplémentaire par candidat, gates durs déterministes avant l'IA.
+ *
+ * DexScreener / GeckoTerminal / Birdeye / RugCheck / Pump.fun : supprimés.
  */
 
 const { EventEmitter } = require('events');
-const dex           = require('./dexscreener');
 const personalAgent = require('./personalAgent');
-const birdeye       = require('./birdeye');
-const gecko         = require('./geckoterminal');
 const gmgn          = require('./gmgn');
-const rugcheck      = require('./rugcheck');
 const tokenHistory  = require('./tokenHistory');
 const state         = require('./state');
 
@@ -29,10 +29,11 @@ const SEEN_TTL_MS = 4 * 3_600_000; // 4 heures
 
 const FILTERS = {
   minLiquidityUsd: parseFloat(process.env.MIN_LIQUIDITY_USD    || '5000'),
-  minVolume24hUsd: parseFloat(process.env.MIN_VOLUME_24H_USD   || '20000'),
+  // Volume mesuré sur la fenêtre trending GMGN (1h par défaut) — plus strict qu'un 24h
+  minVolumeUsd:    parseFloat(process.env.MIN_VOLUME_24H_USD   || '20000'),
   minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD   || '30000'),
   maxAgeHours:     parseFloat(process.env.MAX_TOKEN_AGE_HOURS  || '72'),
-  minAgeHours:     parseFloat(process.env.MIN_TOKEN_AGE_HOURS  || '6'),  // ignore < 6h par défaut
+  minAgeHours:     parseFloat(process.env.MIN_TOKEN_AGE_HOURS  || '6'),
 };
 
 class Scanner extends EventEmitter {
@@ -44,6 +45,7 @@ class Scanner extends EventEmitter {
     this.isRunning = false;
     this.scanCount = 0;
     this._interval = null;
+    this._gmgnWarned = false;
   }
 
   /** Vérifie si un token a déjà été vu récemment (TTL 4h) */
@@ -60,26 +62,22 @@ class Scanner extends EventEmitter {
   }
 
   /**
-   * Vérifie si une paire passe les filtres de base.
-   * @param {Object}  pair
-   * @param {boolean} skipAgeFilter — true pour les sources "trending/top" où
-   *                                  les tokens peuvent être plus âgés mais
-   *                                  avoir du momentum prouvé.
+   * Filtres de base (liquidité, volume, mcap, âge) sur une paire normalisée.
+   * Le filtre d'âge MAX est ignoré : un trending GMGN peut être établi depuis
+   * plusieurs jours et avoir du momentum prouvé. Le MIN s'applique toujours.
    */
-  _passesFilters(pair, skipAgeFilter = false) {
-    if (pair.chainId !== 'solana') return false;
-
+  _passesFilters(pair) {
     const symbol    = pair.baseToken?.symbol || pair.baseToken?.address?.slice(0, 8) || '?';
     const liquidity = pair.liquidity?.usd || 0;
-    const volume24h = pair.volume?.h24 || 0;
+    const volume    = pair.volume?.h24 || 0;
     const marketCap = pair.marketCap || pair.fdv || 0;
 
     if (liquidity < FILTERS.minLiquidityUsd) {
       console.log(`[Scanner] ⛔ ${symbol} liq trop faible: $${liquidity.toFixed(0)} < $${FILTERS.minLiquidityUsd}`);
       return false;
     }
-    if (volume24h < FILTERS.minVolume24hUsd) {
-      console.log(`[Scanner] ⛔ ${symbol} vol24h trop faible: $${volume24h.toFixed(0)} < $${FILTERS.minVolume24hUsd}`);
+    if (volume < FILTERS.minVolumeUsd) {
+      console.log(`[Scanner] ⛔ ${symbol} volume trop faible: $${volume.toFixed(0)} < $${FILTERS.minVolumeUsd}`);
       return false;
     }
     if (marketCap < FILTERS.minMarketCapUsd) {
@@ -89,13 +87,8 @@ class Scanner extends EventEmitter {
 
     if (pair.pairCreatedAt) {
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000;
-
       if (ageHours < FILTERS.minAgeHours) {
         console.log(`[Scanner] ⛔ ${symbol} trop récent: ${ageHours.toFixed(1)}h < ${FILTERS.minAgeHours}h`);
-        return false;
-      }
-      if (!skipAgeFilter && ageHours > FILTERS.maxAgeHours) {
-        console.log(`[Scanner] ⛔ ${symbol} trop vieux: ${ageHours.toFixed(1)}h > ${FILTERS.maxAgeHours}h`);
         return false;
       }
     }
@@ -105,8 +98,7 @@ class Scanner extends EventEmitter {
 
   /**
    * Score de pertinence rapide (sans LLM) pour prioriser les meilleurs candidats.
-   * Combine vélocité de volume, pression acheteuse et momentum prix récent.
-   * Retourne un nombre positif — plus c'est haut, plus le token est intéressant.
+   * Vélocité de volume × pression acheteuse × momentum prix, bonus smart money.
    */
   _relevanceScore(pair) {
     const liq      = pair.liquidity?.usd  || 1;          // évite division par 0
@@ -120,93 +112,35 @@ class Scanner extends EventEmitter {
     const volVelocity  = volH1 / liq;                         // volume récent / pool
     const buyPressure  = buys / total;                        // 0→1, >0.5 = majorité acheteurs
     const priceBonus   = 1 + Math.max(0, (pc.h1 || 0)) / 100; // bonus si prix monte
+    // Bonus consensus GMGN : smart money + KOL présents = signal plus fort
+    const g            = pair._gmgn;
+    const smartBonus   = g ? 1 + Math.min(1, (g.smartDegen + g.renowned * 2) / 50) : 1;
 
-    return volVelocity * buyPressure * priceBonus;
+    return volVelocity * buyPressure * priceBonus * smartBonus;
   }
 
-  /** Sélectionne la meilleure paire (liquidité la plus haute) parmi toutes les paires d'un token */
-  _bestPair(pairs) {
-    if (!Array.isArray(pairs) || pairs.length === 0) return null;
-    return pairs
-      .filter((p) => p.chainId === 'solana')
-      .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0] || null;
-  }
+  /** Un cycle de scan complet — source unique : GMGN trending */
+  async scan() {
+    this.scanCount++;
+    console.log(`[Scanner] Scan #${this.scanCount} (${new Date().toLocaleTimeString('fr-FR')})`);
 
-  /** Récupère la paire complète d'un token à partir de son adresse */
-  async _fetchBestPair(tokenAddress) {
-    try {
-      const pairs = await dex.getTokenPairs('solana', tokenAddress);
-      return this._bestPair(pairs);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Scanne les tokens avec le plus de boosts actifs (soutenu, pas juste récent).
-   * Signal plus fort que "latest" : ces tokens ont payé et maintiennent leur boost.
-   * skipAgeFilter = true car un top-boosted peut être établi depuis plusieurs jours.
-   */
-  async _scanTopBoosted() {
-    const boosted = await dex.getTopBoostedTokens();
-    if (!Array.isArray(boosted)) return [];
-
-    const results = [];
-    for (const item of boosted) {
-      if (!item.tokenAddress || this._isSeen(item.tokenAddress)) continue;
-      const pair = await this._fetchBestPair(item.tokenAddress);
-      if (pair && this._passesFilters(pair, true)) {
-        results.push({ ...pair, _source: 'dex-top-boosted' });
-        this._markSeen(item.tokenAddress);
+    if (!(await gmgn.isAvailable())) {
+      if (!this._gmgnWarned || this.scanCount % 20 === 0) {
+        console.warn('[Scanner] ⚠️ GMGN non configuré (gmgn-cli + GMGN_API_KEY requis) — scanner en attente.');
+        this._gmgnWarned = true;
       }
+      return;
     }
-    return results;
-  }
-
-  /**
-   * Scanne GeckoTerminal — trending uniquement (plus de nouveaux pools).
-   * Les nouveaux pools = 95 % de bruit; le trending = momentum avéré sur 24h.
-   * skipAgeFilter = true : ces tokens ont peut-être quelques jours mais ils bougent.
-   */
-  async _scanTrending() {
-    let trending = [];
-    try {
-      trending = await gecko.getTrendingPools();
-    } catch (err) {
-      console.error('[Scanner] Erreur GeckoTerminal trending:', err.message);
-      return [];
-    }
-
-    const results = [];
-    for (const pair of trending) {
-      const addr = pair.baseToken?.address;
-      if (!addr || this._isSeen(addr)) continue;
-      if (this._passesFilters(pair, true)) {
-        results.push({ ...pair, _source: 'gecko-trending' });
-        this._markSeen(addr);
-      }
-    }
-    return results;
-  }
-
-  /**
-   * Scanne le trending GMGN (si gmgn-cli + clé API disponibles).
-   * Les lignes portent des champs de due-diligence riches (smart money, KOL,
-   * bundlers, taxes…) → gates durs GMGN appliqués AVANT les filtres génériques.
-   * skipAgeFilter = true : le filtre MIN d'âge s'applique quand même.
-   */
-  async _scanGmgnTrending() {
-    if (!(await gmgn.isAvailable())) return [];
 
     let rows = [];
     try {
       rows = await gmgn.getTrending();
     } catch (err) {
       console.error('[Scanner] Erreur GMGN trending:', err.message);
-      return [];
+      return;
     }
 
-    const results = [];
+    const candidates = [];
     for (const pair of rows) {
       const addr = pair.baseToken?.address;
       if (!addr || this._isSeen(addr)) continue;
@@ -219,69 +153,35 @@ class Scanner extends EventEmitter {
         continue;
       }
 
-      if (this._passesFilters(pair, true)) {
-        results.push(pair);
+      if (this._passesFilters(pair)) {
+        candidates.push(pair);
         this._markSeen(addr);
       }
     }
-    return results;
-  }
 
-  /** Un cycle de scan complet */
-  async scan() {
-    this.scanCount++;
-    console.log(`[Scanner] Scan #${this.scanCount} (${new Date().toLocaleTimeString('fr-FR')})`);
-
-    let candidates = [];
-    let trending = [], topBoosted = [], gmgnTrending = [];
-    try {
-      // Trois sources : GMGN trending (si configuré) + GeckoTerminal + top-boosted
-      // Toutes ignorent le filtre d'âge MAX (tokens établis avec momentum)
-      // mais le filtre MIN s'applique partout
-      [gmgnTrending, trending, topBoosted] = await Promise.all([
-        this._scanGmgnTrending(),
-        this._scanTrending(),
-        this._scanTopBoosted(),
-      ]);
-      // Déduplique par adresse — GMGN en premier : ses paires portent les
-      // données riches (_gmgn) et doivent gagner en cas de chevauchement
-      const seen = new Set();
-      for (const pair of [...gmgnTrending, ...trending, ...topBoosted]) {
-        const addr = pair.baseToken?.address;
-        if (addr && !seen.has(addr)) {
-          seen.add(addr);
-          candidates.push(pair);
-        }
-      }
-    } catch (err) {
-      console.error('[Scanner] Erreur lors du scan:', err.message);
-      return;
-    }
-
-    // Trie par pertinence (vélocité volume × buy pressure × momentum prix)
-    // et ne garde que les MAX_CANDIDATES_PER_SCAN meilleurs pour les débats IA
+    // Trie par pertinence et ne garde que les meilleurs pour les débats IA
     candidates.sort((a, b) => this._relevanceScore(b) - this._relevanceScore(a));
     const toAnalyze = candidates.slice(0, MAX_CANDIDATES_PER_SCAN);
 
-    const srcStr = `${gmgnTrending.length} gmgn, ${trending.length} trending, ${topBoosted.length} top-boosted`;
-    console.log(`[Scanner] ${candidates.length} candidat(s) [${srcStr}] — top ${toAnalyze.length} en débat IA`);
+    console.log(`[Scanner] ${candidates.length} candidat(s) GMGN — top ${toAnalyze.length} en débat IA`);
 
     for (const token of toAnalyze) {
       // Émet immédiatement le candidat (pour l'alerte Telegram brute)
       this.emit('candidate', token);
 
-      // Lance le débat IA en arrière-plan (avec données Birdeye si dispo)
+      // Lance l'analyse IA en arrière-plan
       this._analyzeToken(token)
         .catch((err) => console.error('[Scanner] Erreur analyse:', err.message));
     }
   }
 
   /**
-   * Récupère les données Birdeye, applique le hard filter, puis lance le débat IA
+   * Analyse un candidat. La due-diligence vient entièrement de la ligne
+   * trending GMGN (déjà passée aux gates durs) — aucun appel API additionnel.
    */
   async _analyzeToken(token) {
     const address = token.baseToken?.address;
-    const symbol = token.baseToken?.symbol || '???';
+    const symbol  = token.baseToken?.symbol || '???';
 
     // Toggle dashboard : analyses IA suspendues → aucun crédit API consommé
     if (!state.agentsEnabled) {
@@ -289,37 +189,25 @@ class Scanner extends EventEmitter {
       return;
     }
 
-    // Enrichissement Birdeye + RugCheck (summary + LP lock) en parallèle
-    const [{ security, overview }, rugReport, lpLock] = await Promise.all([
-      birdeye.getTokenData(address),
-      rugcheck.getTokenReport(address),
-      rugcheck.getLpLockData(address),
-    ]);
+    const g = token._gmgn || {};
+    // Objets sécurité/overview dérivés des données GMGN (même forme qu'avant
+    // pour l'affichage — mintAuthority non-null = danger)
+    const security = {
+      mintAuthority:      g.renouncedMint   ? null : 'active',
+      freezeAuthority:    g.renouncedFreeze ? null : 'active',
+      top10HolderPercent: (g.top10 || 0) * 100,
+      creatorPercentage:  (g.devHold || 0) * 100,
+    };
+    const overview = { holder: g.holderCount || null };
 
-    // Hard filter Birdeye (mint authority, concentration holders, holders < 50)
-    if (birdeye.isHardBlocked(security, overview)) {
-      const holders = overview?.holder ?? '?';
-      console.log(`[Scanner] ⛔ ${symbol} bloqué Birdeye (mint/concentration/holders: ${holders})`);
-      return;
-    }
-
-    // Hard filter RugCheck (rugpull détecté, score > 800, risque "danger")
-    if (rugcheck.isHardBlocked(rugReport)) {
-      const score = rugReport?.score ?? '?';
-      console.log(`[Scanner] ⛔ ${symbol} bloqué RugCheck (score: ${score})`);
-      return;
-    }
-
-    const lpPct   = lpLock ? `${lpLock.lpLockedPct.toFixed(0)}% LP lock` : 'LP lock: ?';
-    const source  = token._source ? ` [${token._source}]` : '';
-    console.log(`[Scanner] ✅ ${symbol}${source} passe les filtres — ${lpPct}`);
+    console.log(`[Scanner] ✅ ${symbol} passe les gates GMGN — ${g.smartDegen ?? 0} smart money, ${g.renowned ?? 0} KOL`);
 
     // Enregistre le passage des filtres et vérifie si token récidiviste
     const recurringInfo = tokenHistory.recordSighting(
       token.baseToken?.symbol || '',
       token.baseToken?.name   || '',
       address,
-      token._source || 'unknown'
+      token._source || 'gmgn-trending'
     );
     token._recurring = recurringInfo;
 
@@ -331,15 +219,15 @@ class Scanner extends EventEmitter {
       console.log(`[Scanner] 🔄 RÉCIDIVISTE $${symbol} — vu ${recurringInfo.sightings}x (${dayStr})${peakStr}`);
     }
 
-    // ARIA — agent unique remplace le système multi-agents
-    const debate = await personalAgent.analyzeToken(token, security, rugReport, overview, lpLock);
+    // ARIA — analyse avec les données GMGN (rugReport/lpLock plus utilisés)
+    const debate = await personalAgent.analyzeToken(token, security, null, overview, null);
     if (debate) this.emit('debate', debate);
   }
 
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log(`[Scanner] Démarré — filtres: liq>${FILTERS.minLiquidityUsd}$, vol24h>${FILTERS.minVolume24hUsd}$, âge: ${FILTERS.minAgeHours}h–${FILTERS.maxAgeHours}h`);
+    console.log(`[Scanner] Démarré — source GMGN | filtres: liq>${FILTERS.minLiquidityUsd}$, vol>${FILTERS.minVolumeUsd}$, mcap>${FILTERS.minMarketCapUsd}$, âge min ${FILTERS.minAgeHours}h`);
     this.scan();
     this._interval = setInterval(() => this.scan(), SCAN_INTERVAL_MS);
   }

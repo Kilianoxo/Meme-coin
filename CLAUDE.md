@@ -3,24 +3,20 @@
 ## Contexte du projet
 Bot de trading automatique de meme coins Solana via Telegram + dashboard web.
 Piloté par ARIA, un agent IA personnel 100% autonome (Claude Haiku).
-Stack: Node.js, Telegraf, Jupiter API (swaps), DexScreener, GeckoTerminal, Birdeye, RugCheck.
+Stack: Node.js, Telegraf, Jupiter API (swaps + prix), GMGN (source de données unique via gmgn-cli).
 Le propriétaire trade aussi manuellement sur GMGN — positions importables via /addposition.
 
 ## Architecture
 - `index.js` — Point d'entrée, charge le wallet et démarre Bot + Scanner + Dashboard + Watchdog + ARIA
 - `src/bot.js` — Interface Telegram (commandes + callbacks + délégation autonomie ARIA)
-- `src/scanner.js` — Détecte les tokens (DexScreener top-boosted + GeckoTerminal trending + GMGN trending si configuré — Pump.fun supprimé)
-- `src/gmgn.js` — Client GMGN via gmgn-cli (smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite) — optionnel, dégradé propre sans clé
+- `src/scanner.js` — Détecte les tokens (GMGN trending UNIQUEMENT — DexScreener/GeckoTerminal/Pump.fun supprimés)
+- `src/gmgn.js` — Client GMGN via gmgn-cli — SOURCE DE DONNÉES UNIQUE (trending, hot-searches, token info/prix, sécurité, smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite). REQUIS pour le scan/analyse ; sans clé le scanner attend
 - `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop, persistance disque
 - `src/personalAgent.js` — ARIA : analyse, chat agentique avec outils (tool use), autonomie (achat/vente auto), journal, apprentissage, heartbeat
 - `src/paperTrader.js` — Simulation sans risque (positions fictives, mêmes analyses)
 - `src/agents.js` — Ancien système multi-agents (suspendu — gardé pour agentBus/dashboard floor)
 - `src/agentMemory.js` — Mémoire des débats + poids dynamiques + suggestions
 - `src/tokenHistory.js` — Détection des tokens récidivistes (mêmes tickers, nouvelles adresses)
-- `src/birdeye.js` — Sécurité on-chain (mint authority, freeze, concentration holders)
-- `src/rugcheck.js` — Détection rugpull / LP lock
-- `src/dexscreener.js` — Client DexScreener API
-- `src/geckoterminal.js` — Client GeckoTerminal API
 - `src/dashboard.js` — Serveur web (HTTP natif) : API + SSE temps réel
 - `src/public/index.html` — Dashboard (onglets Dashboard / ARIA / Paper Trading)
 - `src/watchdog.js` — Redémarre le scanner s'il bloque, capture les erreurs fatales
@@ -48,9 +44,9 @@ Tout est journalisé dans agent_journal.json + push SSE `aria_journal`.
 Le chat d'ARIA (dashboard + /agent Telegram) est une boucle agentique (max 6 tours d'outils,
 `MAX_TOOL_ROUNDS`) : elle appelle les APIs elle-même, sans qu'on lui donne les adresses.
 Outils (`TOOL_DEFS` + `_execTool` dans personalAgent.js) :
-- `rechercher_token` — DexScreener search par nom/ticker → adresse, prix, liq
-- `tokens_tendance` — GeckoTerminal trending + GMGN trending (smart money/KOL)
-- `donnees_token` — due diligence complète (DexScreener + Birdeye + RugCheck + LP lock)
+- `rechercher_token` — recherche dans le trending + hot-searches GMGN par nom/ticker
+- `tokens_tendance` — GMGN trending + hot-searches (smart money/KOL, verdicts)
+- `donnees_token` — due diligence GMGN (prix, sécurité, snipers, bundlers, buy ratio)
 - `analyser_token` — pipeline d'analyse complet → décision BUY/WATCH/SKIP
 - `etat_portefeuille` — balance + positions avec PnL live + PnL du jour
 - `acheter` / `vendre` — swaps Jupiter réels (achat plafonné à maxSolPerTrade, journalisé)
@@ -91,11 +87,10 @@ Chaque trade via chat est journalisé dans agent_journal.json.
 TELEGRAM_TOKEN, TELEGRAM_ADMIN_ID, ANTHROPIC_API_KEY (obligatoires)
 WALLET_PRIVATE_KEY (optionnel — trading désactivé sans)
 SOLANA_RPC_URL (défaut: mainnet-beta public)
-BIRDEYE_API_KEY (optionnel — sécurité on-chain désactivée sans)
 JUPITER_API_KEY (optionnel)
-GMGN_API_KEY (optionnel — nécessite npm i -g gmgn-cli ; aussi lu depuis ~/.config/gmgn/.env)
+GMGN_API_KEY (REQUIS pour le scan — npm i -g gmgn-cli ; aussi lu depuis ~/.config/gmgn/.env)
 GMGN_TRENDING_ARGS, GMGN_MIN_CONFLUENCE (optionnels — tuning source GMGN)
-MIN_LIQUIDITY_USD (défaut: 5000), MIN_VOLUME_24H_USD (défaut: 20000), MIN_MARKET_CAP_USD (défaut: 30000)
+MIN_LIQUIDITY_USD (défaut: 5000), MIN_VOLUME_24H_USD (défaut: 20000 — mesuré sur la fenêtre trending GMGN 1h), MIN_MARKET_CAP_USD (défaut: 30000)
 MIN_TOKEN_AGE_HOURS (défaut: 6), MAX_TOKEN_AGE_HOURS (défaut: 72)
 MAX_POSITION_SOL (défaut: 0.1)
 DEFAULT_STOP_LOSS_PCT (défaut: 20), DEFAULT_TAKE_PROFIT_PCT (défaut: 50)
@@ -106,6 +101,6 @@ claude/meme-coin-development-MhZiV
 
 ## À faire / idées futures
 - Suivi des wallets de la watchlist (transactions on-chain, copy-trade)
-- Backtest sur données historiques DexScreener
+- Backtest sur données historiques (gmgn-cli market kline)
 - Prise de profit partielle automatique (vendre 50% au TP, laisser courir le reste)
-- Nettoyage : retirer agents.js/pumpfun.js quand le Trading Floor sera définitivement abandonné
+- Nettoyage : retirer agents.js quand le Trading Floor sera définitivement abandonné

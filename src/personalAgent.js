@@ -26,11 +26,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { createMessage, ask } = require('./anthropic');
-const dex         = require('./dexscreener');
 const gmgn        = require('./gmgn');
-const gecko       = require('./geckoterminal');
-const birdeye     = require('./birdeye');
-const rugcheck    = require('./rugcheck');
 const agentMemory = require('./agentMemory');
 const tokenHistory = require('./tokenHistory');
 const state       = require('./state');
@@ -71,7 +67,7 @@ const MAX_TOOL_ROUNDS = 6;
 const TOOL_DEFS = [
   {
     name: 'rechercher_token',
-    description: "Trouve un token Solana par son nom ou ticker (ex: 'BONK', 'pepe'). Retourne les meilleures correspondances avec leur adresse, prix, liquidité. À utiliser dès que le trader mentionne un token sans donner l'adresse.",
+    description: "Trouve un token Solana par son nom ou ticker (ex: 'BONK', 'pepe') dans le trending et les recherches chaudes GMGN. Retourne adresse, prix, liquidité, smart money. À utiliser dès que le trader mentionne un token sans donner l'adresse. S'il n'est pas dans les listes chaudes GMGN, demande l'adresse.",
     input_schema: {
       type: 'object',
       properties: { query: { type: 'string', description: 'Nom ou ticker du token' } },
@@ -80,12 +76,12 @@ const TOOL_DEFS = [
   },
   {
     name: 'tokens_tendance',
-    description: 'Les tokens Solana qui bougent en ce moment : GeckoTerminal trending + GMGN trending (avec smart money/KOL si disponible).',
+    description: 'Les tokens Solana qui bougent en ce moment sur GMGN : trending (volume, smart money, KOL, verdict momentum) + les plus recherchés (hot searches).',
     input_schema: { type: 'object', properties: {} },
   },
   {
     name: 'donnees_token',
-    description: "Due diligence complète d'un token à partir de son adresse : prix, variations, liquidité, volume, market cap, sécurité on-chain (Birdeye), risque rugpull (RugCheck), LP lock.",
+    description: "Due diligence complète d'un token via GMGN à partir de son adresse : prix, market cap, holders, sécurité on-chain (honeypot, mint/freeze, top10), et si le token est dans le trending : smart money, KOL, snipers, bundlers, buy ratio.",
     input_schema: {
       type: 'object',
       properties: { address: { type: 'string', description: 'Adresse du token (mint)' } },
@@ -466,20 +462,16 @@ class PersonalAgent {
     lines.push(`=== TES CAPACITÉS RÉELLES (tu y as accès en permanence) ===`);
     lines.push(`- Portefeuille Solana live : balance SOL, positions ouvertes avec PnL, tokens détenus`);
     lines.push(`- Historique complet des trades : tous les BUY/SELL avec PnL réalisé`);
-    lines.push(`- DexScreener : prix live, var 1h/6h/24h, liquidité, volume de n'importe quel token`);
-    lines.push(`- Birdeye : données on-chain (mint authority, freeze, holders)`);
-    lines.push(`- RugCheck : score de risque, rugpull, LP lock`);
+    lines.push(`- GMGN (ta source de données unique) : trending, hot searches, prix, smart money, KOLs, snipers, bundlers, sécurité on-chain (honeypot/mint/freeze/top10), monitoring de fuite des positions`);
     lines.push(`- Jupiter : exécution de swaps buy/sell`);
-    lines.push(`- GeckoTerminal trending + DexScreener top-boosted : flux de tokens à momentum`);
-    lines.push(`- GMGN (si configuré) : smart money, KOLs, snipers, bundlers, taxes, monitoring de fuite des positions`);
     lines.push(`- Patterns historiques : tokens récurrents et leurs performances passées`);
     lines.push(`- Telegram : alertes directes sur le téléphone du trader`);
     lines.push(`Ne dis JAMAIS que tu n'as pas accès aux données live ou aux APIs. C'est faux.`);
     lines.push(``);
     lines.push(`=== TES OUTILS (appelle-les TOI-MÊME, sans demander) ===`);
-    lines.push(`- rechercher_token : trouve l'adresse d'un token par son nom/ticker — si le trader dit "$PEPE" ou "le token machin", CHERCHE-LE, ne demande jamais l'adresse`);
-    lines.push(`- tokens_tendance : ce qui bouge en ce moment (GeckoTerminal + GMGN smart money)`);
-    lines.push(`- donnees_token : due diligence complète (prix, Birdeye, RugCheck, LP lock)`);
+    lines.push(`- rechercher_token : trouve un token par son nom/ticker dans le trending/hot GMGN — si le trader dit "$PEPE" ou "le token machin", CHERCHE-LE, ne demande jamais l'adresse`);
+    lines.push(`- tokens_tendance : ce qui bouge en ce moment sur GMGN (smart money, KOL, verdicts momentum)`);
+    lines.push(`- donnees_token : due diligence GMGN complète (prix, sécurité, snipers, bundlers, buy ratio)`);
     lines.push(`- analyser_token : ton analyse complète BUY/WATCH/SKIP avec score et SL/TP`);
     lines.push(`- etat_portefeuille : balance + positions + PnL en temps réel`);
     lines.push(`- acheter / vendre : exécution réelle sur le wallet (plafond ${a.maxSolPerTrade} SOL/trade) — uniquement sur demande ou accord clair du trader dans la conversation`);
@@ -762,8 +754,6 @@ class PersonalAgent {
       `Liq: $${(liq/1000).toFixed(1)}K  Vol24h: $${(vol/1000).toFixed(1)}K  MCap: $${(mcap/1000).toFixed(1)}K`,
       `Source: ${token._source || '?'}`,
       secLine,
-      rugReport ? `RugCheck: ${rugReport.score}/1000 (${rugReport.riskLevel})` : 'RugCheck: N/A',
-      lpLock    ? `LP: ${lpLock.lpLockedPct.toFixed(0)}% lock` : 'LP: ?',
       `Historique: ${recLine}`,
       ...gmgnLines,
       ``,
@@ -806,101 +796,118 @@ class PersonalAgent {
     return { token, security, rugReport, overview, lpLock, decision, _ariaMode: true };
   }
 
-  // ─── Outils du chat — ARIA appelle les APIs elle-même ─────────────────────
+  // ─── Outils du chat — ARIA appelle les APIs GMGN elle-même ────────────────
 
-  /** Meilleure paire DexScreener d'un token (par liquidité) */
-  async _fetchBestPair(address) {
-    const pairs = await dex.getTokenPairs('solana', address);
-    if (!Array.isArray(pairs) || pairs.length === 0) return null;
-    return pairs
-      .filter(p => p.chainId === 'solana')
-      .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0] || null;
-  }
-
-  /** Résumé compact d'une paire pour les résultats d'outils */
+  /** Résumé compact d'une paire normalisée pour les résultats d'outils */
   _pairSummary(p) {
+    const g = p._gmgn;
     return {
       symbol:       p.baseToken?.symbol,
       name:         sanitizeName(p.baseToken?.name),
       address:      p.baseToken?.address,
       priceUsd:     parseFloat(p.priceUsd || 0),
       var1h:        p.priceChange?.h1  ?? null,
-      var24h:       p.priceChange?.h24 ?? null,
       liquidityUsd: Math.round(p.liquidity?.usd || 0),
-      volume24hUsd: Math.round(p.volume?.h24 || 0),
+      volumeUsd:    Math.round(p.volume?.h24 || 0),
       marketCapUsd: Math.round(p.marketCap || p.fdv || 0),
+      ...(g ? {
+        smartMoney: g.smartDegen,
+        kol:        g.renowned,
+        buyRatio:   Math.round(g.buyRatio * 100) + '%',
+        verdict:    g.verdict?.verdict,
+      } : {}),
+    };
+  }
+
+  /**
+   * Récupère une paire pour un token : ligne trending GMGN si présente (riche),
+   * sinon token info GMGN (minimal). null si introuvable.
+   */
+  async _fetchPair(address) {
+    await gmgn.getTrending().catch(() => []);
+    const row = gmgn.findTrendingRow(address);
+    if (row) return row;
+    const info = await gmgn.getTokenInfo(address);
+    if (!info) return null;
+    return {
+      _source: 'gmgn-info',
+      chainId: 'solana',
+      baseToken: { address: info.address, symbol: info.symbol, name: info.name },
+      priceUsd:  String(info.priceUsd),
+      priceChange: {},
+      volume:    { h24: 0 },
+      liquidity: { usd: info.liquidity || 0 },
+      marketCap: info.marketCap,
+      txns: {},
     };
   }
 
   /** Exécute un outil demandé par ARIA. Retourne toujours un objet sérialisable. */
   async _execTool(name, input = {}) {
     try {
+      if (!(await gmgn.isAvailable()) &&
+          ['rechercher_token', 'tokens_tendance', 'donnees_token', 'analyser_token'].includes(name)) {
+        return { erreur: 'GMGN non configuré (gmgn-cli + GMGN_API_KEY requis)' };
+      }
+
       switch (name) {
         case 'rechercher_token': {
-          const resp  = await dex.searchPairs(String(input.query || '').slice(0, 50));
-          const pairs = (resp?.pairs || [])
-            .filter(p => p.chainId === 'solana')
-            .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
-            .slice(0, 5);
-          if (pairs.length === 0) return { resultat: 'Aucun token Solana trouvé pour cette recherche' };
+          const pairs = await gmgn.searchToken(String(input.query || '').slice(0, 50));
+          if (pairs.length === 0) {
+            return { resultat: "Pas dans le trending/hot GMGN. Demande l'adresse du token au trader." };
+          }
           return { tokens: pairs.map(p => this._pairSummary(p)) };
         }
 
         case 'tokens_tendance': {
-          const [geckoPools, gmgnPairs] = await Promise.all([
-            gecko.getTrendingPools().catch(() => []),
-            gmgn.isAvailable().then(av => av ? gmgn.getTrending() : []).catch(() => []),
+          const [trending, hot] = await Promise.all([
+            gmgn.getTrending().catch(() => []),
+            gmgn.getHotSearches().catch(() => []),
           ]);
-          const out = { geckoterminal: geckoPools.slice(0, 8).map(p => this._pairSummary(p)) };
-          if (gmgnPairs.length > 0) {
-            out.gmgn = gmgnPairs.slice(0, 8).map(p => ({
-              ...this._pairSummary(p),
-              smartMoney: p._gmgn?.smartDegen,
-              kol:        p._gmgn?.renowned,
-              buyRatio:   p._gmgn ? Math.round(p._gmgn.buyRatio * 100) + '%' : null,
-              verdict:    p._gmgn?.verdict?.verdict,
-            }));
-          }
-          return out;
+          return {
+            trending:       trending.slice(0, 8).map(p => this._pairSummary(p)),
+            plusRecherches: hot.slice(0, 5).map(p => this._pairSummary(p)),
+          };
         }
 
         case 'donnees_token': {
           const addr = String(input.address || '').trim();
-          const pair = await this._fetchBestPair(addr);
-          if (!pair) return { erreur: 'Token introuvable sur DexScreener' };
-          const [{ security, overview }, rugReport, lpLock] = await Promise.all([
-            birdeye.getTokenData(addr),
-            rugcheck.getTokenReport(addr),
-            rugcheck.getLpLockData(addr),
-          ]);
+          const pair = await this._fetchPair(addr);
+          if (!pair) return { erreur: 'Token introuvable sur GMGN' };
+          const sec = await gmgn.getTokenSecurity(addr);
+          const g   = pair._gmgn;
           return {
             ...this._pairSummary(pair),
-            securite: security ? {
-              mintAuthority:   !!security.mintAuthority,
-              freezeAuthority: !!security.freezeAuthority,
-              top10Pct:        security.top10HolderPercent ?? null,
-              creatorPct:      security.creatorPercentage ?? null,
-              holders:         overview?.holder ?? null,
-            } : 'indisponible (pas de clé Birdeye)',
-            rugcheck: rugReport ? {
-              score:   rugReport.score,
-              rugged:  rugReport.rugged,
-              risques: rugReport.risks.filter(r => r.level !== 'info').slice(0, 4).map(r => r.name),
+            securite: sec ? {
+              honeypot:        sec.honeypot,
+              mintAbandonnee:  sec.renouncedMint,
+              freezeAbandonne: sec.renouncedFreeze,
+              top10Pct:        Math.round((sec.top10 || 0) * 100),
             } : 'indisponible',
-            lpLockPct: lpLock ? Math.round(lpLock.lpLockedPct) : null,
+            ...(g ? {
+              snipers:    g.sniper,
+              bundlers:   Math.round(g.bundler * 100) + '%',
+              devHold:    Math.round(g.devHold * 100) + '%',
+              rugRatio:   Math.round(g.rugRatio * 100) + '%',
+              holders:    g.holderCount,
+              verdictMomentum: g.verdict,
+            } : {}),
           };
         }
 
         case 'analyser_token': {
           const addr = String(input.address || '').trim();
-          const pair = await this._fetchBestPair(addr);
-          if (!pair) return { erreur: 'Token introuvable sur DexScreener' };
-          const [{ security, overview }, rugReport, lpLock] = await Promise.all([
-            birdeye.getTokenData(addr),
-            rugcheck.getTokenReport(addr),
-            rugcheck.getLpLockData(addr),
-          ]);
-          const debate = await this.analyzeToken(pair, security, rugReport, overview, lpLock);
+          const pair = await this._fetchPair(addr);
+          if (!pair) return { erreur: 'Token introuvable sur GMGN' };
+          const sec = await gmgn.getTokenSecurity(addr);
+          const g   = pair._gmgn || {};
+          const security = sec ? {
+            mintAuthority:      sec.renouncedMint   ? null : 'active',
+            freezeAuthority:    sec.renouncedFreeze ? null : 'active',
+            top10HolderPercent: (sec.top10 || 0) * 100,
+          } : null;
+          const overview = { holder: g.holderCount || null };
+          const debate = await this.analyzeToken(pair, security, null, overview, null);
           return { ...this._pairSummary(pair), decision: debate.decision };
         }
 
@@ -1176,15 +1183,13 @@ class PersonalAgent {
       if (Math.abs(pnlPct) < 8 && dropFromHigh < 10 && ageMin < 120) continue;
       this._lastManaged.set(pos.tokenMint, Date.now());
 
-      // Données marché live (best effort)
+      // Données marché live GMGN (best effort — ligne trending si le token y est encore)
       let pairLine = '';
-      try {
-        const pairs = await dex.getTokenPairs('solana', pos.tokenMint);
-        const pair  = (pairs || []).sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0))[0];
-        if (pair) {
-          pairLine = `Marché: 1h ${pair.priceChange?.h1 ?? '?'}%  24h ${pair.priceChange?.h24 ?? '?'}%  vol h1 $${((pair.volume?.h1 || 0)/1000).toFixed(1)}K  liq $${((pair.liquidity?.usd || 0)/1000).toFixed(1)}K`;
-        }
-      } catch { /* silencieux */ }
+      const row = gmgn.findTrendingRow(pos.tokenMint);
+      if (row?._gmgn) {
+        const g = row._gmgn;
+        pairLine = `Marché GMGN: 1h ${(g.chg1h * 100).toFixed(1)}%  5m ${(g.chg5m * 100).toFixed(1)}%  buy ratio ${(g.buyRatio * 100).toFixed(0)}%  liq $${((row.liquidity?.usd || 0)/1000).toFixed(1)}K  ${g.smartDegen} smart money`;
+      }
 
       const p = this.data.personality;
       const prompt = [
@@ -1246,25 +1251,26 @@ class PersonalAgent {
     );
     if (this.data.watchlist.tokens.length !== before) this._save();
 
+    if (!(await gmgn.isAvailable())) return;
+
     for (const tok of this.data.watchlist.tokens) {
       try {
-        const pairs = await dex.getTokenPairs('solana', tok.address);
-        if (!pairs || pairs.length === 0) continue;
-        const pair      = pairs[0];
-        const price     = parseFloat(pair.priceUsd || 0);
-        const ch1h      = pair.priceChange?.h1  || 0;
-        const ch24h     = pair.priceChange?.h24 || 0;
+        // Ligne trending GMGN si dispo (var 1h précise), sinon prix token info
+        const row   = gmgn.findTrendingRow(tok.address);
+        const price = row ? parseFloat(row.priceUsd || 0) : (await gmgn.getTokenPrice(tok.address)) || 0;
+        if (!price) continue;
+        const ch1h      = row?._gmgn ? row._gmgn.chg1h * 100 : null;
         const lastPrice = tok.lastPrice;
 
         tok.lastPrice = price;
         this._save();
 
-        const sym = tok.symbol || pair.baseToken?.symbol || tok.address.slice(0, 6);
-        if (Math.abs(ch1h) >= 15) {
+        const sym = tok.symbol || row?.baseToken?.symbol || tok.address.slice(0, 6);
+        if (ch1h != null && Math.abs(ch1h) >= 15) {
           if (this._allowAlert(`wl:${tok.address}`, 60 * 60_000)) {
             const dir = ch1h > 0 ? '🚀 +' : '📉 ';
             await this.sendMessage(
-              `${dir}${ch1h.toFixed(1)}% sur $${sym} en 1h (watchlist). Var 24h: ${ch24h.toFixed(1)}%.`,
+              `${dir}${ch1h.toFixed(1)}% sur $${sym} en 1h (watchlist GMGN).`,
               Math.abs(ch1h) >= 25 ? 'high' : 'normal'
             );
           }

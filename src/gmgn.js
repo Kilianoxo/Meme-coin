@@ -32,6 +32,8 @@ const CHAIN            = 'sol';
 const GMGN_ENV_PATH    = path.join(os.homedir(), '.config', 'gmgn', '.env');
 const TRENDING_TTL_MS  = 25_000;      // cache trending (protège le quota, scan toutes les 30s)
 const SECURITY_TTL_MS  = 5 * 60_000;  // cache token security par adresse
+const INFO_TTL_MS      = 60_000;      // cache token info / prix par adresse
+const HOT_TTL_MS       = 60_000;      // cache hot-searches
 const CLI_TIMEOUT_MS   = 25_000;
 
 // Gates durs — seuils du demo officiel GMGN (CFG de app.py)
@@ -136,10 +138,14 @@ const _clamp = (x, lo = 0, hi = 1) => x < lo ? lo : x > hi ? hi : x;
 
 // ─── Trending ────────────────────────────────────────────────────────────────
 
+// Filtres de base poussés côté serveur GMGN (économise bande passante + bruit).
+// Les mêmes seuils sont re-vérifiés localement par le scanner (_passesFilters).
 const DEFAULT_TRENDING_ARGS = [
   'market', 'trending',
   '--interval', '1h', '--order-by', 'volume', '--direction', 'desc',
   '--limit', '100', '--filter', 'not_wash_trading',
+  '--min-liquidity',  process.env.MIN_LIQUIDITY_USD  || '5000',
+  '--min-marketcap',  process.env.MIN_MARKET_CAP_USD || '30000',
 ];
 
 let _trendingCache = { ts: 0, rows: [] };
@@ -180,6 +186,7 @@ function normalizeRow(row) {
     smartDegen:      Math.round(_f(row.smart_degen_count)),
     renowned:        Math.round(_f(row.renowned_count)),
     sniper:          Math.round(_f(row.sniper_count)),
+    holderCount:     Math.round(_f(row.holder_count)),
     bundler:         _f(row.bundler_rate),
     devHold:         _f(row.dev_team_hold_rate),
     top10:           _f(row.top_10_holder_rate),
@@ -226,6 +233,104 @@ function normalizeRow(row) {
     fdv:       _f(row.fdv) || mcap,
     txns: { h1: { buys, sells } },
   };
+}
+
+/** Cherche une paire dans le cache trending par adresse (sans appel CLI) */
+function findTrendingRow(address) {
+  return _trendingCache.rows.find(p => p.baseToken?.address === address) || null;
+}
+
+/** URL de la page GMGN d'un token */
+function tokenUrl(address) {
+  return `https://gmgn.ai/sol/token/${address}`;
+}
+
+// ─── Token info / prix ───────────────────────────────────────────────────────
+
+const _infoCache = new Map(); // addr → { ts, info }
+
+/**
+ * Infos de base + prix temps réel d'un token (token info, cache 60s).
+ * @returns {Promise<{address, symbol, name, priceUsd, marketCap, holderCount, raw}|null>}
+ */
+async function getTokenInfo(addr) {
+  const cached = _infoCache.get(addr);
+  if (cached && Date.now() - cached.ts < INFO_TTL_MS) return cached.info;
+
+  try {
+    const d   = await _cli(['token', 'info', '--address', addr]);
+    const raw = d?.data && typeof d.data === 'object' ? d.data : d;
+    // Le prix peut être un nombre, une string ou un objet imbriqué {price:{price:"…"}}
+    const p    = raw.price;
+    const info = {
+      address:     raw.address || addr,
+      symbol:      raw.symbol || '???',
+      name:        raw.name || raw.symbol || '???',
+      priceUsd:    typeof p === 'object' && p !== null ? _f(p.price) : _f(p),
+      marketCap:   _f(raw.market_cap),
+      liquidity:   _f(raw.liquidity),
+      holderCount: Math.round(_f(raw.holder_count)),
+      raw,
+    };
+    _infoCache.set(addr, { ts: Date.now(), info });
+    return info;
+  } catch {
+    return null;
+  }
+}
+
+/** Prix USD seul (via token info caché) — fallback quand Jupiter ne connaît pas le token */
+async function getTokenPrice(addr) {
+  const info = await getTokenInfo(addr);
+  return info && info.priceUsd > 0 ? info.priceUsd : null;
+}
+
+// ─── Hot-searches (tokens les plus recherchés) ───────────────────────────────
+
+let _hotCache = { ts: 0, rows: [] };
+
+/** Tokens les plus recherchés sur GMGN (cache 60s), normalisés comme le trending */
+async function getHotSearches(limit = 20) {
+  if (Date.now() - _hotCache.ts < HOT_TTL_MS) return _hotCache.rows;
+  try {
+    const resp = await _cli(['market', 'hot-searches', '--interval', '1h', '--limit', String(limit)]);
+    const data = resp?.data ?? resp;
+    const rows = Array.isArray(data) ? data
+               : (data && (data.rank || data.tokens || data.list)) || [];
+    const pairs = rows.map(normalizeRow).filter(Boolean)
+      .map(p => ({ ...p, _source: 'gmgn-hot' }));
+    _hotCache = { ts: Date.now(), rows: pairs };
+    return pairs;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Recherche un token par nom/ticker dans le trending + hot-searches GMGN.
+ * (GMGN n'a pas de recherche texte — on filtre les listes chaudes.)
+ * @returns {Promise<Object[]>} paires normalisées correspondantes
+ */
+async function searchToken(query) {
+  const q = String(query || '').toLowerCase().replace(/^\$/, '').trim();
+  if (!q) return [];
+  const [trending, hot] = await Promise.all([
+    getTrending().catch(() => []),
+    getHotSearches().catch(() => []),
+  ]);
+  const seen = new Set();
+  const out  = [];
+  for (const p of [...trending, ...hot]) {
+    const addr = p.baseToken?.address;
+    if (!addr || seen.has(addr)) continue;
+    const sym  = (p.baseToken.symbol || '').toLowerCase();
+    const name = (p.baseToken.name   || '').toLowerCase();
+    if (sym.includes(q) || name.includes(q) || addr === query.trim()) {
+      seen.add(addr);
+      out.push(p);
+    }
+  }
+  return out.slice(0, 5);
 }
 
 // ─── Gates durs (méthodo GMGN — déterministe, avant tout appel LLM) ──────────
@@ -364,6 +469,12 @@ module.exports = {
   isAvailable,
   hasKey,
   getTrending,
+  getHotSearches,
+  searchToken,
+  getTokenInfo,
+  getTokenPrice,
+  findTrendingRow,
+  tokenUrl,
   normalizeRow,
   hardGates,
   judge,

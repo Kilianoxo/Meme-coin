@@ -1801,7 +1801,7 @@ function renderWalletTokens(tokens, positions) {
     const priceStr = t.price  != null ? '$' + (t.price < 0.0001 ? t.price.toExponential(4) : t.price.toFixed(6)) : '—';
     const valueStr = t.valueUsd != null ? '$' + t.valueUsd.toFixed(2) : '—';
     const tracked  = trackedMints.has(t.mint);
-    const dexUrl   = `https://dexscreener.com/solana/${t.mint}`;
+    const dexUrl   = `https://gmgn.ai/sol/token/${t.mint}`;
 
     return `<tr>
       <td><a href="${dexUrl}" target="_blank" class="mono" title="${t.mint}">${mintShortStr}</a></td>
@@ -1829,7 +1829,7 @@ function renderPositions(positions) {
       <tr>
         <td>
           <span class="mono c-blue" title="${p.tokenMint}">${mintShort(p.tokenMint)}</span><br>
-          <a class="dex-link" href="https://dexscreener.com/solana/${p.tokenMint}" target="_blank">DexScreener ↗</a>
+          <a class="dex-link" href="https://gmgn.ai/sol/token/${p.tokenMint}" target="_blank">GMGN ↗</a>
         </td>
         <td>${fPrice(p.entryPriceUsd)}</td>
         <td>${fPrice(p.currentPrice)}</td>
@@ -1905,7 +1905,7 @@ function renderRecentAnalyses(analyses) {
     const cls      = isBuy ? 'ac-green' : isHot ? 'ac-orange' : 'ac-red';
     const scoreStr = a.score != null ? a.score + '/100' : '—';
     const timeStr  = a.timestamp ? fTime(a.timestamp) : '';
-    const dexUrl   = `https://dexscreener.com/solana/${a.mint}`;
+    const dexUrl   = `https://gmgn.ai/sol/token/${a.mint}`;
     const label    = isBuy ? '✅ VALIDÉ' : isHot ? '🔶 REFUSÉ' : '❌ REFUSÉ';
     return `<a class="analysis-card ${cls}" href="${dexUrl}" target="_blank" title="${esc(a.mint)}">
       <div class="ac-symbol">$${esc(a.symbol)}</div>
@@ -2745,7 +2745,7 @@ function renderPaperPositions(positions) {
     return `<tr>
       <td>
         <strong class="c-yellow">$${esc(p.symbol)}</strong>${graduated}<br>
-        <a class="dex-link" href="https://dexscreener.com/solana/${esc(p.address)}" target="_blank">DexScreener ↗</a>
+        <a class="dex-link" href="https://gmgn.ai/sol/token/${esc(p.address)}" target="_blank">GMGN ↗</a>
       </td>
       <td class="c-blue">${p.score ?? '—'}/100</td>
       <td>${fPrice(p.entryPrice)}</td>
@@ -2867,7 +2867,7 @@ function renderDebateCard(debate, pair) {
   const name   = esc(pair.baseToken?.name   || '');
   const price  = parseFloat(pair.priceUsd || 0);
   const ch24   = pair.priceChange?.h24 || 0;
-  const pairUrl = pair.url || `https://dexscreener.com/solana/${pair.pairAddress || pair.baseToken?.address || ''}`;
+  const pairUrl = pair.url || `https://gmgn.ai/sol/token/${pair.pairAddress || pair.baseToken?.address || ''}`;
 
   const decColor = { BUY: 'var(--green)', SKIP: 'var(--red)', WAIT: 'var(--yellow)' }[decision?.decision] || 'var(--txt2)';
   const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision?.decision] || '⚪';
@@ -2882,7 +2882,7 @@ function renderDebateCard(debate, pair) {
   h += `<span class="mono">$${price < 0.0001 ? price.toExponential(3) : price.toFixed(6)}</span> `;
   h += `<span class="${ch24cls}">${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}% 24h</span>`;
   h += `</div>`;
-  h += `<a href="${pairUrl}" target="_blank" style="font-size:12px;color:var(--blue);white-space:nowrap">DexScreener ↗</a>`;
+  h += `<a href="${pairUrl}" target="_blank" style="font-size:12px;color:var(--blue);white-space:nowrap">GMGN ↗</a>`;
   h += `</div>`;
 
   // Verdict

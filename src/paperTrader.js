@@ -11,7 +11,7 @@
 const EventEmitter = require('events');
 const fs           = require('fs');
 const path         = require('path');
-const dex          = require('./dexscreener');
+const gmgn         = require('./gmgn');
 
 const DATA_FILE = path.join(__dirname, '../data/paper_positions.json');
 
@@ -73,17 +73,15 @@ class PaperTrader extends EventEmitter {
     }
   }
 
-  /** Fallback DexScreener si Jupiter ne connaît pas le token */
+  /** Fallback GMGN (token info, caché 60s) si Jupiter ne connaît pas le token */
   async _fetchPriceWithFallback(address) {
     let price = await this._fetchPrice(address);
     if (price != null && price > 0) return { price, source: 'Jupiter' };
 
     try {
-      const pairs = await dex.getTokenPairs('solana', address);
-      if (pairs && pairs.length > 0) {
-        const best = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-        const dexPrice = parseFloat(best.priceUsd || 0);
-        if (dexPrice > 0) return { price: dexPrice, source: 'DexScreener' };
+      if (await gmgn.isAvailable()) {
+        const gmgnPrice = await gmgn.getTokenPrice(address);
+        if (gmgnPrice && gmgnPrice > 0) return { price: gmgnPrice, source: 'GMGN' };
       }
     } catch { /* silencieux */ }
 
@@ -129,15 +127,15 @@ class PaperTrader extends EventEmitter {
       return;
     }
 
-    // Jupiter Price API en priorité, fallback sur le prix DexScreener du token
+    // Jupiter Price API en priorité, fallback sur le prix GMGN du token analysé
     let price = await this._fetchPrice(address);
     if (!price || price <= 0) {
       const dexPrice = token.priceUsd ? parseFloat(token.priceUsd) : null;
       if (dexPrice && dexPrice > 0) {
         price = dexPrice;
-        console.log(`[PaperTrader] ⚠️  $${symbol} — Jupiter sans prix, fallback DexScreener @ ${dexPrice}`);
+        console.log(`[PaperTrader] ⚠️  $${symbol} — Jupiter sans prix, fallback prix GMGN @ ${dexPrice}`);
       } else {
-        console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — prix introuvable (Jupiter + DexScreener)`);
+        console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — prix introuvable (Jupiter + GMGN)`);
         return;
       }
     }
@@ -213,7 +211,7 @@ class PaperTrader extends EventEmitter {
       return { ok: false, error: `Max positions atteint (${config.maxPositions})` };
 
     const result = await this._fetchPriceWithFallback(address);
-    if (!result) return { ok: false, error: 'Prix introuvable (Jupiter + DexScreener). Vérifie que l\'adresse est un token Solana valide.' };
+    if (!result) return { ok: false, error: 'Prix introuvable (Jupiter + GMGN). Vérifie que l\'adresse est un token Solana valide.' };
 
     const { price, source } = result;
     const tokensHeld = amount / price;
