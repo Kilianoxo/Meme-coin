@@ -129,17 +129,17 @@ const TOOL_DEFS = [
   },
   {
     name: 'watchlist',
-    description: "Ajoute ou retire un token/wallet de ta watchlist de surveillance continue. Les wallets suivis sont trackés en live : tu alertes le trader à chaque nouveau swap qu'ils font.",
+    description: "Gère ta watchlist de surveillance continue. action='list' → liste complète (adresses entières, labels, raisons, dates) des tokens et wallets suivis. 'add'/'remove' → ajoute/retire un token ou wallet. Les wallets suivis sont trackés en live : tu alertes le trader à chaque nouveau swap qu'ils font.",
     input_schema: {
       type: 'object',
       properties: {
-        action:  { type: 'string', enum: ['add', 'remove'] },
-        type:    { type: 'string', enum: ['token', 'wallet'] },
-        address: { type: 'string' },
-        symbol:  { type: 'string', description: 'Ticker (tokens)' },
+        action:  { type: 'string', enum: ['list', 'add', 'remove'] },
+        type:    { type: 'string', enum: ['token', 'wallet'], description: "Requis pour add/remove" },
+        address: { type: 'string', description: "Requis pour add/remove" },
+        symbol:  { type: 'string', description: 'Ticker (tokens) ou label (wallets)' },
         reason:  { type: 'string', description: 'Pourquoi tu le surveilles' },
       },
-      required: ['action', 'type', 'address'],
+      required: ['action'],
     },
   },
   {
@@ -495,7 +495,8 @@ class PersonalAgent {
     lines.push(`- analyser_wallet : stats/positions/historique/style d'un wallet (winrate, PnL, sniper/bot/whale/diamond hands…)`);
     lines.push(`- smart_money_moves : ce que les smart money et KOLs achètent/vendent EN CE MOMENT`);
     lines.push(`- acheter / vendre : exécution réelle sur le wallet (plafond ${a.maxSolPerTrade} SOL/trade) — uniquement sur demande ou accord clair du trader dans la conversation`);
-    lines.push(`- watchlist : gérer toi-même ta liste de surveillance (les wallets ajoutés sont trackés en live)`);
+    lines.push(`- watchlist : action 'list' pour voir ta liste complète (adresses entières), 'add'/'remove' pour la gérer (les wallets ajoutés sont trackés en live)`);
+    lines.push(`Ta watchlist complète est déjà dans ton contexte ci-dessous avec les adresses ENTIÈRES — tu peux les copier directement dans analyser_wallet, donnees_token, etc.`);
     lines.push(`Enchaîne les outils si besoin (chercher → analyser → répondre). Réponds avec les CHIFFRES obtenus, pas des généralités.`);
     lines.push(``);
 
@@ -558,11 +559,20 @@ class PersonalAgent {
       lines.push(``);
     }
 
-    // ── Watchlist ──
+    // ── Watchlist complète (adresses ENTIÈRES — utilisables directement avec les outils) ──
     if (wl.tokens.length > 0 || wl.wallets.length > 0) {
-      lines.push(`=== WATCHLIST ===`);
-      for (const t of wl.tokens)  lines.push(`  · Token  $${t.symbol || '?'}  ${t.address.slice(0,8)}…  ${t.reason || ''}`);
-      for (const w of wl.wallets) lines.push(`  · Wallet ${w.label || w.address.slice(0,8)}…`);
+      const fmtDate = (ts) => ts
+        ? new Date(ts).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : '?';
+      lines.push(`=== TA WATCHLIST (adresses complètes — passe-les directement à tes outils) ===`);
+      for (const t of wl.tokens) {
+        lines.push(`  · Token $${t.symbol || '?'}  ${t.address}`);
+        lines.push(`      ${t.auto ? '[ajout auto] ' : '[ajout manuel] '}le ${fmtDate(t.addedAt)}${t.reason ? `  —  raison: ${t.reason}` : ''}${t.lastPrice ? `  —  dernier prix vu: $${t.lastPrice}` : ''}`);
+      }
+      for (const w of wl.wallets) {
+        lines.push(`  · Wallet "${w.label || 'sans label'}"  ${w.address}`);
+        lines.push(`      suivi depuis le ${fmtDate(w.addedAt)}${w.lastActivityTs ? `  —  dernier trade détecté: ${fmtDate(w.lastActivityTs * 1000)}` : '  —  aucun trade détecté encore'}`);
+      }
       lines.push(``);
     }
 
@@ -993,6 +1003,28 @@ class PersonalAgent {
 
         case 'watchlist': {
           const { action, type, address, symbol, reason } = input;
+
+          if (action === 'list') {
+            const fmtDate = (ts) => ts ? new Date(ts).toISOString().slice(0, 16).replace('T', ' ') : null;
+            return {
+              tokens: this.data.watchlist.tokens.map(t => ({
+                symbol:      t.symbol || '?',
+                address:     t.address,
+                raison:      t.reason || null,
+                ajoutAuto:   !!t.auto,
+                ajouteLe:    fmtDate(t.addedAt),
+                dernierPrix: t.lastPrice ?? null,
+              })),
+              wallets: this.data.watchlist.wallets.map(w => ({
+                label:              w.label || null,
+                address:            w.address,
+                suiviDepuis:        fmtDate(w.addedAt),
+                dernierTradeDetecte: w.lastActivityTs ? fmtDate(w.lastActivityTs * 1000) : null,
+              })),
+            };
+          }
+
+          if (!address || !type) return { erreur: 'address et type requis pour add/remove' };
           if (action === 'add' && type === 'token') {
             const ok = this.addWatchToken(address, sanitizeName(symbol || '?'), '', sanitizeName(reason || 'via chat'));
             if (ok) this.logAction('WATCHLIST', `Ajout $${sanitizeName(symbol || address?.slice(0, 6))} via chat`, { address });
