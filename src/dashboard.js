@@ -350,7 +350,11 @@ class Dashboard {
         ? ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100
         : null;
       const pnlSol = pnlPct !== null ? p.solSpent * (pnlPct / 100) : null;
-      return { ...p, currentPrice, pnlPct, pnlSol };
+      // Market cap live = supply estimée à l'entrée × prix actuel
+      const currentMcapUsd = p.tokenSupply && currentPrice
+        ? Math.round(p.tokenSupply * currentPrice)
+        : null;
+      return { ...p, currentPrice, pnlPct, pnlSol, currentMcapUsd };
     });
 
     // Stats globales
@@ -535,7 +539,10 @@ class Dashboard {
           ? ((currentPrice - p.entryPrice) / p.entryPrice) * 100
           : (p.pnlPct ?? null);
         const pnlSol = pnlPct !== null ? p.amountSolIn * (pnlPct / 100) : (p.pnlSol ?? null);
-        return { ...p, currentPrice, pnlPct, pnlSol };
+        const currentMcap = p.supply && currentPrice
+          ? Math.round(p.supply * currentPrice)
+          : (p.currentMcap ?? null);
+        return { ...p, currentPrice, pnlPct, pnlSol, currentMcap };
       });
 
       this._jsonOk(res, data);

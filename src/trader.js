@@ -17,6 +17,7 @@ const bs58        = require('bs58');
 const fs          = require('fs');
 const https       = require('https');
 const path        = require('path');
+const gmgn          = require('./gmgn');
 const agentMemory   = require('./agentMemory');
 const tokenHistory  = require('./tokenHistory');
 const personalAgent = require('./personalAgent');
@@ -249,6 +250,29 @@ class Trader {
     }
   }
 
+  /**
+   * Market cap + supply estimée à l'entrée (via GMGN, best effort).
+   * Le MC est l'unité de mesure des meme coins — le prix unitaire ne parle pas.
+   * supply = mcap/prix GMGN → permet de recalculer le MC live: supply × prix actuel.
+   */
+  async _fetchEntryMcap(tokenMint, entryPriceUsd) {
+    try {
+      const row = gmgn.findTrendingRow(tokenMint);
+      let mcap     = row ? (row.marketCap || 0) : 0;
+      let priceRef = row ? parseFloat(row.priceUsd || 0) : 0;
+      if (!mcap && await gmgn.isAvailable()) {
+        const info = await gmgn.getTokenInfo(tokenMint);
+        if (info) { mcap = info.marketCap || 0; priceRef = info.priceUsd || 0; }
+      }
+      if (!mcap) return { entryMcapUsd: null, tokenSupply: null };
+      const supply = priceRef > 0 ? mcap / priceRef : null;
+      const entryMcapUsd = supply && entryPriceUsd ? supply * entryPriceUsd : mcap;
+      return { entryMcapUsd: Math.round(entryMcapUsd), tokenSupply: supply };
+    } catch {
+      return { entryMcapUsd: null, tokenSupply: null };
+    }
+  }
+
   // ─── Trading ──────────────────────────────────────────────────────────────
 
   /**
@@ -277,6 +301,7 @@ class Trader {
 
     // Prix d'entrée en USD (best effort — n'empêche pas le trade si indispo)
     const entryPriceUsd = await this.getCurrentPrice(tokenMint);
+    const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
 
     const quote = await this.getQuote(WSOL, tokenMint, lamports, slippageBps);
     const txId = await this.executeSwap(quote);
@@ -289,6 +314,8 @@ class Trader {
       entryTimestamp: Date.now(),
       outAmount: quote.outAmount,
       entryPriceUsd,
+      entryMcapUsd,
+      tokenSupply,
       stopLossPct,
       takeProfitPct,
       highPriceUsd: entryPriceUsd, // Pour le trailing stop-loss
@@ -318,6 +345,7 @@ class Trader {
     } = opts;
 
     const entryPriceUsd = await this.getCurrentPrice(tokenMint);
+    const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
 
     const position = {
       tokenMint,
@@ -327,6 +355,8 @@ class Trader {
       entryTimestamp: Date.now(),
       outAmount: null,
       entryPriceUsd,
+      entryMcapUsd,
+      tokenSupply,
       stopLossPct,
       takeProfitPct,
       highPriceUsd: entryPriceUsd,

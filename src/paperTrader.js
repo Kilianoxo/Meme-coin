@@ -142,6 +142,12 @@ class PaperTrader extends EventEmitter {
 
     const tokensHeld = amountSol / price;
 
+    // Supply estimée depuis les données GMGN du token analysé → permet d'afficher
+    // le market cap (l'unité parlante des meme coins) au lieu du prix unitaire
+    const refPrice = token.priceUsd ? parseFloat(token.priceUsd) : price;
+    const mcapRef  = token.marketCap || token.fdv || 0;
+    const supply   = mcapRef > 0 && refPrice > 0 ? mcapRef / refPrice : null;
+
     config.currentBalance -= amountSol;
     this.state.positions[address] = {
       symbol,
@@ -150,6 +156,9 @@ class PaperTrader extends EventEmitter {
       entryPrice:  price,
       highPrice:   price,
       currentPrice: price,
+      supply,
+      entryMcap:   supply ? Math.round(supply * price) : null,
+      currentMcap: supply ? Math.round(supply * price) : null,
       pnlPct:      0,
       pnlSol:      0,
       tokensHeld,
@@ -215,7 +224,19 @@ class PaperTrader extends EventEmitter {
 
     const { price, source } = result;
     const tokensHeld = amount / price;
-    const symbol = address.slice(0, 6).toUpperCase();
+
+    // Symbole + supply via GMGN token info (best effort) → affichage en market cap
+    let symbol = address.slice(0, 6).toUpperCase();
+    let supply = null;
+    try {
+      if (await gmgn.isAvailable()) {
+        const info = await gmgn.getTokenInfo(address);
+        if (info) {
+          if (info.symbol && info.symbol !== '???') symbol = info.symbol;
+          if (info.marketCap > 0 && info.priceUsd > 0) supply = info.marketCap / info.priceUsd;
+        }
+      }
+    } catch { /* best effort */ }
 
     config.currentBalance -= amount;
     this.state.positions[address] = {
@@ -225,6 +246,9 @@ class PaperTrader extends EventEmitter {
       entryPrice:  price,
       highPrice:   price,
       currentPrice: price,
+      supply,
+      entryMcap:   supply ? Math.round(supply * price) : null,
+      currentMcap: supply ? Math.round(supply * price) : null,
       pnlPct:      0,
       pnlSol:      0,
       tokensHeld,
@@ -266,10 +290,11 @@ class PaperTrader extends EventEmitter {
       const dropFromHigh = ((pos.highPrice - price)     / pos.highPrice)    * 100;
       const maxGainPct   = ((pos.highPrice - pos.entryPrice) / pos.entryPrice) * 100;
 
-      // Stocke prix actuel + PnL sur la position pour l'affichage dashboard
+      // Stocke prix actuel + PnL + market cap live sur la position (affichage dashboard)
       pos.currentPrice = price;
       pos.pnlPct       = parseFloat(gainPct.toFixed(2));
       pos.pnlSol       = parseFloat(((pos.tokensHeld * price) - pos.amountSolIn).toFixed(6));
+      if (pos.supply) pos.currentMcap = Math.round(pos.supply * price);
 
       if (gainPct <= -pos.slPct) {
         await this._sellPosition(address, 'STOP_LOSS');

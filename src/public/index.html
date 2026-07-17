@@ -906,8 +906,8 @@
           <thead>
             <tr>
               <th>Token</th>
-              <th>Entry USD</th>
-              <th>Prix actuel</th>
+              <th>MC entrée</th>
+              <th>MC actuel</th>
               <th>PnL %</th>
               <th>PnL SOL</th>
               <th>Investi</th>
@@ -1459,8 +1459,8 @@
             <tr>
               <th>Token</th>
               <th>Score</th>
-              <th>Entry</th>
-              <th>Prix actuel</th>
+              <th>MC entrée</th>
+              <th>MC actuel</th>
               <th>PnL %</th>
               <th>PnL SOL</th>
               <th>Investi</th>
@@ -1831,8 +1831,8 @@ function renderPositions(positions) {
           <span class="mono c-blue" title="${p.tokenMint}">${mintShort(p.tokenMint)}</span><br>
           <a class="dex-link" href="https://gmgn.ai/sol/token/${p.tokenMint}" target="_blank">GMGN ↗</a>
         </td>
-        <td>${fPrice(p.entryPriceUsd)}</td>
-        <td>${fPrice(p.currentPrice)}</td>
+        <td title="${fPrice(p.entryPriceUsd)}">${p.entryMcapUsd ? fMcap(p.entryMcapUsd) : fPrice(p.entryPriceUsd)}</td>
+        <td title="${fPrice(p.currentPrice)}">${p.currentMcapUsd ? fMcap(p.currentMcapUsd) : fPrice(p.currentPrice)}</td>
         <td class="${cClass(p.pnlPct)}">${fPct(p.pnlPct)}</td>
         <td class="${cClass(p.pnlSol)}">${fSol(p.pnlSol)}</td>
         <td class="c-muted">${p.solSpent?.toFixed(3)} ◎</td>
@@ -2230,6 +2230,14 @@ function fPct(v) { return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1)
 function fPrice(v) {
   if (v == null) return '—';
   return '$' + (v < 0.0001 ? v.toExponential(2) : v.toFixed(6));
+}
+/* Market cap compact — l'unité parlante des meme coins */
+function fMcap(v) {
+  if (v == null || v <= 0) return '—';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+  return '$' + v.toFixed(0);
 }
 function fDur(ms) {
   const s = Math.floor(ms / 1000);
@@ -2748,8 +2756,8 @@ function renderPaperPositions(positions) {
         <a class="dex-link" href="https://gmgn.ai/sol/token/${esc(p.address)}" target="_blank">GMGN ↗</a>
       </td>
       <td class="c-blue">${p.score ?? '—'}/100</td>
-      <td>${fPrice(p.entryPrice)}</td>
-      <td>${fPrice(p.currentPrice)}</td>
+      <td title="${fPrice(p.entryPrice)}">${p.entryMcap ? fMcap(p.entryMcap) : fPrice(p.entryPrice)}</td>
+      <td title="${fPrice(p.currentPrice)}">${p.currentMcap ? fMcap(p.currentMcap) : fPrice(p.currentPrice)}</td>
       <td class="${cClass(p.pnlPct)}">${fPct(p.pnlPct)}</td>
       <td class="${cClass(p.pnlSol)}">${fSol(p.pnlSol)}</td>
       <td class="c-muted">${p.amountSolIn?.toFixed(3)} ◎</td>
@@ -2951,7 +2959,9 @@ async function manualBuyPaper() {
     });
     const d = await r.json();
     if (d.ok) {
-      msg.textContent = `✅ Position ouverte @ ${Number(d.position.entryPrice).toExponential(3)}`;
+      msg.textContent = d.position.entryMcap
+        ? `✅ Position ouverte @ MC ${fMcap(d.position.entryMcap)}`
+        : `✅ Position ouverte @ ${Number(d.position.entryPrice).toExponential(3)}`;
       msg.className = 'c-green';
       document.getElementById('manualAddr').value = '';
       document.getElementById('manualAmt').value  = '';

@@ -112,7 +112,8 @@ class Bot {
     msg += `💲 $${price < 0.001 ? price.toExponential(2) : price.toFixed(6)}`;
     msg += `  ${ch1 >= 0 ? '▲' : '▼'} ${Math.abs(ch1).toFixed(1)}% 1h`;
     if (ch5m !== 0) msg += `  ${ch5m >= 0 ? '▲' : '▼'} ${Math.abs(ch5m).toFixed(1)}% 5m`;
-    msg += `\n💧 Liq: $${this._fmt(liq)}  |  📊 Vol: $${this._fmt(vol)}\n`;
+    const mc = token.marketCap || token.fdv || 0;
+    msg += `\n🏦 MC: $${this._fmt(mc)}  |  💧 Liq: $${this._fmt(liq)}  |  📊 Vol: $${this._fmt(vol)}\n`;
     msg += `<a href="${gmgn.tokenUrl(addr)}">📊 Voir sur GMGN</a>\n`;
     msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
 
@@ -284,6 +285,9 @@ class Bot {
             const pnlPct = ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100;
             const arrow = pnlPct >= 0 ? '🟢' : '🔴';
             msg += `  ${arrow} PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%\n`;
+            if (p.tokenSupply && p.entryMcapUsd) {
+              msg += `  🏦 MC: $${this._fmt(p.entryMcapUsd)} → $${this._fmt(Math.round(p.tokenSupply * currentPrice))}\n`;
+            }
           }
           msg += `  🛑 SL: -${p.stopLossPct}%  |  🎯 TP: +${p.takeProfitPct}%\n`;
         }
@@ -541,14 +545,14 @@ class Bot {
       await ctx.reply('⏳ Import de la position...');
       try {
         const { position } = await this.trader.importPosition(tokenAddress, solSpent);
-        const priceStr = position.entryPriceUsd
-          ? `$${position.entryPriceUsd.toFixed(6)}`
-          : 'prix indisponible';
+        const entryStr = position.entryMcapUsd
+          ? `MC $${this._fmt(position.entryMcapUsd)}`
+          : (position.entryPriceUsd ? `$${position.entryPriceUsd.toFixed(6)}` : 'indisponible');
         await ctx.reply(
           `✅ <b>Position importée!</b>\n` +
           `📍 <code>${this._esc(tokenAddress)}</code>\n` +
           `💰 SOL dépensé: ${solSpent}\n` +
-          `💵 Prix d'entrée: ${priceStr}\n` +
+          `🏦 Entrée: ${entryStr}\n` +
           `🛑 SL: -${position.stopLossPct}%  |  🎯 TP: +${position.takeProfitPct}%`,
           { parse_mode: 'HTML' }
         );
