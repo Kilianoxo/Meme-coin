@@ -28,12 +28,23 @@ Le propriétaire trade aussi manuellement sur GMGN — positions importables via
 - `data/paper_positions.json` — Paper trading
 - `data/tokenHistory.json` — Tokens récurrents
 
-## ARIA — Autonomie
+## ARIA — Autonomie (exécution directe, sans confirmation — approuvé par le propriétaire)
 Config persistée dans agent.json (`autonomy`), modifiable via dashboard (POST /api/agent/autonomy) ou /auto :
 - `enabled` — signaux, watchlist auto, gestion de positions, alertes, rapport quotidien
-- `liveTrading` — exécution réelle sur le wallet (OFF par défaut, opt-in)
-- `minScore` (70), `minConfidence` (6) — seuils d'achat autonome
-- `maxSolPerTrade` (0.1), `maxOpenPositions` (3), `maxDailyLossSol` (0.5 = circuit breaker)
+- `liveTrading` — exécution réelle DIRECTE sur le wallet (notification seule, pas de boutons ;
+  OFF par défaut → dans ce mode les boutons de confirmation restent le seul moyen d'agir)
+- `minScore` (70) — seuil classique ; `flexScore` (55) — suffit avec un SIGNAL FORT :
+  smart money massif (≥15 wallets + buy ratio ≥70%), rotation coordonnée (≥2 KOL + ≥10 smart
+  + ≥10 snipers), flux live (≥3 achats smart money > 2× ventes), rupture de pattern (score
+  +15 pts en <1h — re-scan 20 min des scores 30-60 via scanner.markSeenTtl), micro-cap
+  < lowCapMaxMcap (50K) avec liq ≥5K. Logique dans _strongSignal() (personalAgent.js)
+- `minSolPerTrade` (0.05) → `maxSolPerTrade` (0.2) — taille linéaire selon confiance (5→9+)
+- SL/TP dynamiques (_dynamicSlTp) : volatilité 1h/5m + taille de cap → stops élargis
+- `maxOpenPositions` (3), `maxDailyLossSol` (0.5 = circuit breaker), anti re-trade 6h
+- TP partiel (trader.js, PARTIAL_TP_PCT=50) : au TP vend 50%, le reste court avec trailing
+  + break-even stop (tpTaken → sortie si PnL ≤ +3%). exitReason: BREAKEVEN_STOP
+- `traderProfile` (style, riskAppetite, targets, notes) — injecté dans tous les prompts,
+  modifiable via l'outil de chat profil_trader
 Flux : scanner → analyse ARIA → bot.js appelle `personalAgent.maybeAutoTrade(debate)` (point d'entrée unique).
 Heartbeat 3 min : alertes SL/TP (cooldown 30 min), watchlist tokens (~6 min, cooldown 1h),
 tracking LIVE des wallets suivis (~6 min — alerte proactive à chaque nouveau swap, curseur

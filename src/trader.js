@@ -73,6 +73,9 @@ function httpsRequest(url, opts = {}) {
 }
 const WSOL = 'So11111111111111111111111111111111111111112';
 const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
+// Prise de profit partielle : % vendu quand le TP est touché (le reste court
+// avec trailing stop + stop break-even). 100 = vente totale (ancien comportement).
+const PARTIAL_TP_PCT = Math.max(10, Math.min(100, parseFloat(process.env.PARTIAL_TP_PCT || '50')));
 
 class Trader {
   constructor() {
@@ -471,8 +474,9 @@ class Trader {
         : 0;
       const shortMint = tokenMint.slice(0, 8) + '...';
 
-      let reason = null;
+      let reason     = null;
       let exitReason = null;
+      let sellPct    = 100;
 
       // Trailing stop-loss activé seulement si le prix a monté > 20% depuis l'entrée
       const gainFromEntry = ((pos.highPriceUsd || pos.entryPriceUsd) - pos.entryPriceUsd) / pos.entryPriceUsd * 100;
@@ -482,8 +486,17 @@ class Trader {
       } else if (changePct <= -pos.stopLossPct) {
         reason     = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
         exitReason = 'STOP_LOSS';
-      } else if (changePct >= pos.takeProfitPct) {
-        reason     = `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
+      } else if (pos.tpTaken && changePct <= 3) {
+        // Après un TP partiel : le reste ne doit jamais repasser dans le rouge
+        reason     = `⚖️ <b>BREAK-EVEN STOP</b> — sortie du reste\n${shortMint}\nPnL restant: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}% (gains du TP partiel sécurisés)`;
+        exitReason = 'BREAKEVEN_STOP';
+      } else if (!pos.tpTaken && changePct >= pos.takeProfitPct) {
+        // PRISE DE PROFIT PARTIELLE : on vend une partie, le reste court
+        // (trailing stop + break-even prennent le relais)
+        sellPct    = PARTIAL_TP_PCT;
+        reason     = sellPct >= 100
+          ? `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nPnL: +${changePct.toFixed(1)}%`
+          : `🎯 <b>TP PARTIEL</b> — vente de ${sellPct}%\n${shortMint}\nPnL: +${changePct.toFixed(1)}%\nLe reste court avec trailing stop + break-even.`;
         exitReason = 'TAKE_PROFIT';
       }
 
@@ -491,7 +504,11 @@ class Trader {
         try {
           console.log(`[Trader] ${reason.replace(/<[^>]+>/g, '')}`);
           logger.sltp(tokenMint, pos.symbol || shortMint, exitReason, changePct);
-          const { txId } = await this.sell(tokenMint, 100, 300, exitReason);
+          const { txId } = await this.sell(tokenMint, sellPct, 300, exitReason);
+          if (exitReason === 'TAKE_PROFIT' && sellPct < 100) {
+            const p = this.positions.get(tokenMint);
+            if (p) { p.tpTaken = true; this._save(); }
+          }
           if (notify) {
             notify(`${reason}\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`);
           }

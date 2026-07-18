@@ -1063,11 +1063,19 @@
               <input class="auto-input" id="autoMinScore" type="number" min="40" max="95" step="1">
             </div>
             <div class="auto-row">
+              <span class="c-muted" title="Suffit si un signal fort l'accompagne (smart money massif, rotation, rupture, micro-cap)">Score flex (signal fort)</span>
+              <input class="auto-input" id="autoFlexScore" type="number" min="40" max="90" step="1">
+            </div>
+            <div class="auto-row">
               <span class="c-muted">Confiance min /10</span>
               <input class="auto-input" id="autoMinConf" type="number" min="1" max="10" step="1">
             </div>
             <div class="auto-row">
-              <span class="c-muted">SOL max / trade</span>
+              <span class="c-muted" title="Taille de position à confiance 5/10">SOL min / trade</span>
+              <input class="auto-input" id="autoMinSol" type="number" min="0.001" max="10" step="0.01">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted" title="Taille de position à confiance 9+/10">SOL max / trade</span>
               <input class="auto-input" id="autoMaxSol" type="number" min="0.001" max="10" step="0.01">
             </div>
             <div class="auto-row">
@@ -1853,8 +1861,9 @@ function renderHistory(history) {
   }
 
   const reasonMap = {
-    STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 Take-Profit', TRAILING_STOP: '📐 Trailing',
+    STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 TP (partiel)', TRAILING_STOP: '📐 Trailing',
     MANUAL: '👆 Manuel', ARIA_DECISION: '🤖 ARIA', ESCAPE_SIGNAL: '🚨 Fuite rug',
+    BREAKEVEN_STOP: '⚖️ Break-even',
   };
 
   tbody.innerHTML = history.map(h => {
@@ -2293,7 +2302,9 @@ function renderAutonomy(a) {
   document.getElementById('autoEnabled').checked = a.enabled;
   document.getElementById('autoLive').checked    = a.liveTrading;
   document.getElementById('autoMinScore').value  = a.minScore;
+  document.getElementById('autoFlexScore').value = a.flexScore ?? 55;
   document.getElementById('autoMinConf').value   = a.minConfidence;
+  document.getElementById('autoMinSol').value    = a.minSolPerTrade ?? 0.05;
   document.getElementById('autoMaxSol').value    = a.maxSolPerTrade;
   document.getElementById('autoMaxPos').value    = a.maxOpenPositions;
   document.getElementById('autoMaxLoss').value   = a.maxDailyLossSol;
@@ -2345,7 +2356,9 @@ async function saveAutonomy() {
     enabled:          document.getElementById('autoEnabled').checked,
     liveTrading:      document.getElementById('autoLive').checked,
     minScore:         parseFloat(document.getElementById('autoMinScore').value),
+    flexScore:        parseFloat(document.getElementById('autoFlexScore').value),
     minConfidence:    parseFloat(document.getElementById('autoMinConf').value),
+    minSolPerTrade:   parseFloat(document.getElementById('autoMinSol').value),
     maxSolPerTrade:   parseFloat(document.getElementById('autoMaxSol').value),
     maxOpenPositions: parseFloat(document.getElementById('autoMaxPos').value),
     maxDailyLossSol:  parseFloat(document.getElementById('autoMaxLoss').value),

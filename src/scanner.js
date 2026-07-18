@@ -62,6 +62,14 @@ class Scanner extends EventEmitter {
   }
 
   /**
+   * Redéfinit le TTL "vu" d'un token — utilisé pour re-analyser rapidement
+   * les scores moyens (30-60) et détecter les ruptures de pattern (35 → 60).
+   */
+  markSeenTtl(address, ttlMs) {
+    this.seenAddresses.set(address, Date.now() + ttlMs);
+  }
+
+  /**
    * Filtres de base (liquidité, volume, mcap, âge) sur une paire normalisée.
    * Le filtre d'âge MAX est ignoré : un trending GMGN peut être établi depuis
    * plusieurs jours et avoir du momentum prouvé. Le MIN s'applique toujours.

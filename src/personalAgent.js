@@ -159,6 +159,21 @@ const TOOL_DEFS = [
     description: "Ce que les smart money et les KOLs achètent/vendent EN CE MOMENT (flux live GMGN, agrégé par token) : nombre d'achats vs ventes, wallets distincts, volume USD. Pour détecter les rotations et les entrées coordonnées.",
     input_schema: { type: 'object', properties: {} },
   },
+  {
+    name: 'profil_trader',
+    description: "Lit ou modifie le profil de ton trader (style, appétit risque, targets, notes à retenir). Mets-le à jour dès qu'il t'apprend quelque chose sur sa façon de trader — ce profil shape toutes tes analyses.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        action:       { type: 'string', enum: ['get', 'set'] },
+        style:        { type: 'string', description: 'sniper / holder / scalper / rotation…' },
+        riskAppetite: { type: 'number', description: '1-10 (conservateur → agressif)' },
+        targets:      { type: 'string', description: 'x2 quick flip / x5-x10 hold / x50+ moonshot…' },
+        note:         { type: 'string', description: 'Pattern ou préférence à mémoriser (ajoutée aux notes)' },
+      },
+      required: ['action'],
+    },
+  },
 ];
 
 const DEFAULTS = {
@@ -175,11 +190,20 @@ const DEFAULTS = {
   autonomy: {
     enabled:          true,   // ARIA agit seule (signaux, watchlist, gestion, alertes)
     liveTrading:      false,  // exécution réelle sur le wallet (opt-in explicite)
-    minScore:         70,     // score minimum pour un achat autonome
-    minConfidence:    6,      // confiance minimum pour un achat autonome
-    maxSolPerTrade:   parseFloat(process.env.MAX_POSITION_SOL || '0.1'),
+    minScore:         70,     // seuil classique d'achat autonome
+    flexScore:        55,     // seuil FLEXIBLE : suffit si un signal fort l'accompagne
+    minConfidence:    6,      // confiance minimum pour le seuil classique
+    minSolPerTrade:   0.05,   // taille à confiance 5/10
+    maxSolPerTrade:   parseFloat(process.env.MAX_POSITION_SOL || '0.2'), // taille à confiance 9+/10
     maxOpenPositions: 3,
     maxDailyLossSol:  0.5,    // circuit breaker : pause du trading réel si dépassé
+    lowCapMaxMcap:    50000,  // micro-cap prioritaire sous ce MC (fondamentaux OK)
+  },
+  traderProfile: {
+    style:        'rotation / quick flip sur meme coins GMGN',
+    riskAppetite: 7,          // 1-10 — agressif
+    targets:      'x2-x5 rapide, laisser courir avec trailing si moonshot',
+    notes:        [],
   },
   watchlist:    { tokens: [], wallets: [] },
   conversation: [],
@@ -199,6 +223,7 @@ class PersonalAgent {
     this._alertTimes  = new Map(); // clé → timestamp dernière alerte (anti-spam)
     this._lastManaged = new Map(); // tokenMint → timestamp dernière gestion IA
     this._breakerAlertDate = null; // date de la dernière alerte circuit breaker
+    this._scoreHistory = new Map(); // mint → {ts, score, prevTs, prevScore} — détection de rupture
   }
 
   setNotifyCallback(fn) { this._notify  = fn; }
@@ -215,8 +240,9 @@ class PersonalAgent {
       return {
         ...DEFAULTS,
         ...raw,
-        personality:  { ...DEFAULTS.personality,  ...(raw.personality  || {}) },
-        autonomy:     { ...DEFAULTS.autonomy,     ...(raw.autonomy     || {}) },
+        personality:   { ...DEFAULTS.personality,   ...(raw.personality   || {}) },
+        autonomy:      { ...DEFAULTS.autonomy,      ...(raw.autonomy      || {}) },
+        traderProfile: { ...DEFAULTS.traderProfile, ...(raw.traderProfile || {}) },
         watchlist:    { tokens: raw.watchlist?.tokens || [], wallets: raw.watchlist?.wallets || [] },
         conversation: raw.conversation || [],
         stats:        { ...DEFAULTS.stats, ...(raw.stats || {}) },
@@ -290,10 +316,13 @@ class PersonalAgent {
       return isNaN(n) ? null : Math.max(lo, Math.min(hi, n));
     };
     const ms = num(patch.minScore, 40, 95);          if (ms  != null) a.minScore         = ms;
+    const fs2 = num(patch.flexScore, 40, 90);        if (fs2 != null) a.flexScore        = fs2;
     const mc = num(patch.minConfidence, 1, 10);      if (mc  != null) a.minConfidence    = mc;
+    const mn = num(patch.minSolPerTrade, 0.001, 10); if (mn  != null) a.minSolPerTrade   = mn;
     const mt = num(patch.maxSolPerTrade, 0.001, 10); if (mt  != null) a.maxSolPerTrade   = mt;
     const mp = num(patch.maxOpenPositions, 1, 10);   if (mp  != null) a.maxOpenPositions = Math.round(mp);
     const ml = num(patch.maxDailyLossSol, 0.01, 50); if (ml  != null) a.maxDailyLossSol  = ml;
+    const lc = num(patch.lowCapMaxMcap, 1000, 1e6);  if (lc  != null) a.lowCapMaxMcap    = Math.round(lc);
 
     this._save();
     this.logAction('CONFIG',
@@ -341,7 +370,7 @@ class PersonalAgent {
 
   /**
    * Appelé sur chaque événement 'debate' du scanner.
-   * Journal des signaux + ajout automatique des WATCH prometteurs à la watchlist.
+   * Journal des signaux + historique de scores (rupture) + watchlist auto.
    * N'exécute PAS de trade (voir maybeAutoTrade, appelé par bot.js).
    */
   async onAnalysis(debate) {
@@ -351,6 +380,20 @@ class PersonalAgent {
     const addr = debate.token?.baseToken?.address;
     const sym  = debate.token?.baseToken?.symbol || addr?.slice(0, 6) || '?';
     const name = debate.token?.baseToken?.name   || '';
+
+    // Historique des scores par token → détection de rupture de pattern
+    if (addr && d.score != null) {
+      const prev = this._scoreHistory.get(addr);
+      this._scoreHistory.set(addr, {
+        ts: Date.now(), score: d.score,
+        prevTs: prev?.ts ?? null, prevScore: prev?.score ?? null,
+      });
+      if (this._scoreHistory.size > 300) {
+        // Purge les plus vieux (Map conserve l'ordre d'insertion)
+        const oldest = this._scoreHistory.keys().next().value;
+        this._scoreHistory.delete(oldest);
+      }
+    }
 
     if (d.decision === 'WATCH' && d.score >= 50 && addr) {
       const added = this.addWatchToken(addr, sym, name, `auto — score ${d.score}/100`, { auto: true });
@@ -362,11 +405,113 @@ class PersonalAgent {
     }
   }
 
+  /** Rupture de pattern : score qui bondit de ≥15 pts en moins d'une heure */
+  _isRupture(addr, score) {
+    const e = this._scoreHistory.get(addr);
+    if (!e || e.prevScore == null || e.prevTs == null) return null;
+    const jump = score - e.prevScore;
+    const mins = Math.round((Date.now() - e.prevTs) / 60_000);
+    if (jump >= 15 && mins <= 60 && score >= (this.data.autonomy.flexScore ?? 55)) {
+      return { from: e.prevScore, to: score, mins };
+    }
+    return null;
+  }
+
   /**
-   * Tente un achat autonome sur un signal BUY du scanner.
+   * SIGNAUX FORTS — seuil adaptatif (approuvé par le trader) :
+   * un token s'achète soit au seuil classique, soit dès flexScore (55) si un
+   * signal fort l'accompagne. Retourne { strong, reasons[] }.
+   */
+  async _strongSignal(debate) {
+    const a    = this.data.autonomy;
+    const d    = debate?.decision;
+    const g    = debate?.token?._gmgn;
+    const addr = debate?.token?.baseToken?.address;
+    const reasons = [];
+    if (!d || !addr) return { strong: false, reasons };
+    if (!['BUY', 'WATCH'].includes(d.decision)) return { strong: false, reasons };
+    if ((d.confidence ?? 0) < 4) return { strong: false, reasons }; // plancher anti-bruit
+
+    const flex = a.flexScore ?? 55;
+
+    // 1. Seuil classique
+    if (d.decision === 'BUY' && d.score >= a.minScore && d.confidence >= a.minConfidence) {
+      reasons.push(`score ${d.score}/100 ≥ seuil ${a.minScore}`);
+    }
+
+    if (d.score >= flex && g) {
+      // 2. Smart money massif + buy ratio > 70%
+      if (g.buyRatio >= 0.70 && g.smartDegen >= 15) {
+        reasons.push(`smart money massif: ${g.smartDegen} wallets + buy ratio ${(g.buyRatio * 100).toFixed(0)}%`);
+      }
+      // 3. Rotation coordonnée : KOL + smart money + snipers ensemble
+      if (g.renowned >= 2 && g.smartDegen >= 10 && g.sniper >= 10) {
+        reasons.push(`rotation coordonnée: ${g.renowned} KOL + ${g.smartDegen} smart + ${g.sniper} snipers`);
+      }
+    }
+
+    // 4. Flux smart money LIVE (track, cache 60s)
+    if (d.score >= flex) {
+      try {
+        const flow = await gmgn.getSmartMoneyForToken(addr);
+        if (flow && flow.buys >= 3 && flow.buys > flow.sells * 2) {
+          reasons.push(`flux live: ${flow.buys} achats smart money vs ${flow.sells} ventes (${flow.wallets} wallets)`);
+        }
+      } catch { /* best effort */ }
+    }
+
+    // 5. Rupture de pattern (score qui bondit)
+    const rupture = this._isRupture(addr, d.score);
+    if (rupture) {
+      reasons.push(`rupture: score ${rupture.from} → ${rupture.to} en ${rupture.mins} min`);
+    }
+
+    // 6. Micro-cap avec fondamentaux corrects (gates GMGN déjà passés)
+    const mcap = debate.token?.marketCap || 0;
+    const liq  = debate.token?.liquidity?.usd || 0;
+    if (d.score >= 50 && mcap > 0 && mcap <= (a.lowCapMaxMcap ?? 50000) && liq >= 5000) {
+      reasons.push(`micro-cap $${Math.round(mcap / 1000)}K, liq $${Math.round(liq / 1000)}K, fondamentaux OK`);
+    }
+
+    return { strong: reasons.length > 0, reasons };
+  }
+
+  /** Taille de position par confiance : minSol (conf ≤5) → maxSol (conf ≥9), linéaire */
+  _positionSize(confidence) {
+    const a  = this.data.autonomy;
+    const lo = Math.min(a.minSolPerTrade ?? 0.05, a.maxSolPerTrade);
+    const hi = a.maxSolPerTrade;
+    const t  = Math.max(0, Math.min(1, ((confidence ?? 5) - 5) / 4)); // 5→0, 9+→1
+    return parseFloat((lo + (hi - lo) * t).toFixed(4));
+  }
+
+  /**
+   * SL/TP dynamiques selon la volatilité (données GMGN) et la taille de cap.
+   * Petites caps + forte volatilité → stops plus larges, targets plus hautes.
+   */
+  _dynamicSlTp(decision, g, mcap) {
+    let sl = decision.stopLossPct  || 20;
+    let tp = decision.takeProfitPct || 50;
+
+    if (g) {
+      // Volatilité ~horaire : max(|1h|, |5m| extrapolé ×6)
+      const vol = Math.max(Math.abs(g.chg1h) * 100, Math.abs(g.chg5m) * 100 * 6);
+      if (vol >= 60)      { sl = Math.max(sl, 30); tp = Math.max(tp, 80); }
+      else if (vol >= 30) { sl = Math.max(sl, 25); tp = Math.max(tp, 60); }
+    }
+    if (mcap > 0 && mcap < 100_000) { sl = Math.max(sl, 30); tp = Math.max(tp, 100); }
+
+    return { sl: Math.min(40, Math.round(sl)), tp: Math.min(200, Math.round(tp)) };
+  }
+
+  /**
+   * Tente un achat autonome — SEUIL ADAPTATIF (signaux forts) :
+   * seuil classique OU flexScore + smart money massif / rotation coordonnée /
+   * flux live / rupture de pattern / micro-cap saine.
+   * Exécution DIRECTE sans confirmation (approuvé par le trader) — notification seule.
    * Appelé par bot.js (point d'entrée unique → pas de double exécution).
    *
-   * @returns {{ executed: boolean, reason?: string, txId?: string, solAmt?: number }}
+   * @returns {{ executed: boolean, strongSignal: boolean, reasons: string[], reason?: string, txId?: string, solAmt?: number, sl?: number, tp?: number }}
    */
   async maybeAutoTrade(debate) {
     const a    = this.data.autonomy;
@@ -374,27 +519,33 @@ class PersonalAgent {
     const addr = debate?.token?.baseToken?.address;
     const sym  = debate?.token?.baseToken?.symbol || addr?.slice(0, 6) || '?';
 
-    if (!a.enabled || !d || d.decision !== 'BUY' || !addr) {
-      return { executed: false, reason: 'non éligible' };
+    if (!a.enabled || !d || !addr) {
+      return { executed: false, strongSignal: false, reasons: [], reason: 'non éligible' };
     }
-    if ((d.score ?? 0) < a.minScore || (d.confidence ?? 0) < a.minConfidence) {
-      return { executed: false, reason: `sous mes seuils (score ${d.score}/${a.minScore}, conf ${d.confidence}/${a.minConfidence})` };
+
+    const { strong, reasons } = await this._strongSignal(debate);
+    if (!strong) {
+      return { executed: false, strongSignal: false, reasons, reason: `aucun signal fort (score ${d.score}, conf ${d.confidence})` };
     }
+
+    // Signal fort détecté → journal systématique
+    this.logAction('SIGNAL', `Signal FORT $${sym} — ${reasons.join(' | ')}`, { symbol: sym, address: addr });
+
     if (!a.liveTrading) {
-      return { executed: false, reason: 'trading réel désactivé' };
+      return { executed: false, strongSignal: true, reasons, reason: 'trading réel désactivé (/auto pour activer)' };
     }
     if (!this._trader?.isReady()) {
-      return { executed: false, reason: 'wallet non chargé' };
+      return { executed: false, strongSignal: true, reasons, reason: 'wallet non chargé' };
     }
     if (this._trader.positions.has(addr)) {
-      return { executed: false, reason: 'position déjà ouverte sur ce token' };
+      return { executed: false, strongSignal: true, reasons, reason: 'position déjà ouverte sur ce token' };
     }
     if (this._trader.positions.size >= a.maxOpenPositions) {
-      this.logAction('SIGNAL', `BUY $${sym} ignoré — ${a.maxOpenPositions} positions déjà ouvertes (plafond)`, { symbol: sym });
-      return { executed: false, reason: `max ${a.maxOpenPositions} positions atteint` };
+      this.logAction('SIGNAL', `Signal fort $${sym} non exécuté — ${a.maxOpenPositions} positions déjà ouvertes`, { symbol: sym });
+      return { executed: false, strongSignal: true, reasons, reason: `max ${a.maxOpenPositions} positions atteint` };
     }
     if (this._circuitBroken()) {
-      return { executed: false, reason: 'circuit breaker — perte journalière atteinte' };
+      return { executed: false, strongSignal: true, reasons, reason: 'circuit breaker — perte journalière atteinte' };
     }
     // Anti re-trade : token déjà acheté dans les 6 dernières heures
     const recent = (this._trader.history || []).find(h =>
@@ -402,29 +553,30 @@ class PersonalAgent {
       Date.now() - (h.entryTimestamp || h.timestamp || 0) < 6 * 3_600_000
     );
     if (recent) {
-      return { executed: false, reason: 'déjà tradé il y a moins de 6h' };
+      return { executed: false, strongSignal: true, reasons, reason: 'déjà tradé il y a moins de 6h' };
     }
 
-    // Taille de position proportionnelle à la confiance (30% → 100% du plafond)
-    const confFactor = Math.max(0.3, Math.min(1, (d.confidence || 5) / 10));
-    const solAmt     = parseFloat((a.maxSolPerTrade * confFactor).toFixed(4));
+    // Taille par confiance (minSol à conf 5 → maxSol à conf 9+)
+    const solAmt = this._positionSize(d.confidence);
+    // SL/TP dynamiques selon volatilité + taille de cap
+    const { sl, tp } = this._dynamicSlTp(d, debate.token?._gmgn, debate.token?.marketCap || 0);
 
     try {
       const { txId } = await this._trader.buy(addr, solAmt, {
-        stopLossPct:   d.stopLossPct   || 20,
-        takeProfitPct: d.takeProfitPct || 50,
+        stopLossPct:   sl,
+        takeProfitPct: tp,
         symbol:        debate.token?.baseToken?.symbol || null,
       });
       this.logAction('BUY',
-        `Achat auto $${sym} — ${solAmt} SOL (score ${d.score}/100, conf ${d.confidence}/10) SL -${d.stopLossPct}% TP +${d.takeProfitPct}%`,
+        `Achat auto $${sym} — ${solAmt} SOL [${reasons[0]}] SL -${sl}% TP +${tp}%`,
         { symbol: sym, address: addr, txId, solAmt }
       );
-      // SSE seulement — bot.js envoie la confirmation Telegram avec le lien tx
-      await this.sendMessage(`🟢 J'ai acheté $${sym} — ${solAmt} SOL (score ${d.score}/100). SL -${d.stopLossPct}% / TP +${d.takeProfitPct}%.`);
-      return { executed: true, txId, solAmt };
+      // SSE seulement — bot.js envoie la notification Telegram avec le lien tx
+      await this.sendMessage(`🟢 J'ai acheté $${sym} — ${solAmt} SOL. Signal: ${reasons.join(' + ')}. SL -${sl}% / TP +${tp}%.`);
+      return { executed: true, strongSignal: true, reasons, txId, solAmt, sl, tp };
     } catch (err) {
       this.logAction('ERROR', `Achat auto $${sym} échoué : ${err.message}`, { symbol: sym });
-      return { executed: false, reason: `erreur: ${err.message}`, error: true };
+      return { executed: false, strongSignal: true, reasons, reason: `erreur: ${err.message}`, error: true };
     }
   }
 
@@ -494,6 +646,7 @@ class PersonalAgent {
     lines.push(`- etat_portefeuille : balance + positions + PnL en temps réel`);
     lines.push(`- analyser_wallet : stats/positions/historique/style d'un wallet (winrate, PnL, sniper/bot/whale/diamond hands…)`);
     lines.push(`- smart_money_moves : ce que les smart money et KOLs achètent/vendent EN CE MOMENT`);
+    lines.push(`- profil_trader : lire/mettre à jour le profil de ton trader (fais-le dès qu'il te dit comment il trade)`);
     lines.push(`- acheter / vendre : exécution réelle sur le wallet (plafond ${a.maxSolPerTrade} SOL/trade) — uniquement sur demande ou accord clair du trader dans la conversation`);
     lines.push(`- watchlist : action 'list' pour voir ta liste complète (adresses entières), 'add'/'remove' pour la gérer (les wallets ajoutés sont trackés en live)`);
     lines.push(`Ta watchlist complète est déjà dans ton contexte ci-dessous avec les adresses ENTIÈRES — tu peux les copier directement dans analyser_wallet, donnees_token, etc.`);
@@ -501,11 +654,22 @@ class PersonalAgent {
     lines.push(``);
 
     // ── Autonomie ──
-    lines.push(`=== TON AUTONOMIE ===`);
-    lines.push(`Tu agis SEULE, sans attendre d'ordre : tu scannes, analyses, ${a.liveTrading ? 'achètes et vends sur le vrai wallet' : 'envoies des signaux BUY (le trading réel est désactivé, il confirme sur Telegram)'},`);
-    lines.push(`tu gères les positions (SL/TP/trailing + décisions de sortie), la watchlist, et tu alertes proactivement.`);
-    lines.push(`État : autonomie ${a.enabled ? 'ACTIVE' : 'OFF'} | trading réel ${a.liveTrading ? 'ON' : 'OFF'} | seuil BUY auto ${a.minScore}/100 (conf ≥ ${a.minConfidence}/10)`);
-    lines.push(`Plafonds : ${a.maxSolPerTrade} SOL/trade | ${a.maxOpenPositions} positions max | stop journalier -${a.maxDailyLossSol} SOL`);
+    lines.push(`=== TON AUTONOMIE (exécution directe, AUCUNE confirmation requise) ===`);
+    lines.push(`Tu agis SEULE : tu scannes, analyses, ${a.liveTrading ? 'achètes et vends DIRECTEMENT sur le vrai wallet (le trader reçoit juste une notification)' : 'envoies des signaux (trading réel OFF — /auto pour l\'activer)'},`);
+    lines.push(`tu gères les positions (SL/TP dynamiques, TP partiel, trailing, décisions de sortie), la watchlist, et tu alertes proactivement.`);
+    lines.push(`Seuils ADAPTATIFS : classique ${a.minScore}/100 (conf ≥ ${a.minConfidence}) OU dès ${a.flexScore ?? 55}/100 avec un signal fort`);
+    lines.push(`(smart money massif + buy ratio ≥70%, rotation KOL+smart+snipers, flux live, rupture de score, micro-cap < $${Math.round((a.lowCapMaxMcap ?? 50000) / 1000)}K saine).`);
+    lines.push(`Taille par confiance : ${a.minSolPerTrade ?? 0.05} SOL (conf 5) → ${a.maxSolPerTrade} SOL (conf 9+) | ${a.maxOpenPositions} positions max | stop journalier -${a.maxDailyLossSol} SOL`);
+    lines.push(``);
+
+    // ── Profil du trader ──
+    const tp = this.data.traderProfile || {};
+    lines.push(`=== PROFIL DE TON TRADER ===`);
+    lines.push(`Style : ${tp.style || '?'} | Appétit risque : ${tp.riskAppetite ?? '?'}/10 | Targets : ${tp.targets || '?'}`);
+    if ((tp.notes || []).length > 0) {
+      lines.push(`À ne pas oublier : ${tp.notes.join(' / ')}`);
+    }
+    lines.push(`Adapte tes décisions à SON profil (aggressivité, targets, patience).`);
     lines.push(``);
 
     // ── Portefeuille ──
@@ -788,6 +952,16 @@ class PersonalAgent {
     const sells    = history.filter(h => h.action === 'SELL' && h.pnlSol != null);
     const winRate  = sells.length > 0 ? Math.round((sells.filter(h => h.pnlSol > 0).length / sells.length) * 100) : null;
 
+    // A-t-on déjà tradé CE token ? (performances réelles passées)
+    const pastOnToken = sells.filter(h => h.tokenMint === addr);
+    const pastLine = pastOnToken.length > 0
+      ? `Déjà tradé ${pastOnToken.length}x — PnL cumulé ${pastOnToken.reduce((s, h) => s + h.pnlSol, 0) >= 0 ? '+' : ''}${pastOnToken.reduce((s, h) => s + h.pnlSol, 0).toFixed(4)} SOL`
+      : '';
+
+    // Profil du trader → shape la décision (targets, agressivité)
+    const tprof = this.data.traderProfile || {};
+    const profLine = `Profil trader: ${tprof.style || 'rotation'} | risque ${tprof.riskAppetite ?? 7}/10 | targets ${tprof.targets || 'x2-x5'}`;
+
     const prompt = [
       `Analyse ce token Solana. Décision de trading en JSON.`,
       ``,
@@ -798,9 +972,11 @@ class PersonalAgent {
       `Source: ${token._source || '?'}`,
       secLine,
       `Historique: ${recLine}`,
+      pastLine,
       ...gmgnLines,
       smartFlowLine,
       ``,
+      profLine,
       `Ton profil: risque ${pers.riskTolerance.toFixed(1)}/10, style ${pers.tradingStyle}${winRate != null ? `, win rate actuel ${winRate}%` : ''}.`,
       winRate != null && winRate < 40 ? `(Tu es en difficulté récemment, sois plus sélective.)` : '',
       ``,
@@ -1102,6 +1278,23 @@ class PersonalAgent {
             })),
             note: 'Trié par pression acheteuse nette (achats - ventes). Croise avec analyser_token avant toute décision.',
           };
+        }
+
+        case 'profil_trader': {
+          const tp = this.data.traderProfile;
+          if (input.action === 'set') {
+            if (typeof input.style === 'string' && input.style.trim()) tp.style = sanitizeName(input.style).slice(0, 60);
+            const ra = parseFloat(input.riskAppetite);
+            if (!isNaN(ra)) tp.riskAppetite = Math.max(1, Math.min(10, Math.round(ra)));
+            if (typeof input.targets === 'string' && input.targets.trim()) tp.targets = sanitizeName(input.targets).slice(0, 80);
+            if (typeof input.note === 'string' && input.note.trim()) {
+              tp.notes.push(sanitizeName(input.note).slice(0, 100));
+              if (tp.notes.length > 10) tp.notes.shift();
+            }
+            this._save();
+            this.logAction('CONFIG', `Profil trader mis à jour: ${tp.style}, risque ${tp.riskAppetite}/10, targets ${tp.targets}`);
+          }
+          return { profil: { ...tp } };
         }
 
         default:

@@ -402,9 +402,10 @@ class Bot {
       const next = personalAgent.setAutonomy({ liveTrading: !cur.liveTrading });
       await ctx.reply(
         next.liveTrading
-          ? `🤖 Trading réel <b>ACTIVÉ</b>\n⚠️ ARIA achète et vend seule sur ton wallet.\n` +
-            `Garde-fous : max ${next.maxSolPerTrade} SOL/trade, ${next.maxOpenPositions} positions, stop journalier -${next.maxDailyLossSol} SOL.`
-          : `🤖 Trading réel <b>DÉSACTIVÉ</b>\nARIA continue de scanner et d'envoyer les signaux — tu confirmes chaque achat.`,
+          ? `🤖 Trading réel <b>ACTIVÉ</b> — exécution directe\n⚠️ ARIA achète et vend seule, tu reçois juste des notifications.\n` +
+            `Seuils adaptatifs : ${next.minScore}/100 classique, ${next.flexScore}/100 + signal fort (smart money, rotation, rupture, micro-cap).\n` +
+            `Taille : ${next.minSolPerTrade}-${next.maxSolPerTrade} SOL selon confiance | ${next.maxOpenPositions} positions max | stop journalier -${next.maxDailyLossSol} SOL.`
+          : `🤖 Trading réel <b>DÉSACTIVÉ</b>\nARIA scanne et envoie les signaux — tu confirmes chaque achat via les boutons.`,
         { parse_mode: 'HTML' }
       );
     });
@@ -672,47 +673,68 @@ class Bot {
           timestamp: Date.now(),
         });
 
-        // Journal + watchlist automatique d'ARIA (BUY et WATCH)
-        personalAgent.onAnalysis(debate).catch(() => {});
+        // Journal + historique de scores + watchlist auto d'ARIA (AVANT maybeAutoTrade
+        // — l'historique de scores alimente la détection de rupture)
+        await personalAgent.onAnalysis(debate).catch(() => {});
 
-        if (debate.decision.decision !== 'BUY') {
-          this._hourlyRejected++;
-          return; // Pas de notif Telegram pour les tokens refusés
+        const addr  = debate.token?.baseToken?.address;
+        const score = debate.decision.score ?? 0;
+
+        // Scores moyens (30-60) → re-scan rapide dans 20 min pour détecter
+        // les ruptures de pattern (score qui bondit de 35 → 60)
+        if (addr && score >= 30 && score < 60) {
+          this.scanner.markSeenTtl(addr, 20 * 60 * 1000);
         }
 
-        // Tentative d'exécution autonome AVANT les notifications
+        // Tentative d'exécution autonome — seuils adaptatifs + signaux forts
         // (point d'entrée unique → pas de double achat)
         const auto = await personalAgent.maybeAutoTrade(debate);
 
-        // Envoi du débat complet uniquement pour les BUY
-        await this._send(this._formatDebate(debate), { parse_mode: 'HTML' });
+        // Rien d'actionnable (pas un BUY et pas de signal fort) → silence Telegram
+        if (debate.decision.decision !== 'BUY' && !auto.strongSignal) {
+          this._hourlyRejected++;
+          return;
+        }
+
+        // Envoi de l'analyse complète (+ raisons du signal fort)
+        let msg = this._formatDebate(debate);
+        if (auto.strongSignal && auto.reasons.length > 0) {
+          msg += `\n\n⚡ <b>Signal fort</b> : ${auto.reasons.map(r => this._esc(r)).join('  |  ')}`;
+        }
+        await this._send(msg, { parse_mode: 'HTML' });
 
         if (auto.executed) {
+          // Exécution directe — notification seule, aucune confirmation requise
           await this._send(
-            `🤖 <b>ARIA — ACHAT AUTONOME</b>\n${auto.solAmt} SOL investis\n<a href="https://solscan.io/tx/${auto.txId}">Voir la tx</a>`,
+            `🤖 <b>ARIA — ACHAT EXÉCUTÉ</b>\n` +
+            `${auto.solAmt} SOL  |  🛑 SL: -${auto.sl}%  |  🎯 TP: +${auto.tp}% (partiel)\n` +
+            `<a href="https://solscan.io/tx/${auto.txId}">Voir la tx</a>`,
             { parse_mode: 'HTML', disable_web_page_preview: true }
           );
           return;
         }
 
-        // Non exécuté → boutons de confirmation manuelle
-        const a          = personalAgent.getAutonomy();
-        const confFactor = Math.max(0.3, Math.min(1, (debate.decision.confidence || 5) / 10));
-        const solAmt     = parseFloat((a.maxSolPerTrade * confFactor).toFixed(4));
-        const sl = debate.decision.stopLossPct || 20;
-        const tp = debate.decision.takeProfitPct || 50;
-        const reasonLine = a.liveTrading && auto.reason
-          ? `\n<i>ARIA n'a pas acheté seule : ${this._esc(auto.reason)}</i>`
-          : '';
+        const a = personalAgent.getAutonomy();
+        if (a.liveTrading) {
+          // Trading réel actif mais non exécuté → note d'info, pas de boutons
+          if (auto.reason && !auto.reason.startsWith('aucun signal')) {
+            await this._send(`ℹ️ <i>Pas d'achat auto : ${this._esc(auto.reason)}</i>`, { parse_mode: 'HTML' });
+          }
+          return;
+        }
+
+        // Trading réel OFF → boutons (seul moyen d'agir dans ce mode)
+        const solAmt = personalAgent._positionSize(debate.decision.confidence);
+        const { sl, tp } = personalAgent._dynamicSlTp(debate.decision, debate.token?._gmgn, debate.token?.marketCap || 0);
         await this.bot.telegram.sendMessage(
           this.adminId,
-          `💡 Confirmer l'achat?${reasonLine}`,
+          `💡 Trading réel OFF — confirmer l'achat ? (/auto pour l'exécution directe)`,
           {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
               Markup.button.callback(
                 `✅ Acheter (${solAmt.toFixed(3)} SOL)`,
-                `buy:${debate.token.baseToken?.address}:${solAmt.toFixed(4)}:${sl}:${tp}`
+                `buy:${addr}:${solAmt.toFixed(4)}:${sl}:${tp}`
               ),
               Markup.button.callback('❌ Passer', 'skip'),
             ]),
