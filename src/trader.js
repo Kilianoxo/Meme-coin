@@ -430,6 +430,50 @@ class Trader {
     return { txId, quote };
   }
 
+  /**
+   * Réconcilie les positions trackées avec la RÉALITÉ on-chain du wallet.
+   * Le propriétaire trade aussi manuellement sur GMGN → une position vendue
+   * hors du bot reste "ouverte" dans positions.json alors que le wallet ne
+   * détient plus le token. Ici : balance on-chain nulle → clôture sans swap
+   * (exitReason EXTERNAL_SELL, PnL inconnu → null, n'altère pas les stats).
+   *
+   * @returns {Promise<{ closed: Array, kept: Array }>}
+   */
+  async reconcilePositions() {
+    if (!this.wallet) throw new Error('Wallet non chargé');
+
+    const closed = [];
+    const kept   = [];
+
+    for (const [tokenMint, pos] of [...this.positions]) {
+      let balance;
+      try {
+        balance = await this.getTokenBalance(tokenMint);
+      } catch {
+        kept.push({ tokenMint, symbol: pos.symbol, onChain: null }); // RPC KO → on ne touche pas
+        continue;
+      }
+
+      if (balance === BigInt(0)) {
+        pos.status         = 'closed';
+        pos.closeTimestamp = Date.now();
+        this.positions.delete(tokenMint);
+        this.history.push({
+          action: 'SELL', tokenMint, pct: 100, txId: null,
+          timestamp: Date.now(), pnlSol: null,
+          exitReason: 'EXTERNAL_SELL', external: true,
+        });
+        closed.push({ tokenMint, symbol: pos.symbol || tokenMint.slice(0, 6), solSpent: pos.solSpent });
+        console.log(`[Trader] 🔀 Position ${pos.symbol || tokenMint.slice(0, 8)} clôturée — vendue hors du bot (balance on-chain nulle)`);
+      } else {
+        kept.push({ tokenMint, symbol: pos.symbol, onChain: balance.toString() });
+      }
+    }
+
+    if (closed.length > 0) this._save();
+    return { closed, kept };
+  }
+
   // ─── Moniteur Stop Loss / Take Profit ────────────────────────────────────
 
   /**

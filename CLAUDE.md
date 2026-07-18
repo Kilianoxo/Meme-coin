@@ -46,7 +46,8 @@ Config persistée dans agent.json (`autonomy`), modifiable via dashboard (POST /
 - `traderProfile` (style, riskAppetite, targets, notes) — injecté dans tous les prompts,
   modifiable via l'outil de chat profil_trader
 Flux : scanner → analyse ARIA → bot.js appelle `personalAgent.maybeAutoTrade(debate)` (point d'entrée unique).
-Heartbeat 3 min : alertes SL/TP (cooldown 30 min), watchlist tokens (~6 min, cooldown 1h),
+Heartbeat 3 min : réconciliation on-chain (~15 min — clôture auto EXTERNAL_SELL des positions
+vendues à la main sur GMGN), alertes SL/TP (cooldown 30 min), watchlist tokens (~6 min, cooldown 1h),
 tracking LIVE des wallets suivis (~6 min — alerte proactive à chaque nouveau swap, curseur
 lastActivityTs par wallet, pur code), gestion active des positions (~9 min, cooldown 20 min/position,
 décisions HOLD/SELL/TIGHTEN_SL), apprentissage (~30 min), rapport quotidien à 20h Paris.
@@ -60,7 +61,8 @@ Outils (`TOOL_DEFS` + `_execTool` dans personalAgent.js) :
 - `tokens_tendance` — GMGN trending + hot-searches (smart money/KOL, verdicts)
 - `donnees_token` — due diligence GMGN (prix, sécurité, snipers, bundlers, buy ratio)
 - `analyser_token` — pipeline d'analyse complet → décision BUY/WATCH/SKIP
-- `etat_portefeuille` — balance + positions avec PnL live + PnL du jour
+- `etat_portefeuille` — balance + positions avec PnL live + PnL du jour + vérif on-chain (surChaine)
+- `nettoyer_positions` — clôture les positions vendues à la main sur GMGN (EXTERNAL_SELL)
 - `analyser_wallet` — stats GMGN d'un wallet (winrate, PnL réalisé/non réalisé, positions,
   historique, classification du style : sniper/bot/whale/diamond hands/bag-holder/dev)
 - `smart_money_moves` — flux live des trades smart money + KOL agrégé par token

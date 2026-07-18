@@ -1863,7 +1863,7 @@ function renderHistory(history) {
   const reasonMap = {
     STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 TP (partiel)', TRAILING_STOP: '📐 Trailing',
     MANUAL: '👆 Manuel', ARIA_DECISION: '🤖 ARIA', ESCAPE_SIGNAL: '🚨 Fuite rug',
-    BREAKEVEN_STOP: '⚖️ Break-even',
+    BREAKEVEN_STOP: '⚖️ Break-even', EXTERNAL_SELL: '🔀 Vendu hors bot',
   };
 
   tbody.innerHTML = history.map(h => {

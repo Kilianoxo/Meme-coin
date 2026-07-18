@@ -99,7 +99,12 @@ const TOOL_DEFS = [
   },
   {
     name: 'etat_portefeuille',
-    description: 'Balance SOL fraîche + positions ouvertes avec PnL live + PnL réalisé du jour.',
+    description: "Balance SOL fraîche + positions trackées avec PnL live + VÉRIFICATION ON-CHAIN de chaque position (surChaine: true/false — false = le token n'est plus dans le wallet, probablement vendu à la main sur GMGN → utilise nettoyer_positions). C'est la VÉRITÉ du portefeuille.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'nettoyer_positions',
+    description: "Réconcilie les positions trackées avec la réalité on-chain : les positions dont le wallet ne détient plus le token (vendues à la main sur GMGN, hors du bot) sont clôturées proprement (EXTERNAL_SELL). À utiliser quand une position semble fantôme ou qu'une vente échoue avec 'Balance token nulle'.",
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -643,7 +648,8 @@ class PersonalAgent {
     lines.push(`- tokens_tendance : ce qui bouge en ce moment sur GMGN (smart money, KOL, verdicts momentum)`);
     lines.push(`- donnees_token : due diligence GMGN complète (prix, sécurité, snipers, bundlers, buy ratio)`);
     lines.push(`- analyser_token : ton analyse complète BUY/WATCH/SKIP avec score et SL/TP`);
-    lines.push(`- etat_portefeuille : balance + positions + PnL en temps réel`);
+    lines.push(`- etat_portefeuille : balance + positions + PnL + vérification on-chain (surChaine=false → position fantôme)`);
+    lines.push(`- nettoyer_positions : clôture les positions vendues à la main sur GMGN (hors bot)`);
     lines.push(`- analyser_wallet : stats/positions/historique/style d'un wallet (winrate, PnL, sniper/bot/whale/diamond hands…)`);
     lines.push(`- smart_money_moves : ce que les smart money et KOLs achètent/vendent EN CE MOMENT`);
     lines.push(`- profil_trader : lire/mettre à jour le profil de ton trader (fais-le dès qu'il te dit comment il trade)`);
@@ -1141,15 +1147,38 @@ class PersonalAgent {
             const pnlPct = pos.entryPriceUsd && cur
               ? Math.round(((cur - pos.entryPriceUsd) / pos.entryPriceUsd) * 1000) / 10
               : null;
+            // Vérité on-chain : le wallet détient-il vraiment ce token ?
+            let surChaine = null;
+            try {
+              const bal = await this._trader.getTokenBalance(pos.tokenMint);
+              surChaine = bal > BigInt(0);
+            } catch { /* RPC KO → inconnu */ }
             positions.push({
               symbol: pos.symbol || pos.tokenMint.slice(0, 6),
               address: pos.tokenMint,
               solInvesti: pos.solSpent,
               pnlPct,
               slPct: pos.stopLossPct, tpPct: pos.takeProfitPct,
+              surChaine,
+              ...(surChaine === false ? { note: 'ABSENT du wallet — vendue hors bot ? → nettoyer_positions' } : {}),
             });
           }
           return { balanceSol: balance, positions, pnlJourSol: parseFloat(this._dailyRealizedPnl().toFixed(4)) };
+        }
+
+        case 'nettoyer_positions': {
+          if (!this._trader?.isReady()) return { erreur: 'Wallet non chargé' };
+          const { closed, kept } = await this._trader.reconcilePositions();
+          for (const c of closed) {
+            this.logAction('SELL', `Position $${c.symbol} clôturée — vendue hors du bot (balance on-chain nulle)`, { symbol: c.symbol, address: c.tokenMint });
+          }
+          return {
+            positionsCloturees: closed.map(c => ({ symbol: c.symbol, address: c.tokenMint })),
+            positionsReelles:   kept.map(k => ({ symbol: k.symbol, address: k.tokenMint })),
+            note: closed.length > 0
+              ? `${closed.length} position(s) fantôme(s) nettoyée(s) — elles avaient été vendues à la main sur GMGN`
+              : 'Toutes les positions trackées existent bien on-chain',
+          };
         }
 
         case 'acheter': {
@@ -1172,9 +1201,23 @@ class PersonalAgent {
           const pct  = Math.max(1, Math.min(100, parseInt(input.pct, 10) || 100));
           const pos  = this._trader.positions.get(addr);
           const sym  = sanitizeName(pos?.symbol || addr.slice(0, 6));
-          const { txId } = await this._trader.sell(addr, pct, 300, 'MANUAL');
-          this.logAction('SELL', `Vente via chat $${sym} — ${pct}%`, { symbol: sym, address: addr, txId });
-          return { ok: true, txId, pctVendu: pct };
+          try {
+            const { txId } = await this._trader.sell(addr, pct, 300, 'MANUAL');
+            this.logAction('SELL', `Vente via chat $${sym} — ${pct}%`, { symbol: sym, address: addr, txId });
+            return { ok: true, txId, pctVendu: pct };
+          } catch (err) {
+            // Balance nulle = le token n'est plus dans le wallet (vendu à la main
+            // sur GMGN) → on nettoie la position fantôme au passage
+            if (/balance token nulle/i.test(err.message) && pos) {
+              await this._trader.reconcilePositions().catch(() => {});
+              this.logAction('SELL', `Position fantôme $${sym} nettoyée (vendue hors bot, balance nulle)`, { symbol: sym, address: addr });
+              return {
+                ok: false,
+                resultat: `Le wallet ne détient plus $${sym} — vendue à la main sur GMGN probablement. J'ai nettoyé la position du tracking.`,
+              };
+            }
+            throw err;
+          }
         }
 
         case 'watchlist': {
@@ -1389,6 +1432,7 @@ class PersonalAgent {
     this._hbTimer = setInterval(async () => {
       tick++;
       try {
+        if (tick % 5  === 0) await this._reconcilePositions(); // ~15 min — sync on-chain (ventes manuelles GMGN)
         await this._escapeMonitor();                           // signaux de fuite GMGN (prioritaire)
         await this._checkPositions();                          // alertes SL/TP
         if (tick % 2  === 0) await this._checkWatchlist();     // ~6 min — tokens suivis
@@ -1400,6 +1444,23 @@ class PersonalAgent {
         console.error('[ARIA] Erreur heartbeat:', err.message);
       }
     }, 3 * 60 * 1000);
+  }
+
+  /**
+   * Réconciliation automatique on-chain (~15 min) : le trader vend aussi à la
+   * main sur GMGN → les positions vendues hors bot sont clôturées proprement
+   * (EXTERNAL_SELL) au lieu de rester fantômes dans le tracking.
+   */
+  async _reconcilePositions() {
+    if (!this._trader?.isReady()) return;
+    if ((this._trader.positions?.size || 0) === 0) return;
+    try {
+      const { closed } = await this._trader.reconcilePositions();
+      for (const c of closed) {
+        this.logAction('SELL', `Position $${c.symbol} clôturée auto — vendue hors du bot (GMGN manuel)`, { symbol: c.symbol, address: c.tokenMint });
+        await this.sendMessage(`🔀 J'ai détecté que tu as vendu $${c.symbol} à la main — position nettoyée du tracking.`);
+      }
+    } catch { /* RPC KO — on réessaiera au prochain cycle */ }
   }
 
   /**
