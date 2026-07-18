@@ -41,8 +41,14 @@ Config persistée dans agent.json (`autonomy`), modifiable via dashboard (POST /
 - `minSolPerTrade` (0.05) → `maxSolPerTrade` (0.2) — taille linéaire selon confiance (5→9+)
 - SL/TP dynamiques (_dynamicSlTp) : volatilité 1h/5m + taille de cap → stops élargis
 - `maxOpenPositions` (3), `maxDailyLossSol` (0.5 = circuit breaker), anti re-trade 6h
-- TP partiel (trader.js, PARTIAL_TP_PCT=50) : au TP vend 50%, le reste court avec trailing
-  + break-even stop (tpTaken → sortie si PnL ≤ +3%). exitReason: BREAKEVEN_STOP
+- Sortie multi-étapes (trader.js, TP_SELL_STAGE1/2=30) : +TP% → vend 30% (TAKE_PROFIT),
+  +2×TP% → vend 30% de l'initial (TAKE_PROFIT_2), reste ~40% en trailing ; break-even stop
+  après le 1er palier (tpStage ≥1 → sortie si PnL ≤ +3%, BREAKEVEN_STOP)
+- `copyTrading` (true) : réplique les achats des wallets suivis — JAMAIS aveuglément :
+  gates GMGN + analyse ARIA (SKIP ou conf <5 → refus expliqué), puis _execAutoBuy
+  (tous les garde-fous). Max 1 copy par wallet par cycle (~6 min)
+- Risk adaptatif (_riskMultiplier) : perte horaire ≥60% du plafond jour → tailles ÷2 ;
+  2 ventes perdantes d'affilée → ×0.75 ; loss streak ≥3 → ÷2 (cumulable)
 - `traderProfile` (style, riskAppetite, targets, notes) — injecté dans tous les prompts,
   modifiable via l'outil de chat profil_trader
 Flux : scanner → analyse ARIA → bot.js appelle `personalAgent.maybeAutoTrade(debate)` (point d'entrée unique).
@@ -67,6 +73,8 @@ Outils (`TOOL_DEFS` + `_execTool` dans personalAgent.js) :
 - `analyser_wallet` — stats GMGN d'un wallet (winrate, PnL réalisé/non réalisé, positions,
   historique, classification du style : sniper/bot/whale/diamond hands/bag-holder/dev)
 - `smart_money_moves` — flux live des trades smart money + KOL agrégé par token
+- `stats_bot` — bilan complet (winrate, PnL, peak equity, max drawdown, profit factor,
+  meilleurs/pires tokens, sorties par raison, état du risk adaptatif)
 - `acheter` / `vendre` — swaps Jupiter réels (achat plafonné à maxSolPerTrade, journalisé)
 - `watchlist` — gestion autonome de la liste de surveillance
 Les blocs tool_use/tool_result ne sont PAS persistés dans la conversation (texte seul).

@@ -165,6 +165,11 @@ const TOOL_DEFS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'stats_bot',
+    description: "Statistiques complètes du bot : winrate, PnL réalisé, peak equity, max drawdown, gain/perte moyens, profit factor, ratio win/loss, meilleurs et pires tokens tradés, PnL du jour. Pour faire le bilan ou répondre à 'on en est où ?'.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'profil_trader',
     description: "Lit ou modifie le profil de ton trader (style, appétit risque, targets, notes à retenir). Mets-le à jour dès qu'il t'apprend quelque chose sur sa façon de trader — ce profil shape toutes tes analyses.",
     input_schema: {
@@ -203,6 +208,7 @@ const DEFAULTS = {
     maxOpenPositions: 3,
     maxDailyLossSol:  0.5,    // circuit breaker : pause du trading réel si dépassé
     lowCapMaxMcap:    50000,  // micro-cap prioritaire sous ce MC (fondamentaux OK)
+    copyTrading:      true,   // réplique les achats des wallets suivis (après analyse + gates)
   },
   traderProfile: {
     style:        'rotation / quick flip sur meme coins GMGN',
@@ -315,6 +321,7 @@ class PersonalAgent {
     const a = this.data.autonomy;
     if (typeof patch.enabled     === 'boolean') a.enabled     = patch.enabled;
     if (typeof patch.liveTrading === 'boolean') a.liveTrading = patch.liveTrading;
+    if (typeof patch.copyTrading === 'boolean') a.copyTrading = patch.copyTrading;
 
     const num = (v, lo, hi) => {
       const n = parseFloat(v);
@@ -481,13 +488,42 @@ class PersonalAgent {
     return { strong: reasons.length > 0, reasons };
   }
 
-  /** Taille de position par confiance : minSol (conf ≤5) → maxSol (conf ≥9), linéaire */
+  /**
+   * RISK MANAGEMENT ADAPTATIF — multiplicateur de taille selon la forme récente :
+   *  - perte horaire ≥ 60% du plafond journalier (ex: -0.3 SOL si plafond 0.5) → taille ÷2
+   *  - 2 dernières ventes perdantes → taille ×0.75
+   *  - loss streak ≥ 3 → taille ÷2 (cumulable)
+   */
+  _riskMultiplier() {
+    const a     = this.data.autonomy;
+    const sells = (this._trader?.history || []).filter(h => h.action === 'SELL' && h.pnlSol != null);
+    let m = 1;
+
+    const hourAgo = Date.now() - 3_600_000;
+    const hourPnl = sells.filter(h => h.timestamp >= hourAgo).reduce((s, h) => s + h.pnlSol, 0);
+    if (hourPnl <= -(a.maxDailyLossSol * 0.6)) m *= 0.5;
+
+    const lastTwo = sells.slice(-2);
+    if (lastTwo.length === 2 && lastTwo.every(h => h.pnlSol < 0)) m *= 0.75;
+
+    if (this.data.stats.lossStreak >= 3) m *= 0.5;
+
+    return m;
+  }
+
+  /** Taille de position par confiance : minSol (conf ≤5) → maxSol (conf ≥9), linéaire,
+   *  puis réduite par le risk management adaptatif si la forme récente est mauvaise. */
   _positionSize(confidence) {
     const a  = this.data.autonomy;
     const lo = Math.min(a.minSolPerTrade ?? 0.05, a.maxSolPerTrade);
     const hi = a.maxSolPerTrade;
     const t  = Math.max(0, Math.min(1, ((confidence ?? 5) - 5) / 4)); // 5→0, 9+→1
-    return parseFloat((lo + (hi - lo) * t).toFixed(4));
+    const base = lo + (hi - lo) * t;
+    const m    = this._riskMultiplier();
+    if (m < 1 && this._allowAlert('risksize', 60 * 60_000)) {
+      this.logAction('CONFIG', `Risk adaptatif : tailles réduites ×${m} (pertes récentes)`);
+    }
+    return parseFloat(Math.max(0.01, base * m).toFixed(4));
   }
 
   /**
@@ -536,21 +572,36 @@ class PersonalAgent {
     // Signal fort détecté → journal systématique
     this.logAction('SIGNAL', `Signal FORT $${sym} — ${reasons.join(' | ')}`, { symbol: sym, address: addr });
 
+    const exec = await this._execAutoBuy(debate, reasons);
+    return { ...exec, strongSignal: true, reasons };
+  }
+
+  /**
+   * Exécuteur d'achat autonome partagé (scanner + copy-trading) :
+   * applique TOUS les garde-fous puis achète avec sizing par confiance
+   * (× risk adaptatif) et SL/TP dynamiques.
+   */
+  async _execAutoBuy(debate, reasons, { notifyPriority = 'normal' } = {}) {
+    const a    = this.data.autonomy;
+    const d    = debate.decision;
+    const addr = debate.token?.baseToken?.address;
+    const sym  = sanitizeName(debate.token?.baseToken?.symbol || addr?.slice(0, 6) || '?');
+
     if (!a.liveTrading) {
-      return { executed: false, strongSignal: true, reasons, reason: 'trading réel désactivé (/auto pour activer)' };
+      return { executed: false, reason: 'trading réel désactivé (/auto pour activer)' };
     }
     if (!this._trader?.isReady()) {
-      return { executed: false, strongSignal: true, reasons, reason: 'wallet non chargé' };
+      return { executed: false, reason: 'wallet non chargé' };
     }
     if (this._trader.positions.has(addr)) {
-      return { executed: false, strongSignal: true, reasons, reason: 'position déjà ouverte sur ce token' };
+      return { executed: false, reason: 'position déjà ouverte sur ce token' };
     }
     if (this._trader.positions.size >= a.maxOpenPositions) {
-      this.logAction('SIGNAL', `Signal fort $${sym} non exécuté — ${a.maxOpenPositions} positions déjà ouvertes`, { symbol: sym });
-      return { executed: false, strongSignal: true, reasons, reason: `max ${a.maxOpenPositions} positions atteint` };
+      this.logAction('SIGNAL', `Signal $${sym} non exécuté — ${a.maxOpenPositions} positions déjà ouvertes`, { symbol: sym });
+      return { executed: false, reason: `max ${a.maxOpenPositions} positions atteint` };
     }
     if (this._circuitBroken()) {
-      return { executed: false, strongSignal: true, reasons, reason: 'circuit breaker — perte journalière atteinte' };
+      return { executed: false, reason: 'circuit breaker — perte journalière atteinte' };
     }
     // Anti re-trade : token déjà acheté dans les 6 dernières heures
     const recent = (this._trader.history || []).find(h =>
@@ -558,12 +609,11 @@ class PersonalAgent {
       Date.now() - (h.entryTimestamp || h.timestamp || 0) < 6 * 3_600_000
     );
     if (recent) {
-      return { executed: false, strongSignal: true, reasons, reason: 'déjà tradé il y a moins de 6h' };
+      return { executed: false, reason: 'déjà tradé il y a moins de 6h' };
     }
 
-    // Taille par confiance (minSol à conf 5 → maxSol à conf 9+)
+    // Taille par confiance × risk adaptatif + SL/TP dynamiques
     const solAmt = this._positionSize(d.confidence);
-    // SL/TP dynamiques selon volatilité + taille de cap
     const { sl, tp } = this._dynamicSlTp(d, debate.token?._gmgn, debate.token?.marketCap || 0);
 
     try {
@@ -576,12 +626,15 @@ class PersonalAgent {
         `Achat auto $${sym} — ${solAmt} SOL [${reasons[0]}] SL -${sl}% TP +${tp}%`,
         { symbol: sym, address: addr, txId, solAmt }
       );
-      // SSE seulement — bot.js envoie la notification Telegram avec le lien tx
-      await this.sendMessage(`🟢 J'ai acheté $${sym} — ${solAmt} SOL. Signal: ${reasons.join(' + ')}. SL -${sl}% / TP +${tp}%.`);
-      return { executed: true, strongSignal: true, reasons, txId, solAmt, sl, tp };
+      await this.sendMessage(
+        `🟢 J'ai acheté $${sym} — ${solAmt} SOL. Signal: ${reasons.join(' + ')}. SL -${sl}% / TP +${tp}%.` +
+        (notifyPriority === 'high' ? `\ntx: https://solscan.io/tx/${txId}` : ''),
+        notifyPriority
+      );
+      return { executed: true, txId, solAmt, sl, tp };
     } catch (err) {
       this.logAction('ERROR', `Achat auto $${sym} échoué : ${err.message}`, { symbol: sym });
-      return { executed: false, strongSignal: true, reasons, reason: `erreur: ${err.message}`, error: true };
+      return { executed: false, reason: `erreur: ${err.message}`, error: true };
     }
   }
 
@@ -652,6 +705,7 @@ class PersonalAgent {
     lines.push(`- nettoyer_positions : clôture les positions vendues à la main sur GMGN (hors bot)`);
     lines.push(`- analyser_wallet : stats/positions/historique/style d'un wallet (winrate, PnL, sniper/bot/whale/diamond hands…)`);
     lines.push(`- smart_money_moves : ce que les smart money et KOLs achètent/vendent EN CE MOMENT`);
+    lines.push(`- stats_bot : bilan complet (winrate, PnL, peak equity, drawdown, meilleurs/pires tokens)`);
     lines.push(`- profil_trader : lire/mettre à jour le profil de ton trader (fais-le dès qu'il te dit comment il trade)`);
     lines.push(`- acheter / vendre : exécution réelle sur le wallet (plafond ${a.maxSolPerTrade} SOL/trade) — uniquement sur demande ou accord clair du trader dans la conversation`);
     lines.push(`- watchlist : action 'list' pour voir ta liste complète (adresses entières), 'add'/'remove' pour la gérer (les wallets ajoutés sont trackés en live)`);
@@ -665,7 +719,9 @@ class PersonalAgent {
     lines.push(`tu gères les positions (SL/TP dynamiques, TP partiel, trailing, décisions de sortie), la watchlist, et tu alertes proactivement.`);
     lines.push(`Seuils ADAPTATIFS : classique ${a.minScore}/100 (conf ≥ ${a.minConfidence}) OU dès ${a.flexScore ?? 55}/100 avec un signal fort`);
     lines.push(`(smart money massif + buy ratio ≥70%, rotation KOL+smart+snipers, flux live, rupture de score, micro-cap < $${Math.round((a.lowCapMaxMcap ?? 50000) / 1000)}K saine).`);
-    lines.push(`Taille par confiance : ${a.minSolPerTrade ?? 0.05} SOL (conf 5) → ${a.maxSolPerTrade} SOL (conf 9+) | ${a.maxOpenPositions} positions max | stop journalier -${a.maxDailyLossSol} SOL`);
+    lines.push(`Taille par confiance : ${a.minSolPerTrade ?? 0.05} SOL (conf 5) → ${a.maxSolPerTrade} SOL (conf 9+), réduite auto si pertes récentes (risk adaptatif) | ${a.maxOpenPositions} positions max | stop journalier -${a.maxDailyLossSol} SOL`);
+    lines.push(`Copy-trading : ${a.copyTrading ? 'ACTIF' : 'off'} — tu répliques les achats des wallets suivis (après TES gates + TON analyse, jamais aveuglément).`);
+    lines.push(`Sorties multi-étapes : +TP% → vends 30% | +2×TP% → vends 30% | reste ~40% en trailing, break-even stop après le 1er palier.`);
     lines.push(``);
 
     // ── Profil du trader ──
@@ -1328,6 +1384,60 @@ class PersonalAgent {
           };
         }
 
+        case 'stats_bot': {
+          const history = this._trader?.history || [];
+          const sells   = history.filter(h => h.action === 'SELL' && h.pnlSol != null)
+            .slice().sort((x, y) => x.timestamp - y.timestamp);
+          if (sells.length === 0) return { resultat: 'Aucun trade fermé encore — pas de stats' };
+
+          const wins   = sells.filter(h => h.pnlSol > 0);
+          const losses = sells.filter(h => h.pnlSol <= 0);
+          const totalPnl  = sells.reduce((s, h) => s + h.pnlSol, 0);
+          const grossWin  = wins.reduce((s, h) => s + h.pnlSol, 0);
+          const grossLoss = Math.abs(losses.reduce((s, h) => s + h.pnlSol, 0));
+
+          // Equity cumulative → peak + max drawdown
+          let cum = 0, peak = 0, maxDd = 0;
+          for (const h of sells) {
+            cum += h.pnlSol;
+            if (cum > peak) peak = cum;
+            if (peak - cum > maxDd) maxDd = peak - cum;
+          }
+
+          // PnL agrégé par token → meilleurs / pires
+          const byToken = new Map();
+          for (const h of sells) {
+            const e = byToken.get(h.tokenMint) || { pnl: 0, trades: 0 };
+            e.pnl += h.pnlSol; e.trades++;
+            byToken.set(h.tokenMint, e);
+          }
+          const ranked = [...byToken.entries()]
+            .map(([mint, e]) => ({ token: mint, pnlSol: parseFloat(e.pnl.toFixed(4)), trades: e.trades }))
+            .sort((x, y) => y.pnlSol - x.pnlSol);
+
+          // Répartition des raisons de sortie
+          const parRaison = {};
+          for (const h of sells) parRaison[h.exitReason || '?'] = (parRaison[h.exitReason || '?'] || 0) + 1;
+
+          const r2 = v => parseFloat(v.toFixed(4));
+          return {
+            tradesFermes:   sells.length,
+            winrate:        Math.round((wins.length / sells.length) * 100) + '%',
+            ratioWinLoss:   `${wins.length}W / ${losses.length}L`,
+            pnlRealiseSol:  r2(totalPnl),
+            pnlJourSol:     r2(this._dailyRealizedPnl()),
+            peakEquitySol:  r2(peak),
+            maxDrawdownSol: r2(maxDd),
+            gainMoyenSol:   wins.length   ? r2(grossWin / wins.length)    : 0,
+            perteMoyenneSol: losses.length ? r2(-grossLoss / losses.length) : 0,
+            profitFactor:   grossLoss > 0 ? parseFloat((grossWin / grossLoss).toFixed(2)) : (grossWin > 0 ? '∞' : 0),
+            meilleursTokens: ranked.slice(0, 3),
+            piresTokens:     ranked.slice(-3).reverse().filter(t => t.pnlSol < 0),
+            sortiesParRaison: parRaison,
+            riskAdaptatif:  this._riskMultiplier() < 1 ? `actif — tailles ×${this._riskMultiplier()}` : 'inactif (forme OK)',
+          };
+        }
+
         case 'profil_trader': {
           const tp = this.data.traderProfile;
           if (input.action === 'set') {
@@ -1718,6 +1828,7 @@ class PersonalAgent {
         w.lastActivityTs = Math.max(...acts.map(a => a.ts || 0));
         this._save();
 
+        let copied = false; // max 1 copy-trade par wallet par cycle
         for (const a of fresh) {
           const sym    = sanitizeName(a.tokenSymbol);
           const action = a.type === 'buy' ? 'acheté' : 'vendu';
@@ -1727,12 +1838,68 @@ class PersonalAgent {
             wallet: w.address, symbol: sym, address: a.tokenAddress,
           });
           await this.sendMessage(
-            `🔭 Wallet suivi ${label} vient d'${a.type === 'buy' ? 'acheter' : 'vendre'} $${sym}${amount}.` +
-            (a.type === 'buy' ? ` Je peux analyser le token si tu veux.` : ''),
+            `🔭 Wallet suivi ${label} vient d'${a.type === 'buy' ? 'acheter' : 'vendre'} $${sym}${amount}.`,
             a.costUsd >= 1000 ? 'high' : 'normal'
           );
+
+          // COPY-TRADING : réplique l'achat après analyse complète + gates
+          if (a.type === 'buy' && !copied && this.data.autonomy.copyTrading) {
+            copied = true;
+            await this._copyTrade(label, a).catch(err =>
+              console.error('[ARIA] Erreur copy-trade:', err.message));
+          }
         }
       } catch { /* wallet illisible — silencieux */ }
+    }
+  }
+
+  /**
+   * COPY-TRADING : un wallet suivi vient d'acheter → on réplique, mais JAMAIS
+   * aveuglément : pipeline complet (gates GMGN durs + analyse ARIA), puis
+   * exécution avec tous les garde-fous (_execAutoBuy). Taille = sizing par
+   * confiance × risk adaptatif — pas la taille du wallet copié.
+   */
+  async _copyTrade(walletLabel, act) {
+    const addr = act.tokenAddress;
+    const sym  = sanitizeName(act.tokenSymbol);
+    if (!addr || !this.data.autonomy.enabled) return;
+
+    // Due diligence : paire + gates durs anti-rug
+    const pair = await this._fetchPair(addr);
+    if (!pair) {
+      this.logAction('SIGNAL', `Copy-trade $${sym} abandonné — token introuvable sur GMGN`, { symbol: sym });
+      return;
+    }
+    const gate = gmgn.hardGates(pair._gmgn);
+    if (!gate.ok) {
+      this.logAction('SIGNAL', `Copy-trade $${sym} refusé — ${gate.reason}`, { symbol: sym });
+      await this.sendMessage(`🔭 Je ne copie PAS l'achat de ${walletLabel} sur $${sym} : ${gate.reason}.`);
+      return;
+    }
+
+    // Analyse ARIA complète
+    const sec = await gmgn.getTokenSecurity(addr);
+    const g   = pair._gmgn || {};
+    const security = sec ? {
+      mintAuthority:      sec.renouncedMint   ? null : 'active',
+      freezeAuthority:    sec.renouncedFreeze ? null : 'active',
+      top10HolderPercent: (sec.top10 || 0) * 100,
+    } : null;
+    const debate = await this.analyzeToken(pair, security, null, { holder: g.holderCount || null }, null);
+    const d = debate.decision;
+
+    if (d.decision === 'SKIP' || (d.confidence ?? 0) < 5) {
+      this.logAction('SIGNAL', `Copy-trade $${sym} refusé après analyse — ${d.decision} (score ${d.score}, conf ${d.confidence})`, { symbol: sym });
+      await this.sendMessage(`🔭 ${walletLabel} a acheté $${sym} mais mon analyse dit ${d.decision} (score ${d.score}/100) : ${d.reasoning || 'pas convaincue'}. Je ne copie pas.`);
+      return;
+    }
+
+    const reasons = [`copy-trade: wallet ${walletLabel} vient d'acheter (mon analyse: ${d.decision} ${d.score}/100)`];
+    const exec = await this._execAutoBuy(debate, reasons, { notifyPriority: 'high' });
+    if (!exec.executed && exec.reason && !exec.reason.startsWith('trading réel')) {
+      this.logAction('SIGNAL', `Copy-trade $${sym} non exécuté — ${exec.reason}`, { symbol: sym });
+    } else if (!exec.executed && exec.reason?.startsWith('trading réel')) {
+      await this.sendMessage(`🔭 Je copierais l'achat de ${walletLabel} sur $${sym} (analyse ${d.decision} ${d.score}/100) — active /auto pour que j'exécute.`, 'high');
     }
   }
 

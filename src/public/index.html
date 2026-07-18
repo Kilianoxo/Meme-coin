@@ -1059,6 +1059,15 @@
             </div>
 
             <div class="auto-row">
+              <span title="Réplique les achats des wallets suivis (après gates + analyse)">Copy-trading wallets suivis</span>
+              <label class="mini-toggle">
+                <input type="checkbox" id="autoCopy" onchange="saveAutonomy()">
+                <span class="track"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+
+            <div class="auto-row">
               <span class="c-muted">Score min BUY auto</span>
               <input class="auto-input" id="autoMinScore" type="number" min="40" max="95" step="1">
             </div>
@@ -1861,7 +1870,7 @@ function renderHistory(history) {
   }
 
   const reasonMap = {
-    STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 TP (partiel)', TRAILING_STOP: '📐 Trailing',
+    STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 TP palier 1', TAKE_PROFIT_2: '🎯🎯 TP palier 2', TRAILING_STOP: '📐 Trailing',
     MANUAL: '👆 Manuel', ARIA_DECISION: '🤖 ARIA', ESCAPE_SIGNAL: '🚨 Fuite rug',
     BREAKEVEN_STOP: '⚖️ Break-even', EXTERNAL_SELL: '🔀 Vendu hors bot',
   };
@@ -2301,6 +2310,7 @@ function renderAutonomy(a) {
 
   document.getElementById('autoEnabled').checked = a.enabled;
   document.getElementById('autoLive').checked    = a.liveTrading;
+  document.getElementById('autoCopy').checked    = a.copyTrading !== false;
   document.getElementById('autoMinScore').value  = a.minScore;
   document.getElementById('autoFlexScore').value = a.flexScore ?? 55;
   document.getElementById('autoMinConf').value   = a.minConfidence;
@@ -2355,6 +2365,7 @@ async function saveAutonomy() {
   const patch = {
     enabled:          document.getElementById('autoEnabled').checked,
     liveTrading:      document.getElementById('autoLive').checked,
+    copyTrading:      document.getElementById('autoCopy').checked,
     minScore:         parseFloat(document.getElementById('autoMinScore').value),
     flexScore:        parseFloat(document.getElementById('autoFlexScore').value),
     minConfidence:    parseFloat(document.getElementById('autoMinConf').value),

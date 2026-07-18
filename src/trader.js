@@ -81,9 +81,13 @@ const NON_TRADE_MINTS = new Set([
 // Valeur minimum (USD) pour auto-importer un token acheté hors bot (filtre dust/airdrops)
 const AUTO_IMPORT_MIN_USD = parseFloat(process.env.AUTO_IMPORT_MIN_USD || '10');
 const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
-// Prise de profit partielle : % vendu quand le TP est touché (le reste court
-// avec trailing stop + stop break-even). 100 = vente totale (ancien comportement).
-const PARTIAL_TP_PCT = Math.max(10, Math.min(100, parseFloat(process.env.PARTIAL_TP_PCT || '50')));
+// Sortie multi-étapes (% de la position INITIALE) :
+//   palier 1 (+TP%)   → vend TP_SELL_STAGE1 (30%)
+//   palier 2 (+2×TP%) → vend TP_SELL_STAGE2 (30%)
+//   le reste (~40%) court en trailing, protégé par un break-even stop.
+// TP_SELL_STAGE1=100 → vente totale au TP (ancien comportement).
+const TP_SELL_STAGE1 = Math.max(10, Math.min(100, parseFloat(process.env.TP_SELL_STAGE1 || process.env.PARTIAL_TP_PCT || '30')));
+const TP_SELL_STAGE2 = Math.max(0,  Math.min(90,  parseFloat(process.env.TP_SELL_STAGE2 || '30')));
 
 class Trader {
   constructor() {
@@ -584,6 +588,10 @@ class Trader {
       let reason     = null;
       let exitReason = null;
       let sellPct    = 100;
+      let stageAfter = null;
+
+      // Palier atteint (rétro-compat : ancien flag tpTaken = palier 1)
+      const tpStage = pos.tpStage ?? (pos.tpTaken ? 1 : 0);
 
       // Trailing stop-loss activé seulement si le prix a monté > 20% depuis l'entrée
       const gainFromEntry = ((pos.highPriceUsd || pos.entryPriceUsd) - pos.entryPriceUsd) / pos.entryPriceUsd * 100;
@@ -593,18 +601,24 @@ class Trader {
       } else if (changePct <= -pos.stopLossPct) {
         reason     = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
         exitReason = 'STOP_LOSS';
-      } else if (pos.tpTaken && changePct <= 3) {
-        // Après un TP partiel : le reste ne doit jamais repasser dans le rouge
-        reason     = `⚖️ <b>BREAK-EVEN STOP</b> — sortie du reste\n${shortMint}\nPnL restant: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}% (gains du TP partiel sécurisés)`;
+      } else if (tpStage >= 1 && changePct <= 3) {
+        // Après un palier de TP : le reste ne doit jamais repasser dans le rouge
+        reason     = `⚖️ <b>BREAK-EVEN STOP</b> — sortie du reste\n${shortMint}\nPnL restant: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}% (gains des paliers sécurisés)`;
         exitReason = 'BREAKEVEN_STOP';
-      } else if (!pos.tpTaken && changePct >= pos.takeProfitPct) {
-        // PRISE DE PROFIT PARTIELLE : on vend une partie, le reste court
-        // (trailing stop + break-even prennent le relais)
-        sellPct    = PARTIAL_TP_PCT;
+      } else if (tpStage === 0 && changePct >= pos.takeProfitPct) {
+        // PALIER 1 : vend TP_SELL_STAGE1 % de la position initiale
+        sellPct    = TP_SELL_STAGE1;
+        stageAfter = 1;
         reason     = sellPct >= 100
           ? `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nPnL: +${changePct.toFixed(1)}%`
-          : `🎯 <b>TP PARTIEL</b> — vente de ${sellPct}%\n${shortMint}\nPnL: +${changePct.toFixed(1)}%\nLe reste court avec trailing stop + break-even.`;
+          : `🎯 <b>TP PALIER 1</b> — vente de ${sellPct}%\n${shortMint}\nPnL: +${changePct.toFixed(1)}%\nProchain palier: +${(pos.takeProfitPct * 2).toFixed(0)}% — le reste court (trailing + break-even).`;
         exitReason = 'TAKE_PROFIT';
+      } else if (tpStage === 1 && TP_SELL_STAGE2 > 0 && changePct >= pos.takeProfitPct * 2) {
+        // PALIER 2 : vend TP_SELL_STAGE2 % de l'INITIAL → % du solde restant
+        sellPct    = Math.min(90, Math.round((TP_SELL_STAGE2 / (100 - TP_SELL_STAGE1)) * 100));
+        stageAfter = 2;
+        reason     = `🎯🎯 <b>TP PALIER 2</b> — vente de ${TP_SELL_STAGE2}% de l'initial\n${shortMint}\nPnL: +${changePct.toFixed(1)}%\nLe reste (~${100 - TP_SELL_STAGE1 - TP_SELL_STAGE2}%) court en trailing jusqu'à la lune.`;
+        exitReason = 'TAKE_PROFIT_2';
       }
 
       if (reason) {
@@ -612,9 +626,9 @@ class Trader {
           console.log(`[Trader] ${reason.replace(/<[^>]+>/g, '')}`);
           logger.sltp(tokenMint, pos.symbol || shortMint, exitReason, changePct);
           const { txId } = await this.sell(tokenMint, sellPct, 300, exitReason);
-          if (exitReason === 'TAKE_PROFIT' && sellPct < 100) {
+          if (stageAfter != null && sellPct < 100) {
             const p = this.positions.get(tokenMint);
-            if (p) { p.tpTaken = true; this._save(); }
+            if (p) { p.tpStage = stageAfter; delete p.tpTaken; this._save(); }
           }
           if (notify) {
             notify(`${reason}\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`);
