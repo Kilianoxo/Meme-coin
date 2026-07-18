@@ -72,6 +72,14 @@ function httpsRequest(url, opts = {}) {
   });
 }
 const WSOL = 'So11111111111111111111111111111111111111112';
+// Mints à ne jamais auto-importer comme positions (SOL wrappé + stablecoins)
+const NON_TRADE_MINTS = new Set([
+  WSOL,
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+]);
+// Valeur minimum (USD) pour auto-importer un token acheté hors bot (filtre dust/airdrops)
+const AUTO_IMPORT_MIN_USD = parseFloat(process.env.AUTO_IMPORT_MIN_USD || '10');
 const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
 // Prise de profit partielle : % vendu quand le TP est touché (le reste court
 // avec trailing stop + stop break-even). 100 = vente totale (ancien comportement).
@@ -472,6 +480,61 @@ class Trader {
 
     if (closed.length > 0) this._save();
     return { closed, kept };
+  }
+
+  /**
+   * Synchronisation COMPLÈTE wallet ↔ tracking (bidirectionnelle) :
+   *  1. reconcilePositions() — clôture les positions vendues à la main (balance nulle)
+   *  2. auto-import — les tokens achetés à la main sur GMGN (présents on-chain
+   *     mais non trackés, valeur ≥ AUTO_IMPORT_MIN_USD) deviennent des positions
+   *     suivies (SL/TP/monitoring de fuite). Entrée = prix actuel, coût estimé
+   *     en SOL à la valeur du moment (le vrai coût d'achat est inconnu).
+   *
+   * @returns {Promise<{ closed: Array, kept: Array, imported: Array }>}
+   */
+  async syncWallet() {
+    const { closed, kept } = await this.reconcilePositions();
+    const imported = [];
+
+    try {
+      const tokens    = await this.getWalletTokens();
+      const untracked = tokens
+        .filter(t => !this.positions.has(t.mint) && !NON_TRADE_MINTS.has(t.mint))
+        .slice(0, 10); // borne les appels prix
+      if (untracked.length === 0) return { closed, kept, imported };
+
+      const solPrice = await this.getCurrentPrice(WSOL);
+      for (const t of untracked) {
+        const price = await this.getCurrentPrice(t.mint);
+        if (!price) continue; // Jupiter ne connaît pas → probable dust/airdrop
+        const valueUsd = price * t.amount;
+        if (valueUsd < AUTO_IMPORT_MIN_USD) continue;
+
+        const solSpent = solPrice ? parseFloat((valueUsd / solPrice).toFixed(4)) : 0;
+        // Symbole via GMGN (best effort)
+        let symbol = null;
+        try {
+          const row  = gmgn.findTrendingRow(t.mint);
+          symbol = row?.baseToken?.symbol
+            || (await gmgn.isAvailable() ? (await gmgn.getTokenInfo(t.mint))?.symbol : null)
+            || null;
+          if (symbol === '???') symbol = null;
+        } catch { /* silencieux */ }
+
+        const { position } = await this.importPosition(t.mint, solSpent, { symbol });
+        imported.push({
+          tokenMint: t.mint,
+          symbol:    position.symbol || t.mint.slice(0, 6),
+          valueUsd:  Math.round(valueUsd),
+          solSpent,
+        });
+        console.log(`[Trader] 📥 Token acheté hors bot auto-importé: ${position.symbol || t.mint.slice(0, 8)} (~$${Math.round(valueUsd)})`);
+      }
+    } catch (err) {
+      console.warn('[Trader] syncWallet import:', err.message);
+    }
+
+    return { closed, kept, imported };
   }
 
   // ─── Moniteur Stop Loss / Take Profit ────────────────────────────────────

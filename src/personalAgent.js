@@ -104,7 +104,7 @@ const TOOL_DEFS = [
   },
   {
     name: 'nettoyer_positions',
-    description: "Réconcilie les positions trackées avec la réalité on-chain : les positions dont le wallet ne détient plus le token (vendues à la main sur GMGN, hors du bot) sont clôturées proprement (EXTERNAL_SELL). À utiliser quand une position semble fantôme ou qu'une vente échoue avec 'Balance token nulle'.",
+    description: "SYNCHRONISE le tracking avec le wallet réel (bidirectionnel) : clôture les positions vendues à la main sur GMGN (EXTERNAL_SELL) ET importe automatiquement les tokens achetés à la main (ils passent sous ta gestion SL/TP). À utiliser quand une position semble fantôme, qu'une vente échoue avec 'Balance token nulle', ou que le trader dit avoir acheté/vendu à la main.",
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -1168,16 +1168,21 @@ class PersonalAgent {
 
         case 'nettoyer_positions': {
           if (!this._trader?.isReady()) return { erreur: 'Wallet non chargé' };
-          const { closed, kept } = await this._trader.reconcilePositions();
+          const { closed, kept, imported } = await this._trader.syncWallet();
           for (const c of closed) {
-            this.logAction('SELL', `Position $${c.symbol} clôturée — vendue hors du bot (balance on-chain nulle)`, { symbol: c.symbol, address: c.tokenMint });
+            this.logAction('SELL', `Position $${sanitizeName(c.symbol)} clôturée — vendue hors du bot (balance on-chain nulle)`, { symbol: c.symbol, address: c.tokenMint });
           }
+          for (const i of imported) {
+            this.logAction('BUY', `Achat manuel GMGN importé : $${sanitizeName(i.symbol)} (~$${i.valueUsd})`, { symbol: i.symbol, address: i.tokenMint });
+          }
+          const notes = [];
+          if (closed.length > 0)   notes.push(`${closed.length} position(s) fantôme(s) nettoyée(s) (vendues à la main)`);
+          if (imported.length > 0) notes.push(`${imported.length} achat(s) manuel(s) importé(s) sous ma gestion`);
           return {
             positionsCloturees: closed.map(c => ({ symbol: c.symbol, address: c.tokenMint })),
+            achatsImportes:     imported.map(i => ({ symbol: i.symbol, address: i.tokenMint, valeurUsd: i.valueUsd })),
             positionsReelles:   kept.map(k => ({ symbol: k.symbol, address: k.tokenMint })),
-            note: closed.length > 0
-              ? `${closed.length} position(s) fantôme(s) nettoyée(s) — elles avaient été vendues à la main sur GMGN`
-              : 'Toutes les positions trackées existent bien on-chain',
+            note: notes.length > 0 ? notes.join(' + ') : 'Tracking et wallet parfaitement synchro',
           };
         }
 
@@ -1447,18 +1452,22 @@ class PersonalAgent {
   }
 
   /**
-   * Réconciliation automatique on-chain (~15 min) : le trader vend aussi à la
-   * main sur GMGN → les positions vendues hors bot sont clôturées proprement
-   * (EXTERNAL_SELL) au lieu de rester fantômes dans le tracking.
+   * Synchro wallet ↔ tracking automatique (~15 min, bidirectionnelle) :
+   * le trader trade aussi à la main sur GMGN →
+   *  - positions vendues hors bot → clôturées (EXTERNAL_SELL)
+   *  - tokens achetés hors bot → auto-importés comme positions suivies
    */
   async _reconcilePositions() {
     if (!this._trader?.isReady()) return;
-    if ((this._trader.positions?.size || 0) === 0) return;
     try {
-      const { closed } = await this._trader.reconcilePositions();
+      const { closed, imported } = await this._trader.syncWallet();
       for (const c of closed) {
-        this.logAction('SELL', `Position $${c.symbol} clôturée auto — vendue hors du bot (GMGN manuel)`, { symbol: c.symbol, address: c.tokenMint });
-        await this.sendMessage(`🔀 J'ai détecté que tu as vendu $${c.symbol} à la main — position nettoyée du tracking.`);
+        this.logAction('SELL', `Position $${sanitizeName(c.symbol)} clôturée auto — vendue hors du bot (GMGN manuel)`, { symbol: c.symbol, address: c.tokenMint });
+        await this.sendMessage(`🔀 J'ai détecté que tu as vendu $${sanitizeName(c.symbol)} à la main — position nettoyée du tracking.`);
+      }
+      for (const i of imported) {
+        this.logAction('BUY', `Achat manuel GMGN détecté : $${sanitizeName(i.symbol)} (~$${i.valueUsd}) — auto-importé, je le gère (SL/TP/fuite)`, { symbol: i.symbol, address: i.tokenMint });
+        await this.sendMessage(`📥 J'ai vu ton achat manuel de $${sanitizeName(i.symbol)} (~$${i.valueUsd}) — je le prends en gestion (SL/TP, trailing, monitoring de fuite).`);
       }
     } catch { /* RPC KO — on réessaiera au prochain cycle */ }
   }
