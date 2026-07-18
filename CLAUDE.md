@@ -36,7 +36,7 @@ Config persistée dans agent.json (`autonomy`), modifiable via dashboard (POST /
 - `minScore` (70) — seuil classique ; `flexScore` (55) — suffit avec un SIGNAL FORT :
   smart money massif (≥15 wallets + buy ratio ≥70%), rotation coordonnée (≥2 KOL + ≥10 smart
   + ≥10 snipers), flux live (≥3 achats smart money > 2× ventes), rupture de pattern (score
-  +15 pts en <1h — re-scan 20 min des scores 30-60 via scanner.markSeenTtl), micro-cap
+  +15 pts en <1h — re-scan 5 min des scores 30-60 via scanner.markSeenTtl), micro-cap
   < lowCapMaxMcap (50K) avec liq ≥5K. Logique dans _strongSignal() (personalAgent.js)
 - `minSolPerTrade` (0.05) → `maxSolPerTrade` (0.2) — taille linéaire selon confiance (5→9+)
 - SL/TP dynamiques (_dynamicSlTp) : volatilité 1h/5m + taille de cap → stops élargis

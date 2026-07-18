@@ -680,10 +680,10 @@ class Bot {
         const addr  = debate.token?.baseToken?.address;
         const score = debate.decision.score ?? 0;
 
-        // Scores moyens (30-60) → re-scan rapide dans 20 min pour détecter
+        // Scores moyens (30-60) → re-scan toutes les 5 min pour détecter
         // les ruptures de pattern (score qui bondit de 35 → 60)
         if (addr && score >= 30 && score < 60) {
-          this.scanner.markSeenTtl(addr, 20 * 60 * 1000);
+          this.scanner.markSeenTtl(addr, 5 * 60 * 1000);
         }
 
         // Tentative d'exécution autonome — seuils adaptatifs + signaux forts
