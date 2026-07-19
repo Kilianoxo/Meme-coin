@@ -622,20 +622,43 @@ class Trader {
       }
 
       if (reason) {
+        const sym = pos.symbol || shortMint;
+        const EXIT_LABELS = {
+          STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'TP palier 1', TAKE_PROFIT_2: 'TP palier 2',
+          TRAILING_STOP: 'Trailing stop', BREAKEVEN_STOP: 'Break-even',
+        };
         try {
           console.log(`[Trader] ${reason.replace(/<[^>]+>/g, '')}`);
-          logger.sltp(tokenMint, pos.symbol || shortMint, exitReason, changePct);
-          const { txId } = await this.sell(tokenMint, sellPct, 300, exitReason);
+          logger.sltp(tokenMint, sym, exitReason, changePct);
+          // Stop-loss = sortie d'urgence → slippage large (5%) pour garantir le fill
+          const slippage = exitReason === 'STOP_LOSS' ? 500 : 300;
+          const { txId } = await this.sell(tokenMint, sellPct, slippage, exitReason);
           if (stageAfter != null && sellPct < 100) {
             const p = this.positions.get(tokenMint);
             if (p) { p.tpStage = stageAfter; delete p.tpTaken; this._save(); }
           }
+          // Chaque ordre du moniteur dans le journal d'ARIA (adresse, %, prix, PnL)
+          personalAgent.logAction('SELL',
+            `${EXIT_LABELS[exitReason] || exitReason} $${sym} — vendu ${sellPct}% à $${currentPrice.toFixed(8)} (PnL ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%)`,
+            { symbol: sym, address: tokenMint, txId }
+          );
           if (notify) {
             notify(`${reason}\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`);
           }
         } catch (err) {
           console.error(`[Trader] Erreur vente SL/TP (${shortMint}): ${err.message}`);
-          if (notify) notify(`⚠️ Erreur vente SL/TP pour <code>${shortMint}</code>: ${err.message}`);
+          personalAgent.logAction('ERROR',
+            `Vente ${EXIT_LABELS[exitReason] || exitReason} $${sym} échouée : ${err.message}`,
+            { symbol: sym, address: tokenMint }
+          );
+          if (/balance token nulle/i.test(err.message)) {
+            // Le wallet ne détient plus le token (vendu à la main) →
+            // resynchronise au lieu de réessayer en boucle toutes les 30s
+            this.syncWallet().catch(() => {});
+            if (notify) notify(`🔀 Position <code>${shortMint}</code> absente du wallet — resynchronisation automatique du tracking.`);
+          } else if (notify) {
+            notify(`⚠️ Erreur vente SL/TP pour <code>${shortMint}</code>: ${err.message}`);
+          }
         }
       }
     }
