@@ -9,20 +9,22 @@
     /* ── Reset & variables ───────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg:      #0d1117;
-      --bg2:     #10161d;
-      --card:    #161b22;
-      --card2:   #1c2128;
-      --border:  #21262d;
-      --txt:     #e6edf3;
-      --txt2:    #7d8590;
-      --txt-muted: #7d8590;
-      --green:   #3fb950;
-      --red:     #f85149;
-      --blue:    #58a6ff;
-      --yellow:  #e3b341;
-      --purple:  #bc8cff;
-      --orange:  #f0883e;
+      --bg:      #070b15;
+      --bg2:     #0b1120;
+      --card:    #0e1526;
+      --card2:   #141d33;
+      --border:  #1d2740;
+      --txt:     #e9edf8;
+      --txt2:    #8c94ad;
+      --txt-muted: #8c94ad;
+      --green:   #2ee6a8;
+      --red:     #ff5c7a;
+      --blue:    #6f8dff;
+      --yellow:  #ffd166;
+      --purple:  #b78cff;
+      --orange:  #ff9e64;
+      --robin:   #c5ff4a;   /* lime Robinhood — accent Agios */
+      --grad:    linear-gradient(135deg, #6f8dff 0%, #b78cff 100%);
     }
 
     /* ── Base ─────────────────────────────────────────────────────────── */
@@ -751,6 +753,108 @@
     .ac-decision.ac-orange { color: var(--orange); }
     .ac-decision.ac-red    { color: var(--red); }
     .ac-time { font-size: 11px; color: var(--txt2); margin-top: 2px; }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       SKIN MODERNE — overrides (cascade)
+    ══════════════════════════════════════════════════════════════════ */
+    body {
+      font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+      background:
+        radial-gradient(1100px 500px at 85% -10%, rgba(111,141,255,.10), transparent 60%),
+        radial-gradient(900px 480px at -10% 110%, rgba(183,140,255,.07), transparent 60%),
+        var(--bg);
+      background-attachment: fixed;
+    }
+    .header {
+      background: rgba(11,17,32,.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid rgba(111,141,255,.14);
+    }
+    .header h1 {
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-size: 18px;
+    }
+    .tab-nav {
+      background: transparent;
+      border-bottom: none;
+      padding: 12px 28px 4px;
+      gap: 8px;
+    }
+    .tab-nav-btn {
+      border: 1px solid transparent;
+      border-radius: 99px;
+      padding: 8px 18px;
+      transition: all .18s;
+    }
+    .tab-nav-btn:hover { background: var(--card2); }
+    .tab-nav-btn.active {
+      color: #fff;
+      background: linear-gradient(135deg, rgba(111,141,255,.22), rgba(183,140,255,.16));
+      border-color: rgba(111,141,255,.4);
+      border-bottom-color: rgba(111,141,255,.4);
+      box-shadow: 0 4px 18px rgba(111,141,255,.18);
+    }
+    .card, .section {
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,.022), transparent 45%), var(--card);
+      box-shadow: 0 10px 30px rgba(2,6,18,.35);
+    }
+    .card { transition: transform .15s, border-color .15s; }
+    .card:hover { transform: translateY(-2px); border-color: rgba(111,141,255,.35); }
+    .card-value { letter-spacing: -0.5px; }
+    .sec-head { border-bottom-color: rgba(29,39,64,.8); }
+    .btn-primary {
+      background: var(--grad);
+      border: none;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(111,141,255,.30);
+    }
+    .aria-bubble.user { background: var(--grad); }
+    .toggle-switch input:checked + .toggle-track,
+    .mini-toggle input:checked + .track { background: var(--blue); }
+    .mini-toggle input:checked + .track.danger { background: var(--red); }
+    .analysis-card { border-radius: 12px; }
+    th { border-bottom-color: rgba(29,39,64,.9); }
+    td { border-bottom-color: rgba(29,39,64,.5); }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    /* ── Agios (Robinhood Chain) ────────────────────────────────────── */
+    .agios-hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 18px 22px;
+      border-radius: 16px;
+      margin-bottom: 18px;
+      border: 1px solid rgba(197,255,74,.22);
+      background:
+        radial-gradient(600px 200px at 90% 0%, rgba(197,255,74,.10), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,.02), transparent 45%), var(--card);
+    }
+    .agios-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: rgba(197,255,74,.10);
+      border: 1px solid rgba(197,255,74,.35);
+      color: var(--robin);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 99px;
+      letter-spacing: .4px;
+    }
+    .agios-accent { color: var(--robin); }
+    .aria-bubble.agios-user { background: linear-gradient(135deg, #9dc72e, #5f8f1f); color: #fff; align-self: flex-end; border-bottom-right-radius: 3px; }
   </style>
 </head>
 <body>
@@ -775,6 +879,7 @@
 <nav class="tab-nav">
   <button class="tab-nav-btn active" data-page="dashboard">📊 Dashboard</button>
   <button class="tab-nav-btn"        data-page="aria">🤖 ARIA</button>
+  <button class="tab-nav-btn"        data-page="agios">🏛 Agios · Robinhood</button>
   <button class="tab-nav-btn"        data-page="paper">🧪 Paper Trading</button>
   <!-- Trading Floor suspendu — bouton conservé mais caché (réactivable) -->
   <button class="tab-nav-btn" data-page="floor" style="display:none">💬 Trading Floor</button>
@@ -1294,6 +1399,126 @@
   </div><!-- /page-floor -->
 
   <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : AGIOS — Agent Robinhood Chain
+  ════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="page-agios">
+
+    <div class="agios-hero">
+      <div>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+          <span style="font-size:26px">🏛</span>
+          <span style="font-size:19px; font-weight:800">Agios</span>
+          <span class="agios-badge">ROBINHOOD CHAIN · L2 ARBITRUM · BLOCS 100MS</span>
+          <span class="agios-badge" style="border-color:rgba(255,209,102,.35); color:var(--yellow); background:rgba(255,209,102,.08)">🧪 PAPER TRADING</span>
+        </div>
+        <div class="c-muted" style="font-size:12px; margin-top:6px; line-height:1.6">
+          Mainnet depuis juillet 2026 — actions US tokenisées 24/7 + memecoins, gas en ETH, données GMGN.
+          Exécution réelle à venir (wallet Robinhood Chain requis) — Agios trade en simulation et journalise tout.
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="c-muted" style="font-size:11px">Tokens analysés</div>
+        <div id="agStatAnalyzed" class="agios-accent" style="font-size:26px; font-weight:800">—</div>
+      </div>
+    </div>
+
+    <!-- Stats paper -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Portefeuille (paper)</div>
+        <div class="card-value" id="agPortfolio">—</div>
+        <div class="card-sub" id="agPortfolioSub">— de départ</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL réalisé</div>
+        <div class="card-value" id="agPnl">—</div>
+        <div class="card-sub" id="agTrades">— trades</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value" id="agWr">—</div>
+        <div class="card-sub" id="agWrSub">— W / — L</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Positions ouvertes</div>
+        <div class="card-value agios-accent" id="agOpen">—</div>
+        <div class="card-sub" id="agOpenSub">— investi</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Signaux BUY</div>
+        <div class="card-value" id="agSignals">—</div>
+        <div class="card-sub">détectés sur la chaîne</div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <!-- Positions paper -->
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head">
+          <h2>📂 Positions Agios</h2>
+          <span class="c-muted" id="agPosCount" style="font-size:12px">—</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Token</th><th>Score</th><th>MC entrée</th><th>MC actuel</th><th>PnL %</th><th>SL/TP</th><th>Durée</th></tr>
+            </thead>
+            <tbody id="agPosBody">
+              <tr><td colspan="7" class="empty">Aucune position — Agios scanne le trending Robinhood Chain</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Journal -->
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head">
+          <h2>📜 Journal d'Agios</h2>
+          <span class="c-muted" id="agJournalCount" style="font-size:12px">—</span>
+        </div>
+        <div class="sec-body" style="padding:4px 14px 10px">
+          <div class="journal-feed" id="agJournalFeed" style="max-height:300px">
+            <div class="c-muted" style="font-size:11px; text-align:center; padding:14px">
+              Les signaux et trades paper d'Agios<br>apparaîtront ici en temps réel.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Historique paper -->
+    <div class="section" style="margin-top:18px">
+      <div class="sec-head">
+        <h2>📋 Historique Agios</h2>
+        <span class="c-muted" id="agHistCount" style="font-size:12px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Token</th><th>Score</th><th>PnL %</th><th>PnL</th><th>Raison</th><th>Résultat</th></tr>
+          </thead>
+          <tbody id="agHistBody">
+            <tr><td colspan="7" class="empty">Aucun trade fermé</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="section" style="margin-top:18px">
+      <div class="sec-head"><h2>💬 Parler avec Agios</h2><span class="c-muted" style="font-size:12px">contexte live Robinhood Chain</span></div>
+      <div id="agiosChat" style="max-height:340px; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:10px"></div>
+      <div style="padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px">
+        <input id="agiosChatInput" type="text" placeholder="Demande-lui ce qui bouge sur Robinhood Chain…"
+          style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:9px 12px; color:var(--txt); font-size:13px; outline:none"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAgiosChat()}">
+        <button onclick="sendAgiosChat()" class="btn-primary" style="white-space:nowrap; background:linear-gradient(135deg,#9dc72e,#5f8f1f)">Envoyer</button>
+      </div>
+    </div>
+
+  </div><!-- /page-agios -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
        PAGE : PAPER TRADING
   ════════════════════════════════════════════════════════════════════ -->
   <div class="tab-page" id="page-paper">
@@ -1555,6 +1780,9 @@ document.querySelectorAll('.tab-nav-btn').forEach(btn => {
     if (page === 'aria') {
       fetchAgent();
       startSSE(); // SSE pour recevoir les messages proactifs d'ARIA
+    }
+    if (page === 'agios') {
+      fetchAgios();
     }
   });
 });
@@ -2091,6 +2319,10 @@ function startSSE() {
       // Journal d'activité autonome — live
       if (msg.type === 'aria_journal') {
         prependJournalEntry(msg.entry);
+        return;
+      }
+      if (msg.type === 'agios_journal') {
+        prependAgiosJournal(msg.entry);
         return;
       }
       if (activePage === 'floor') {
@@ -3000,6 +3232,155 @@ async function manualBuyPaper() {
   }
   btn.disabled = false;
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AGIOS — Agent Robinhood Chain
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function fetchAgios() {
+  try {
+    const r = await fetch('/api/agios');
+    const d = await r.json();
+    if (d.error) return;
+    renderAgios(d);
+  } catch (err) { console.error('fetchAgios:', err); }
+}
+
+function renderAgios(d) {
+  const st = d.state || {};
+  setText('agStatAnalyzed', st.stats?.tokensAnalyzed ?? 0);
+  setText('agSignals', st.stats?.signals ?? 0);
+
+  if (d.paper) {
+    const p = d.paper.stats;
+    const portEl = document.getElementById('agPortfolio');
+    portEl.textContent = p.portfolioValue;
+    portEl.className = 'card-value ' + cClass(p.portfolioValue - p.startingBalance);
+    setText('agPortfolioSub', p.startingBalance + ' de départ');
+    const pnlEl = document.getElementById('agPnl');
+    pnlEl.textContent = (p.realizedPnl >= 0 ? '+' : '') + p.realizedPnl;
+    pnlEl.className = 'card-value ' + cClass(p.realizedPnl);
+    setText('agTrades', p.totalTrades + ' trades');
+    const wrEl = document.getElementById('agWr');
+    wrEl.textContent = p.winRate != null ? p.winRate + '%' : '—';
+    wrEl.className = 'card-value ' + (p.winRate >= 50 ? 'c-green' : p.winRate != null ? 'c-red' : '');
+    setText('agWrSub', p.wins + ' W / ' + p.losses + ' L');
+    setText('agOpen', p.openPositions);
+    setText('agOpenSub', p.totalInvested + ' investi');
+
+    // Positions
+    const tbody = document.getElementById('agPosBody');
+    const poss = d.paper.positions || [];
+    setText('agPosCount', poss.length + ' position' + (poss.length !== 1 ? 's' : ''));
+    tbody.innerHTML = poss.length === 0
+      ? '<tr><td colspan="7" class="empty">Aucune position — Agios scanne le trending Robinhood Chain</td></tr>'
+      : poss.map(p2 => `<tr>
+          <td><strong class="agios-accent">$${esc(p2.symbol)}</strong></td>
+          <td class="c-blue">${p2.score ?? '—'}/100</td>
+          <td>${p2.entryMcap ? fMcap(p2.entryMcap) : fPrice(p2.entryPrice)}</td>
+          <td>${p2.currentMcap ? fMcap(p2.currentMcap) : fPrice(p2.currentPrice)}</td>
+          <td class="${cClass(p2.pnlPct)}">${fPct(p2.pnlPct)}</td>
+          <td class="c-muted">−${p2.slPct}% / +${p2.tpPct}%</td>
+          <td class="c-muted">${fDur(Date.now() - p2.entryTime)}</td>
+        </tr>`).join('');
+
+    // Historique
+    const hist = d.paper.history || [];
+    setText('agHistCount', hist.length + ' entrées');
+    const hb = document.getElementById('agHistBody');
+    const agReasons = { STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 Take-Profit', TRAILING_STOP: '📐 Trailing', MANUAL: '👆 Manuel' };
+    hb.innerHTML = hist.length === 0
+      ? '<tr><td colspan="7" class="empty">Aucun trade fermé</td></tr>'
+      : hist.slice(0, 30).map(h => `<tr>
+          <td class="c-muted">${new Date(h.exitTime).toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</td>
+          <td><strong class="agios-accent">$${esc(h.symbol)}</strong></td>
+          <td class="c-blue">${h.score ?? '—'}/100</td>
+          <td class="${cClass(h.pnlPct)}">${fPct(h.pnlPct)}</td>
+          <td class="${cClass(h.pnlSol)}">${(h.pnlSol >= 0 ? '+' : '') + h.pnlSol.toFixed(4)}</td>
+          <td class="c-muted">${agReasons[h.reason] || esc(h.reason || '—')}</td>
+          <td>${h.pnlSol > 0 ? '<span class="badge b-win">✅ WIN</span>' : '<span class="badge b-loss">❌ LOSS</span>'}</td>
+        </tr>`).join('');
+  }
+
+  // Journal
+  renderAgiosJournal(d.journal || []);
+  // Conversation
+  renderAgiosConversation(d.conversation || []);
+}
+
+function agiosJournalHtml(e) {
+  const icon = JOURNAL_ICONS[e.type] || '·';
+  const ts = new Date(e.ts).toLocaleString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  return `<div class="journal-item j-${esc(e.type)}">
+    <span class="journal-icon">${icon}</span>
+    <span class="journal-detail">${esc(e.detail)}</span>
+    <span class="journal-ts">${ts}</span>
+  </div>`;
+}
+
+function renderAgiosJournal(journal) {
+  const feed = document.getElementById('agJournalFeed');
+  if (!feed) return;
+  setText('agJournalCount', journal.length + ' action' + (journal.length > 1 ? 's' : ''));
+  if (journal.length === 0) return;
+  feed.innerHTML = journal.map(agiosJournalHtml).join('');
+}
+
+function prependAgiosJournal(entry) {
+  const feed = document.getElementById('agJournalFeed');
+  if (!feed) return;
+  if (feed.querySelector('.c-muted')) feed.innerHTML = '';
+  feed.insertAdjacentHTML('afterbegin', agiosJournalHtml(entry));
+}
+
+function renderAgiosConversation(conv) {
+  const chat = document.getElementById('agiosChat');
+  if (!chat) return;
+  if (conv.length === 0) {
+    chat.innerHTML = `<div class="c-muted" style="text-align:center; margin:auto; font-size:13px; padding:20px">
+      Agios surveille Robinhood Chain 🏛<br><span style="font-size:11px">Demande-lui ce qui bouge, son bilan, ou son avis sur un token.</span>
+    </div>`;
+    return;
+  }
+  chat.innerHTML = conv.map(m => `<div class="aria-msg-wrap">
+    <div class="aria-bubble ${m.role === 'user' ? 'agios-user' : 'assistant'}">${esc(m.content)}</div>
+    <div class="aria-ts ${m.role === 'user' ? 'right' : ''}">${m.timestamp ? new Date(m.timestamp).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }) : ''}</div>
+  </div>`).join('');
+  chat.scrollTop = chat.scrollHeight;
+}
+
+let agiosSending = false;
+async function sendAgiosChat() {
+  if (agiosSending) return;
+  const input = document.getElementById('agiosChatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  agiosSending = true;
+  input.value = '';
+  const chat = document.getElementById('agiosChat');
+  if (chat.querySelector('.c-muted')) chat.innerHTML = '';
+  chat.innerHTML += `<div class="aria-msg-wrap"><div class="aria-bubble agios-user">${esc(msg)}</div></div>
+    <div id="agiosTyping" class="aria-msg-wrap"><div class="aria-bubble assistant c-muted">…</div></div>`;
+  chat.scrollTop = chat.scrollHeight;
+  try {
+    const r = await fetch('/api/agios/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    const d = await r.json();
+    document.getElementById('agiosTyping')?.remove();
+    chat.innerHTML += `<div class="aria-msg-wrap"><div class="aria-bubble assistant ${d.ok ? '' : 'c-red'}">${esc(d.ok ? d.reply : ('Erreur: ' + d.error))}</div></div>`;
+  } catch {
+    document.getElementById('agiosTyping')?.remove();
+    chat.innerHTML += `<div class="aria-msg-wrap"><div class="aria-bubble assistant c-red">Erreur réseau</div></div>`;
+  } finally {
+    agiosSending = false;
+    chat.scrollTop = chat.scrollHeight;
+  }
+}
+
+setInterval(() => { if (activePage === 'agios') fetchAgios(); }, 20_000);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BOOT

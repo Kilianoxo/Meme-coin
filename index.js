@@ -7,6 +7,7 @@ const Dashboard     = require('./src/dashboard');
 const Watchdog      = require('./src/watchdog');
 const PaperTrader   = require('./src/paperTrader');
 const personalAgent = require('./src/personalAgent');
+const agios         = require('./src/agios');
 const logger        = require('./src/logger');
 
 // Vérifications de base au démarrage
@@ -39,9 +40,24 @@ async function main() {
   const paperTrader = new PaperTrader();
   const bot         = new Bot(trader, scanner);
 
+  // ─── AGIOS — agent Robinhood Chain (paper trading + signaux) ─────────────
+  const agiosPaper = new PaperTrader({ file: 'agios_paper.json', label: 'Agios:Paper', chain: 'robinhood' });
+  agios.setPaperTrader(agiosPaper);
+  const agiosScanner = new Scanner({
+    chain:    'robinhood',
+    label:    'Agios:Scan',
+    analyzer: (...args) => agios.analyzeToken(...args),
+  });
+  agiosScanner.on('debate', (debate) => {
+    agios.onDebate(debate).catch((err) => console.error('[Agios] Erreur onDebate:', err.message));
+  });
+  agiosPaper.on('buy',  (pos) => agios.logAction('BUY',  `Paper BUY $${pos.symbol} @ MC $${((pos.entryMcap || 0) / 1000).toFixed(0)}K — ${pos.amountSolIn.toFixed(3)} unités (score ${pos.score ?? '?'})`, { symbol: pos.symbol, address: pos.address }));
+  agiosPaper.on('sell', (rec) => agios.logAction('SELL', `Paper SELL $${rec.symbol} — ${rec.reason} — PnL ${rec.pnlSol >= 0 ? '+' : ''}${rec.pnlSol.toFixed(4)} (${rec.pnlPct.toFixed(1)}%)`, { symbol: rec.symbol, address: rec.address }));
+
   bot.start();
   scanner.start();
-  new Dashboard(trader, paperTrader).start();
+  agiosScanner.start();
+  new Dashboard(trader, paperTrader, { agios, agiosPaper }).start();
 
   // Branche les résultats de débat vers le paper trader
   scanner.on('debate', (debate) => {

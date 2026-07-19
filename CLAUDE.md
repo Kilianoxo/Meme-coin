@@ -3,17 +3,21 @@
 ## Contexte du projet
 Bot de trading automatique de meme coins Solana via Telegram + dashboard web.
 Piloté par ARIA, un agent IA personnel 100% autonome (Claude Haiku).
+Second agent : AGIOS — dédié à Robinhood Chain (L2 Ethereum/Arbitrum Orbit, mainnet
+juillet 2026, actions tokenisées 24/7 + memecoins, gas ETH) — v1 en PAPER TRADING
+(données GMGN --chain robinhood ; exécution réelle à venir, Jupiter = Solana only).
 Stack: Node.js, Telegraf, Jupiter API (swaps + prix), GMGN (source de données unique via gmgn-cli).
 Le propriétaire trade aussi manuellement sur GMGN — positions importables via /addposition.
 
 ## Architecture
 - `index.js` — Point d'entrée, charge le wallet et démarre Bot + Scanner + Dashboard + Watchdog + ARIA
 - `src/bot.js` — Interface Telegram (commandes + callbacks + délégation autonomie ARIA)
-- `src/scanner.js` — Détecte les tokens (GMGN trending UNIQUEMENT — DexScreener/GeckoTerminal/Pump.fun supprimés)
-- `src/gmgn.js` — Client GMGN via gmgn-cli — SOURCE DE DONNÉES UNIQUE (trending, hot-searches, token info/prix, sécurité, smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite). REQUIS pour le scan/analyse ; sans clé le scanner attend
+- `src/scanner.js` — Détecte les tokens (GMGN trending UNIQUEMENT) — paramétrable { chain, label, analyzer } ; 2 instances : sol→ARIA, robinhood→Agios
+- `src/gmgn.js` — Client GMGN via gmgn-cli, MULTI-CHAIN (sol/robinhood/eth/bsc/base — trending/info/prix/sécurité/hot par chaîne, gates chain-aware : mint/freeze = sol only) — SOURCE DE DONNÉES UNIQUE (trending, hot-searches, token info/prix, sécurité, smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite). REQUIS pour le scan/analyse ; sans clé le scanner attend
 - `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop, persistance disque
+- `src/agios.js` — AGIOS : agent Robinhood Chain (persona propre, analyse LLM, journal data/agios_journal.json + SSE agios_journal, chat simple, paper trading dédié data/agios_paper.json via PaperTrader { chain:'robinhood' })
 - `src/personalAgent.js` — ARIA : analyse, chat agentique avec outils (tool use), autonomie (achat/vente auto), journal, apprentissage, heartbeat
-- `src/paperTrader.js` — Simulation sans risque (positions fictives, mêmes analyses)
+- `src/paperTrader.js` — Simulation sans risque — paramétrable { file, label, chain } (prix GMGN si chaîne non-sol)
 - `src/agents.js` — Ancien système multi-agents (suspendu — gardé pour agentBus/dashboard floor)
 - `src/agentMemory.js` — Mémoire des débats + poids dynamiques + suggestions
 - `src/tokenHistory.js` — Détection des tokens récidivistes (mêmes tickers, nouvelles adresses)
@@ -107,7 +111,9 @@ Chaque trade via chat est journalisé dans agent_journal.json.
 ## Dashboard (port 3000)
 - Onglet Dashboard : balance wallet, tokens SPL, positions, PnL cumulé (bot + manuel), historique avec raison de sortie, analyses récentes
 - Onglet ARIA : personnalité, panneau Autonomie (toggles + plafonds), chat, watchlists, journal d'activité live
+- Onglet Agios · Robinhood : hero chaîne, stats paper, positions/historique, journal live, chat (API /api/agios + /api/agios/chat)
 - Onglet Paper Trading : simulation complète avec config indépendante
+- Skin moderne : palette indigo/nuit, gradients, pills, glassmorphism (bloc SKIN MODERNE en fin de <style>)
 - Header : chip d'état ARIA (off / autonome / trading réel)
 - SSE /api/events : aria_proactive, aria_journal, messages agents
 

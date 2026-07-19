@@ -114,8 +114,8 @@ function _exec(args, timeout = CLI_TIMEOUT_MS) {
   });
 }
 
-async function _cli(args) {
-  const out  = await _exec([...args, '--chain', CHAIN, '--raw']);
+async function _cli(args, chain = CHAIN) {
+  const out  = await _exec([...args, '--chain', chain, '--raw']);
   const json = JSON.parse(out);
   // gmgn-cli signale limite/quota via exit 0 + code métier non nul — ne pas
   // le traiter silencieusement comme une liste vide
@@ -140,32 +140,41 @@ const _clamp = (x, lo = 0, hi = 1) => x < lo ? lo : x > hi ? hi : x;
 
 // Filtres de base poussés côté serveur GMGN (économise bande passante + bruit).
 // Les mêmes seuils sont re-vérifiés localement par le scanner (_passesFilters).
-const DEFAULT_TRENDING_ARGS = [
-  'market', 'trending',
-  '--interval', '1h', '--order-by', 'volume', '--direction', 'desc',
-  '--limit', '100', '--filter', 'not_wash_trading',
-  '--min-liquidity',  process.env.MIN_LIQUIDITY_USD  || '5000',
-  '--min-marketcap',  process.env.MIN_MARKET_CAP_USD || '30000',
-];
+// sol garde le filtre not_wash_trading (spécifique Solana) ; les chaînes EVM
+// (robinhood/eth/bsc/base) utilisent les args génériques.
+function _defaultTrendingArgs(chain) {
+  const args = [
+    'market', 'trending',
+    '--interval', '1h', '--order-by', 'volume', '--direction', 'desc',
+    '--limit', '100',
+    '--min-liquidity',  process.env.MIN_LIQUIDITY_USD  || '5000',
+    '--min-marketcap',  process.env.MIN_MARKET_CAP_USD || '30000',
+  ];
+  if (chain === 'sol') args.push('--filter', 'not_wash_trading');
+  return args;
+}
 
-let _trendingCache = { ts: 0, rows: [] };
+const _trendingCaches = new Map(); // chain → { ts, rows }
 
 /**
- * Récupère le trending GMGN, normalisé au format DexScreener (compatible scanner)
- * avec les champs riches GMGN attachés dans `_gmgn`.
+ * Récupère le trending GMGN d'une chaîne, normalisé au format DexScreener
+ * (compatible scanner) avec les champs riches GMGN attachés dans `_gmgn`.
+ * @param {string} chain — 'sol' (défaut) | 'robinhood' | 'eth' | 'bsc' | 'base'
  * @returns {Promise<Object[]>} paires normalisées
  */
-async function getTrending() {
-  if (Date.now() - _trendingCache.ts < TRENDING_TTL_MS) return _trendingCache.rows;
+async function getTrending(chain = CHAIN) {
+  const cached = _trendingCaches.get(chain);
+  if (cached && Date.now() - cached.ts < TRENDING_TTL_MS) return cached.rows;
 
-  const custom = (process.env.GMGN_TRENDING_ARGS || '').trim();
-  const args   = custom ? custom.split(/\s+/) : DEFAULT_TRENDING_ARGS;
-  const resp   = await _cli(args);
+  const envKey = chain === 'sol' ? 'GMGN_TRENDING_ARGS' : `GMGN_TRENDING_ARGS_${chain.toUpperCase()}`;
+  const custom = (process.env[envKey] || '').trim();
+  const args   = custom ? custom.split(/\s+/) : _defaultTrendingArgs(chain);
+  const resp   = await _cli(args, chain);
   const data   = resp?.data ?? resp;
   const rows   = (data && typeof data === 'object' && (data.rank || data.tokens)) || [];
-  const pairs  = rows.map(normalizeRow).filter(Boolean);
+  const pairs  = rows.map(r => normalizeRow(r, chain)).filter(Boolean);
 
-  _trendingCache = { ts: Date.now(), rows: pairs };
+  _trendingCaches.set(chain, { ts: Date.now(), rows: pairs });
   return pairs;
 }
 
@@ -173,7 +182,7 @@ async function getTrending() {
  * Normalise une ligne trending gmgn-cli 1.3.9 vers le format DexScreener
  * utilisé dans tout le bot. Les extras GMGN vont dans `_gmgn` (ratios en décimal).
  */
-function normalizeRow(row) {
+function normalizeRow(row, chain = CHAIN) {
   if (!row || !row.address) return null;
 
   const buys  = Math.round(_f(row.buys));
@@ -194,8 +203,10 @@ function normalizeRow(row) {
     buyTax:          _f(row.buy_tax),
     sellTax:         _f(row.sell_tax),
     honeypot:        _b(row.is_honeypot),
-    renouncedMint:   _b(row.renounced_mint),
-    renouncedFreeze: _b(row.renounced_freeze_account),
+    // EVM (robinhood/eth/bsc/base) : is_renounced remplace renounced_mint
+    renouncedMint:   _b(row.renounced_mint) || _b(row.is_renounced),
+    renouncedFreeze: chain === 'sol' ? _b(row.renounced_freeze_account) : true,
+    openSource:      _b(row.is_open_source),
     burnRatio:       _f(row.burn_ratio),
     // price_change_percentXX est un nombre en % (35.0 = +35%) → décimal en interne
     chg5m:           _f(row.price_change_percent5m) / 100,
@@ -207,9 +218,10 @@ function normalizeRow(row) {
   gmgn.verdict = judge(gmgn); // verdict momentum déterministe pré-calculé
 
   return {
-    _source:  'gmgn-trending',
+    _source:  chain === 'sol' ? 'gmgn-trending' : `gmgn-${chain}`,
     _gmgn:    gmgn,
-    chainId:  'solana',
+    _chain:   chain,
+    chainId:  chain === 'sol' ? 'solana' : chain,
     dexId:    'gmgn',
     pairAddress:   row.address,
     pairCreatedAt: ct > 0 ? ct * 1000 : null,
@@ -235,14 +247,18 @@ function normalizeRow(row) {
   };
 }
 
-/** Cherche une paire dans le cache trending par adresse (sans appel CLI) */
-function findTrendingRow(address) {
-  return _trendingCache.rows.find(p => p.baseToken?.address === address) || null;
+/** Cherche une paire dans le cache trending d'une chaîne par adresse (sans appel CLI) */
+function findTrendingRow(address, chain = CHAIN) {
+  const cached = _trendingCaches.get(chain);
+  return cached?.rows.find(p => p.baseToken?.address === address) || null;
 }
 
+// Slugs des URLs gmgn.ai par chaîne
+const CHAIN_SLUGS = { sol: 'sol', eth: 'eth', bsc: 'bsc', base: 'base', robinhood: 'rh' };
+
 /** URL de la page GMGN d'un token */
-function tokenUrl(address) {
-  return `https://gmgn.ai/sol/token/${address}`;
+function tokenUrl(address, chain = CHAIN) {
+  return `https://gmgn.ai/${CHAIN_SLUGS[chain] || chain}/token/${address}`;
 }
 
 // ─── Token info / prix ───────────────────────────────────────────────────────
@@ -253,12 +269,13 @@ const _infoCache = new Map(); // addr → { ts, info }
  * Infos de base + prix temps réel d'un token (token info, cache 60s).
  * @returns {Promise<{address, symbol, name, priceUsd, marketCap, holderCount, raw}|null>}
  */
-async function getTokenInfo(addr) {
-  const cached = _infoCache.get(addr);
+async function getTokenInfo(addr, chain = CHAIN) {
+  const key    = `${chain}|${addr}`;
+  const cached = _infoCache.get(key);
   if (cached && Date.now() - cached.ts < INFO_TTL_MS) return cached.info;
 
   try {
-    const d   = await _cli(['token', 'info', '--address', addr]);
+    const d   = await _cli(['token', 'info', '--address', addr], chain);
     const raw = d?.data && typeof d.data === 'object' ? d.data : d;
     // Le prix peut être un nombre, une string ou un objet imbriqué {price:{price:"…"}}
     const p    = raw.price;
@@ -272,7 +289,7 @@ async function getTokenInfo(addr) {
       holderCount: Math.round(_f(raw.holder_count)),
       raw,
     };
-    _infoCache.set(addr, { ts: Date.now(), info });
+    _infoCache.set(key, { ts: Date.now(), info });
     return info;
   } catch {
     return null;
@@ -280,8 +297,8 @@ async function getTokenInfo(addr) {
 }
 
 /** Prix USD seul (via token info caché) — fallback quand Jupiter ne connaît pas le token */
-async function getTokenPrice(addr) {
-  const info = await getTokenInfo(addr);
+async function getTokenPrice(addr, chain = CHAIN) {
+  const info = await getTokenInfo(addr, chain);
   return info && info.priceUsd > 0 ? info.priceUsd : null;
 }
 
@@ -290,15 +307,16 @@ async function getTokenPrice(addr) {
 let _hotCache = { ts: 0, rows: [] };
 
 /** Tokens les plus recherchés sur GMGN (cache 60s), normalisés comme le trending */
-async function getHotSearches(limit = 20) {
-  if (Date.now() - _hotCache.ts < HOT_TTL_MS) return _hotCache.rows;
+async function getHotSearches(limit = 20, chain = CHAIN) {
+  if (chain === CHAIN && Date.now() - _hotCache.ts < HOT_TTL_MS) return _hotCache.rows;
   try {
-    const resp = await _cli(['market', 'hot-searches', '--interval', '1h', '--limit', String(limit)]);
+    const resp = await _cli(['market', 'hot-searches', '--interval', '1h', '--limit', String(limit)], chain);
     const data = resp?.data ?? resp;
     const rows = Array.isArray(data) ? data
                : (data && (data.rank || data.tokens || data.list)) || [];
-    const pairs = rows.map(normalizeRow).filter(Boolean)
+    const pairs = rows.map(r => normalizeRow(r, chain)).filter(Boolean)
       .map(p => ({ ...p, _source: 'gmgn-hot' }));
+    if (chain !== CHAIN) return pairs;
     _hotCache = { ts: Date.now(), rows: pairs };
     return pairs;
   } catch {
@@ -576,12 +594,13 @@ async function getSmartMoneyForToken(address) {
  * @param {Object} g — champ `_gmgn` d'une paire normalisée
  * @returns {{ ok: boolean, reason?: string, gate?: number }} gate 1=avoid-rug, 2=consensus
  */
-function hardGates(g) {
+function hardGates(g, chain = CHAIN) {
   if (!g) return { ok: true };
 
   if (g.honeypot)
     return { ok: false, reason: 'GMGN gate: honeypot détecté', gate: 1 };
-  if (GATES.requireRenouncedMint && !g.renouncedMint)
+  // Mint authority = concept Solana ; sur EVM on exige le renounce générique si dispo
+  if (chain === 'sol' && GATES.requireRenouncedMint && !g.renouncedMint)
     return { ok: false, reason: 'GMGN gate: mint authority non abandonnée', gate: 1 };
   if (g.buyTax > GATES.maxBuyTax || g.sellTax > GATES.maxSellTax)
     return { ok: false, reason: `GMGN gate: taxes ${(g.buyTax * 100).toFixed(0)}%/${(g.sellTax * 100).toFixed(0)}%`, gate: 1 };
@@ -648,12 +667,13 @@ const _secCache = new Map(); // addr → { ts, snap }
  * Snapshot sécurité normalisé (cache 5 min). null si indisponible.
  * @returns {Promise<{honeypot, renouncedMint, renouncedFreeze, top10}|null>}
  */
-async function getTokenSecurity(addr) {
-  const cached = _secCache.get(addr);
+async function getTokenSecurity(addr, chain = CHAIN) {
+  const key    = `${chain}|${addr}`;
+  const cached = _secCache.get(key);
   if (cached && Date.now() - cached.ts < SECURITY_TTL_MS) return cached.snap;
 
   try {
-    const d = await _cli(['token', 'security', '--address', addr]);
+    const d = await _cli(['token', 'security', '--address', addr], chain);
     const raw  = d?.data && typeof d.data === 'object' ? d.data : d;
     const snap = {
       honeypot:        _b(raw.is_honeypot != null ? raw.is_honeypot : raw.honeypot),
@@ -661,7 +681,7 @@ async function getTokenSecurity(addr) {
       renouncedFreeze: _b(raw.renounced_freeze_account),
       top10:           _f(raw.top_10_holder_rate),
     };
-    _secCache.set(addr, { ts: Date.now(), snap });
+    _secCache.set(key, { ts: Date.now(), snap });
     return snap;
   } catch {
     return null;

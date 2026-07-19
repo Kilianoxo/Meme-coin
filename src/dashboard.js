@@ -30,9 +30,11 @@ const PUBLIC_DIR   = path.join(__dirname, 'public');
 const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
 
 class Dashboard {
-  constructor(trader, paperTrader) {
+  constructor(trader, paperTrader, opts = {}) {
     this.trader      = trader;
     this.paperTrader = paperTrader;
+    this.agios       = opts.agios      || null;
+    this.agiosPaper  = opts.agiosPaper || null;
     this.port       = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
     this.server     = http.createServer((req, res) => this._handle(req, res));
 
@@ -45,8 +47,9 @@ class Dashboard {
     agentBus.on('message', (msg) => this._onAgentMessage(msg));
     agentBus.on('system',  (msg) => this._onSystemMessage(msg));
 
-    // ARIA → push SSE en temps réel vers le dashboard
+    // ARIA + Agios → push SSE en temps réel vers le dashboard
     personalAgent.setSSECallback((entry) => this._broadcastSSE(entry));
+    if (this.agios) this.agios.setSSECallback((entry) => this._broadcastSSE(entry));
   }
 
   start() {
@@ -189,6 +192,18 @@ class Dashboard {
 
     if (pathname === '/api/agent/journal' && req.method === 'GET') {
       this._jsonOk(res, { journal: personalAgent.getJournal(80) });
+      return;
+    }
+
+    // ── Agios (Robinhood Chain) ─────────────────────────────────────────────
+
+    if (pathname === '/api/agios' && req.method === 'GET') {
+      this._apiAgios(res);
+      return;
+    }
+
+    if (pathname === '/api/agios/chat' && req.method === 'POST') {
+      this._apiAgiosChat(req, res);
       return;
     }
 
@@ -710,6 +725,41 @@ class Dashboard {
       else if (action === 'remove' && type === 'wallet')
         { personalAgent.removeWatchWallet(address); ok = true; }
       this._jsonOk(res, { ok, watchlist: personalAgent.getState().watchlist });
+    });
+  }
+
+  // ─── API Agios (Robinhood Chain) ──────────────────────────────────────────
+
+  _apiAgios(res) {
+    if (!this.agios) {
+      this._jsonOk(res, { error: 'Agios non initialisé' });
+      return;
+    }
+    const paper = this.agiosPaper ? this.agiosPaper.getStats() : null;
+    this._jsonOk(res, {
+      state:        this.agios.getState(),
+      conversation: this.agios.getConversation(30),
+      journal:      this.agios.getJournal(60),
+      paper,
+    });
+  }
+
+  _apiAgiosChat(req, res) {
+    if (!this.agios) {
+      this._jsonOk(res, { ok: false, error: 'Agios non initialisé' });
+      return;
+    }
+    this._readBody(req, async ({ message }) => {
+      if (!message || typeof message !== 'string' || !message.trim()) {
+        this._jsonOk(res, { ok: false, error: 'Message vide' });
+        return;
+      }
+      try {
+        const reply = await this.agios.chat(message.trim());
+        this._jsonOk(res, { ok: true, reply });
+      } catch (err) {
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
     });
   }
 
