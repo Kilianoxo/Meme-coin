@@ -156,6 +156,25 @@ MAX_POSITION_SOL (défaut: 0.1)
 DEFAULT_STOP_LOSS_PCT (défaut: 20), DEFAULT_TAKE_PROFIT_PCT (défaut: 50)
 DASHBOARD_PORT (défaut: 3000)
 
+## Sécurité des dépendances (npm audit)
+`package.json` fixe des `overrides` pour deux chaînes de vulnérabilités transitives de
+`@solana/web3.js` (qui pin des versions figées de ses propres dépendances) :
+- `rpc-websockets` → forcé en `^10.0.1` (au lieu de `^9.0.2` demandé par web3.js). Corrige la
+  chaîne `uuid`/`ws` vulnérable. Sans risque : le bot n'utilise AUCUNE souscription WebSocket
+  (`onAccountChange`/`onLogs`…), uniquement du RPC HTTP classique.
+- `uuid` → forcé en `^11.1.1` (au lieu de `8.3.2` pin par `jayson`). `jayson` n'appelle que
+  `uuid.v4()` sans buffer — la faille (bounds check sur un `buf` passé à v3/v5/v6) n'est de
+  toute façon jamais déclenchable via son usage réel.
+Résultat : 10 → 3 vulnérabilités (audit re-testé, RPC HTTP réel fonctionnel après upgrade).
+
+**Vulnérabilité restante acceptée** : `bigint-buffer` (GHSA-3gc7-fjrx-p6mg, high, CVSS 7.5,
+impact DoS/crash uniquement — pas de fuite de données ni de vol de fonds). La version installée
+(1.1.5) est la DERNIÈRE publiée et reste vulnérable : aucun correctif n'existe en amont. Le seul
+"fix" proposé par npm (`@solana/spl-token@0.1.8`, mi-2022) est une régression majeure — perte du
+support Token-2022, sur lequel reposent une partie des meme coins actuels — pour un correctif
+qui ne corrige rien côté `bigint-buffer` lui-même. Le Watchdog redémarre déjà le process
+automatiquement sur crash. À réévaluer si un correctif amont sort un jour (`npm audit`).
+
 ## Branche de dev
 claude/meme-coin-development-MhZiV
 

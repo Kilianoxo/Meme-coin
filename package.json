@@ -15,5 +15,9 @@
     "dotenv": "^16.4.7",
     "open": "^11.0.0",
     "telegraf": "^4.16.3"
+  },
+  "overrides": {
+    "rpc-websockets": "^10.0.1",
+    "uuid": "^11.1.1"
   }
 }
