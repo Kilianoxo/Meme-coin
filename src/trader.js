@@ -1,7 +1,7 @@
 /**
  * Moteur de trading — Solana + Jupiter API v6
  *
- * Jupiter API (https://quote-api.jup.ag/v6) gère le routing optimal
+ * Jupiter API (https://lite-api.jup.ag/swap/v1) gère le routing optimal
  * entre tous les DEX Solana (Raydium, Orca, Meteora, etc.)
  */
 
@@ -13,16 +13,81 @@ const {
   LAMPORTS_PER_SOL,
 } = require('@solana/web3.js');
 const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
-const bs58 = require('bs58');
-const fs = require('fs');
-const path = require('path');
+const bs58        = require('bs58');
+const fs          = require('fs');
+const https       = require('https');
+const path        = require('path');
+const gmgn          = require('./gmgn');
+const agentMemory   = require('./agentMemory');
+const tokenHistory  = require('./tokenHistory');
+const personalAgent = require('./personalAgent');
+const logger        = require('./logger');
 
 const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 
-const JUPITER_URL = 'https://quote-api.jup.ag/v6';
-const JUPITER_PRICE_URL = 'https://api.jup.ag/price/v2';
+// Clé API Jupiter optionnelle — obtenir gratuitement sur https://station.jup.ag
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY || null;
+const JUPITER_URL = 'https://lite-api.jup.ag/swap/v1';
+const JUPITER_PRICE_URL = 'https://lite-api.jup.ag/price/v2';
+
+/**
+ * Requête HTTPS via le module natif Node.js (contourne undici/fetch).
+ * @param {string} url
+ * @param {{ method?: string, headers?: object, body?: string }} opts
+ * @returns {Promise<any>} — JSON parsé
+ */
+function httpsRequest(url, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const body   = opts.body || null;
+    const reqOpts = {
+      hostname: parsed.hostname,
+      path:     parsed.pathname + parsed.search,
+      method:   opts.method || 'GET',
+      headers:  {
+        'Content-Type': 'application/json',
+        ...(JUPITER_API_KEY ? { Authorization: `Bearer ${JUPITER_API_KEY}` } : {}),
+        ...(opts.headers || {}),
+        ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
+      },
+      timeout: 15_000,
+    };
+
+    const req = https.request(reqOpts, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`HTTP ${res.statusCode} — ${url}`));
+        }
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error(`JSON invalide: ${e.message}`)); }
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout Jupiter')); });
+    if (body) req.write(body);
+    req.end();
+  });
+}
 const WSOL = 'So11111111111111111111111111111111111111112';
+// Mints à ne jamais auto-importer comme positions (SOL wrappé + stablecoins)
+const NON_TRADE_MINTS = new Set([
+  WSOL,
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+]);
+// Valeur minimum (USD) pour auto-importer un token acheté hors bot (filtre dust/airdrops)
+const AUTO_IMPORT_MIN_USD = parseFloat(process.env.AUTO_IMPORT_MIN_USD || '10');
 const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
+// Sortie multi-étapes (% de la position INITIALE) :
+//   palier 1 (+TP%)   → vend TP_SELL_STAGE1 (30%)
+//   palier 2 (+2×TP%) → vend TP_SELL_STAGE2 (30%)
+//   le reste (~40%) court en trailing, protégé par un break-even stop.
+// TP_SELL_STAGE1=100 → vente totale au TP (ancien comportement).
+const TP_SELL_STAGE1 = Math.max(10, Math.min(100, parseFloat(process.env.TP_SELL_STAGE1 || process.env.PARTIAL_TP_PCT || '30')));
+const TP_SELL_STAGE2 = Math.max(0,  Math.min(90,  parseFloat(process.env.TP_SELL_STAGE2 || '30')));
 
 class Trader {
   constructor() {
@@ -88,6 +153,30 @@ class Trader {
     return lamports / LAMPORTS_PER_SOL;
   }
 
+  /**
+   * Retourne tous les tokens SPL non nuls du wallet (on-chain)
+   * @returns {Promise<Array<{ mint, amount, decimals }>>}
+   */
+  async getWalletTokens() {
+    if (!this.wallet) throw new Error('Wallet non chargé');
+    const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+    const { value } = await this.connection.getParsedTokenAccountsByOwner(
+      this.wallet.publicKey,
+      { programId: TOKEN_PROGRAM }
+    );
+    return value
+      .map(({ account }) => {
+        const info = account.data.parsed?.info;
+        return {
+          mint:      info?.mint      || null,
+          amount:    info?.tokenAmount?.uiAmount    || 0,
+          decimals:  info?.tokenAmount?.decimals    || 0,
+          rawAmount: info?.tokenAmount?.amount      || '0',
+        };
+      })
+      .filter(t => t.mint && t.amount > 0);
+  }
+
   async getTokenBalance(mintAddress) {
     if (!this.wallet) throw new Error('Wallet non chargé');
     try {
@@ -118,9 +207,7 @@ class Trader {
     url.searchParams.set('amount', amountLamports.toString());
     url.searchParams.set('slippageBps', slippageBps.toString());
 
-    const res = await fetch(url.toString());
-    if (!res.ok) throw new Error(`Jupiter quote: HTTP ${res.status}`);
-    return res.json();
+    return httpsRequest(url.toString());
   }
 
   /** Exécute un swap à partir d'un devis Jupiter */
@@ -128,9 +215,8 @@ class Trader {
     if (!this.wallet) throw new Error('Wallet non chargé');
 
     // 1. Récupère la transaction sérialisée
-    const swapRes = await fetch(`${JUPITER_URL}/swap`, {
+    const { swapTransaction } = await httpsRequest(`${JUPITER_URL}/swap`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         quoteResponse: quote,
         userPublicKey: this.wallet.publicKey.toBase58(),
@@ -139,8 +225,6 @@ class Trader {
         prioritizationFeeLamports: 'auto',
       }),
     });
-    if (!swapRes.ok) throw new Error(`Jupiter swap: HTTP ${swapRes.status}`);
-    const { swapTransaction } = await swapRes.json();
 
     // 2. Désérialise, signe et envoie
     const txBuffer = Buffer.from(swapTransaction, 'base64');
@@ -173,13 +257,34 @@ class Trader {
    */
   async getCurrentPrice(mintAddress) {
     try {
-      const res = await fetch(`${JUPITER_PRICE_URL}?ids=${mintAddress}`);
-      if (!res.ok) return null;
-      const json = await res.json();
+      const json = await httpsRequest(`${JUPITER_PRICE_URL}?ids=${mintAddress}`);
       const price = json?.data?.[mintAddress]?.price;
       return price ? parseFloat(price) : null;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Market cap + supply estimée à l'entrée (via GMGN, best effort).
+   * Le MC est l'unité de mesure des meme coins — le prix unitaire ne parle pas.
+   * supply = mcap/prix GMGN → permet de recalculer le MC live: supply × prix actuel.
+   */
+  async _fetchEntryMcap(tokenMint, entryPriceUsd) {
+    try {
+      const row = gmgn.findTrendingRow(tokenMint);
+      let mcap     = row ? (row.marketCap || 0) : 0;
+      let priceRef = row ? parseFloat(row.priceUsd || 0) : 0;
+      if (!mcap && await gmgn.isAvailable()) {
+        const info = await gmgn.getTokenInfo(tokenMint);
+        if (info) { mcap = info.marketCap || 0; priceRef = info.priceUsd || 0; }
+      }
+      if (!mcap) return { entryMcapUsd: null, tokenSupply: null };
+      const supply = priceRef > 0 ? mcap / priceRef : null;
+      const entryMcapUsd = supply && entryPriceUsd ? supply * entryPriceUsd : mcap;
+      return { entryMcapUsd: Math.round(entryMcapUsd), tokenSupply: supply };
+    } catch {
+      return { entryMcapUsd: null, tokenSupply: null };
     }
   }
 
@@ -196,6 +301,7 @@ class Trader {
       slippageBps = 300,
       stopLossPct = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT || '20'),
       takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
+      symbol = null,
     } = opts;
     if (!this.wallet) throw new Error('Wallet non chargé');
 
@@ -210,17 +316,21 @@ class Trader {
 
     // Prix d'entrée en USD (best effort — n'empêche pas le trade si indispo)
     const entryPriceUsd = await this.getCurrentPrice(tokenMint);
+    const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
 
     const quote = await this.getQuote(WSOL, tokenMint, lamports, slippageBps);
     const txId = await this.executeSwap(quote);
 
     const position = {
       tokenMint,
+      symbol,
       solSpent: solAmount,
       buyTxId: txId,
       entryTimestamp: Date.now(),
       outAmount: quote.outAmount,
       entryPriceUsd,
+      entryMcapUsd,
+      tokenSupply,
       stopLossPct,
       takeProfitPct,
       highPriceUsd: entryPriceUsd, // Pour le trailing stop-loss
@@ -231,7 +341,50 @@ class Trader {
     this._save();
 
     console.log(`[Trader] ✅ Achat OK — tx: ${txId}`);
+    logger.buy(tokenMint, solAmount, txId, stopLossPct, takeProfitPct);
     return { txId, quote, position };
+  }
+
+  /**
+   * Importe une position achetée hors du bot (Phantom, etc.)
+   * N'exécute aucun swap — enregistre simplement la position pour le suivi SL/TP.
+   * @param {string} tokenMint
+   * @param {number} solSpent        - Montant estimé dépensé en SOL
+   * @param {Object} opts            - { stopLossPct, takeProfitPct, symbol }
+   */
+  async importPosition(tokenMint, solSpent, opts = {}) {
+    const {
+      stopLossPct  = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT  || '20'),
+      takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
+      symbol = null,
+    } = opts;
+
+    const entryPriceUsd = await this.getCurrentPrice(tokenMint);
+    const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
+
+    const position = {
+      tokenMint,
+      symbol,
+      solSpent,
+      buyTxId: null,
+      entryTimestamp: Date.now(),
+      outAmount: null,
+      entryPriceUsd,
+      entryMcapUsd,
+      tokenSupply,
+      stopLossPct,
+      takeProfitPct,
+      highPriceUsd: entryPriceUsd,
+      status: 'open',
+      imported: true,
+    };
+
+    this.positions.set(tokenMint, position);
+    this.history.push({ action: 'BUY', ...position });
+    this._save();
+
+    console.log(`[Trader] 📥 Position importée: ${tokenMint} (${solSpent} SOL estimé)`);
+    return { position };
   }
 
   /**
@@ -239,8 +392,9 @@ class Trader {
    * @param {string} tokenMint
    * @param {number} pct        - Pourcentage à vendre (1-100)
    * @param {number} slippageBps
+   * @param {string} exitReason - Raison de clôture pour la mémoire agents
    */
-  async sell(tokenMint, pct = 100, slippageBps = 300) {
+  async sell(tokenMint, pct = 100, slippageBps = 300, exitReason = 'MANUAL') {
     if (!this.wallet) throw new Error('Wallet non chargé');
 
     const balance = await this.getTokenBalance(tokenMint);
@@ -253,10 +407,12 @@ class Trader {
     const txId = await this.executeSwap(quote);
 
     const pos = this.positions.get(tokenMint);
-    const pnlSol = pos?.entryPriceUsd && quote.outAmountInSol
-      ? parseFloat(quote.outAmountInSol) - pos.solSpent
-      : null;
-    const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol };
+    const solReceived = parseFloat(quote.outAmount) / LAMPORTS_PER_SOL;
+    // PnL comparé au coût de la fraction vendue (et pas au coût total —
+    // sinon une vente partielle affiche une fausse perte)
+    const costBasis = pos ? pos.solSpent * (pct / 100) : null;
+    const pnlSol    = costBasis != null ? solReceived - costBasis : null;
+    const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol, exitReason };
     this.history.push(trade);
 
     if (pct === 100) {
@@ -266,11 +422,123 @@ class Trader {
         pos.closeTimestamp = Date.now();
       }
       this.positions.delete(tokenMint);
+
+      // Enregistre l'outcome + fait évoluer la personnalité d'ARIA
+      if (pos && pnlSol != null) {
+        const pnlPct  = (pnlSol / pos.solSpent) * 100;
+        const outcome = pnlPct >= 0 ? 'WIN' : 'LOSS';
+        agentMemory.recordOutcome(tokenMint, pnlPct, exitReason);
+        tokenHistory.recordCycleEnd(pos.symbol || '', tokenMint, pnlPct, outcome);
+        personalAgent.evolvePersonality(outcome, pnlPct);
+      }
+    } else if (pos && costBasis != null) {
+      // Vente partielle : réduit le coût restant de la position
+      pos.solSpent = parseFloat((pos.solSpent - costBasis).toFixed(9));
     }
     this._save();
 
     console.log(`[Trader] ✅ Vente OK — tx: ${txId}`);
+    logger.sell(tokenMint, pct, txId, pnlSol, exitReason);
     return { txId, quote };
+  }
+
+  /**
+   * Réconcilie les positions trackées avec la RÉALITÉ on-chain du wallet.
+   * Le propriétaire trade aussi manuellement sur GMGN → une position vendue
+   * hors du bot reste "ouverte" dans positions.json alors que le wallet ne
+   * détient plus le token. Ici : balance on-chain nulle → clôture sans swap
+   * (exitReason EXTERNAL_SELL, PnL inconnu → null, n'altère pas les stats).
+   *
+   * @returns {Promise<{ closed: Array, kept: Array }>}
+   */
+  async reconcilePositions() {
+    if (!this.wallet) throw new Error('Wallet non chargé');
+
+    const closed = [];
+    const kept   = [];
+
+    for (const [tokenMint, pos] of [...this.positions]) {
+      let balance;
+      try {
+        balance = await this.getTokenBalance(tokenMint);
+      } catch {
+        kept.push({ tokenMint, symbol: pos.symbol, onChain: null }); // RPC KO → on ne touche pas
+        continue;
+      }
+
+      if (balance === BigInt(0)) {
+        pos.status         = 'closed';
+        pos.closeTimestamp = Date.now();
+        this.positions.delete(tokenMint);
+        this.history.push({
+          action: 'SELL', tokenMint, pct: 100, txId: null,
+          timestamp: Date.now(), pnlSol: null,
+          exitReason: 'EXTERNAL_SELL', external: true,
+        });
+        closed.push({ tokenMint, symbol: pos.symbol || tokenMint.slice(0, 6), solSpent: pos.solSpent });
+        console.log(`[Trader] 🔀 Position ${pos.symbol || tokenMint.slice(0, 8)} clôturée — vendue hors du bot (balance on-chain nulle)`);
+      } else {
+        kept.push({ tokenMint, symbol: pos.symbol, onChain: balance.toString() });
+      }
+    }
+
+    if (closed.length > 0) this._save();
+    return { closed, kept };
+  }
+
+  /**
+   * Synchronisation COMPLÈTE wallet ↔ tracking (bidirectionnelle) :
+   *  1. reconcilePositions() — clôture les positions vendues à la main (balance nulle)
+   *  2. auto-import — les tokens achetés à la main sur GMGN (présents on-chain
+   *     mais non trackés, valeur ≥ AUTO_IMPORT_MIN_USD) deviennent des positions
+   *     suivies (SL/TP/monitoring de fuite). Entrée = prix actuel, coût estimé
+   *     en SOL à la valeur du moment (le vrai coût d'achat est inconnu).
+   *
+   * @returns {Promise<{ closed: Array, kept: Array, imported: Array }>}
+   */
+  async syncWallet() {
+    const { closed, kept } = await this.reconcilePositions();
+    const imported = [];
+
+    try {
+      const tokens    = await this.getWalletTokens();
+      const untracked = tokens
+        .filter(t => !this.positions.has(t.mint) && !NON_TRADE_MINTS.has(t.mint))
+        .slice(0, 10); // borne les appels prix
+      if (untracked.length === 0) return { closed, kept, imported };
+
+      const solPrice = await this.getCurrentPrice(WSOL);
+      for (const t of untracked) {
+        const price = await this.getCurrentPrice(t.mint);
+        if (!price) continue; // Jupiter ne connaît pas → probable dust/airdrop
+        const valueUsd = price * t.amount;
+        if (valueUsd < AUTO_IMPORT_MIN_USD) continue;
+
+        const solSpent = solPrice ? parseFloat((valueUsd / solPrice).toFixed(4)) : 0;
+        // Symbole via GMGN (best effort)
+        let symbol = null;
+        try {
+          const row  = gmgn.findTrendingRow(t.mint);
+          symbol = row?.baseToken?.symbol
+            || (await gmgn.isAvailable() ? (await gmgn.getTokenInfo(t.mint))?.symbol : null)
+            || null;
+          if (symbol === '???') symbol = null;
+        } catch { /* silencieux */ }
+
+        const { position } = await this.importPosition(t.mint, solSpent, { symbol });
+        imported.push({
+          tokenMint: t.mint,
+          symbol:    position.symbol || t.mint.slice(0, 6),
+          valueUsd:  Math.round(valueUsd),
+          solSpent,
+        });
+        console.log(`[Trader] 📥 Token acheté hors bot auto-importé: ${position.symbol || t.mint.slice(0, 8)} (~$${Math.round(valueUsd)})`);
+      }
+    } catch (err) {
+      console.warn('[Trader] syncWallet import:', err.message);
+    }
+
+    return { closed, kept, imported };
   }
 
   // ─── Moniteur Stop Loss / Take Profit ────────────────────────────────────
@@ -317,28 +585,80 @@ class Trader {
         : 0;
       const shortMint = tokenMint.slice(0, 8) + '...';
 
-      let reason = null;
+      let reason     = null;
+      let exitReason = null;
+      let sellPct    = 100;
+      let stageAfter = null;
+
+      // Palier atteint (rétro-compat : ancien flag tpTaken = palier 1)
+      const tpStage = pos.tpStage ?? (pos.tpTaken ? 1 : 0);
 
       // Trailing stop-loss activé seulement si le prix a monté > 20% depuis l'entrée
       const gainFromEntry = ((pos.highPriceUsd || pos.entryPriceUsd) - pos.entryPriceUsd) / pos.entryPriceUsd * 100;
       if (gainFromEntry >= 20 && dropFromHigh >= pos.stopLossPct) {
-        reason = `📉 <b>TRAILING STOP</b> déclenché\n${shortMint}\nHaut: $${pos.highPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nRecul: -${dropFromHigh.toFixed(1)}%  |  PnL global: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`;
+        reason     = `📉 <b>TRAILING STOP</b> déclenché\n${shortMint}\nHaut: $${pos.highPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nRecul: -${dropFromHigh.toFixed(1)}%  |  PnL global: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%`;
+        exitReason = 'TRAILING_STOP';
       } else if (changePct <= -pos.stopLossPct) {
-        reason = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
-      } else if (changePct >= pos.takeProfitPct) {
-        reason = `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: +${changePct.toFixed(1)}%`;
+        reason     = `🛑 <b>STOP LOSS</b> déclenché\n${shortMint}\nEntrée: $${pos.entryPriceUsd.toFixed(8)}\nActuel: $${currentPrice.toFixed(8)}\nPnL: ${changePct.toFixed(1)}%`;
+        exitReason = 'STOP_LOSS';
+      } else if (tpStage >= 1 && changePct <= 3) {
+        // Après un palier de TP : le reste ne doit jamais repasser dans le rouge
+        reason     = `⚖️ <b>BREAK-EVEN STOP</b> — sortie du reste\n${shortMint}\nPnL restant: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}% (gains des paliers sécurisés)`;
+        exitReason = 'BREAKEVEN_STOP';
+      } else if (tpStage === 0 && changePct >= pos.takeProfitPct) {
+        // PALIER 1 : vend TP_SELL_STAGE1 % de la position initiale
+        sellPct    = TP_SELL_STAGE1;
+        stageAfter = 1;
+        reason     = sellPct >= 100
+          ? `🎯 <b>TAKE PROFIT</b> déclenché\n${shortMint}\nPnL: +${changePct.toFixed(1)}%`
+          : `🎯 <b>TP PALIER 1</b> — vente de ${sellPct}%\n${shortMint}\nPnL: +${changePct.toFixed(1)}%\nProchain palier: +${(pos.takeProfitPct * 2).toFixed(0)}% — le reste court (trailing + break-even).`;
+        exitReason = 'TAKE_PROFIT';
+      } else if (tpStage === 1 && TP_SELL_STAGE2 > 0 && changePct >= pos.takeProfitPct * 2) {
+        // PALIER 2 : vend TP_SELL_STAGE2 % de l'INITIAL → % du solde restant
+        sellPct    = Math.min(90, Math.round((TP_SELL_STAGE2 / (100 - TP_SELL_STAGE1)) * 100));
+        stageAfter = 2;
+        reason     = `🎯🎯 <b>TP PALIER 2</b> — vente de ${TP_SELL_STAGE2}% de l'initial\n${shortMint}\nPnL: +${changePct.toFixed(1)}%\nLe reste (~${100 - TP_SELL_STAGE1 - TP_SELL_STAGE2}%) court en trailing jusqu'à la lune.`;
+        exitReason = 'TAKE_PROFIT_2';
       }
 
       if (reason) {
+        const sym = pos.symbol || shortMint;
+        const EXIT_LABELS = {
+          STOP_LOSS: 'Stop-loss', TAKE_PROFIT: 'TP palier 1', TAKE_PROFIT_2: 'TP palier 2',
+          TRAILING_STOP: 'Trailing stop', BREAKEVEN_STOP: 'Break-even',
+        };
         try {
           console.log(`[Trader] ${reason.replace(/<[^>]+>/g, '')}`);
-          const { txId } = await this.sell(tokenMint, 100);
+          logger.sltp(tokenMint, sym, exitReason, changePct);
+          // Stop-loss = sortie d'urgence → slippage large (5%) pour garantir le fill
+          const slippage = exitReason === 'STOP_LOSS' ? 500 : 300;
+          const { txId } = await this.sell(tokenMint, sellPct, slippage, exitReason);
+          if (stageAfter != null && sellPct < 100) {
+            const p = this.positions.get(tokenMint);
+            if (p) { p.tpStage = stageAfter; delete p.tpTaken; this._save(); }
+          }
+          // Chaque ordre du moniteur dans le journal d'ARIA (adresse, %, prix, PnL)
+          personalAgent.logAction('SELL',
+            `${EXIT_LABELS[exitReason] || exitReason} $${sym} — vendu ${sellPct}% à $${currentPrice.toFixed(8)} (PnL ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%)`,
+            { symbol: sym, address: tokenMint, txId }
+          );
           if (notify) {
             notify(`${reason}\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`);
           }
         } catch (err) {
           console.error(`[Trader] Erreur vente SL/TP (${shortMint}): ${err.message}`);
-          if (notify) notify(`⚠️ Erreur vente SL/TP pour <code>${shortMint}</code>: ${err.message}`);
+          personalAgent.logAction('ERROR',
+            `Vente ${EXIT_LABELS[exitReason] || exitReason} $${sym} échouée : ${err.message}`,
+            { symbol: sym, address: tokenMint }
+          );
+          if (/balance token nulle/i.test(err.message)) {
+            // Le wallet ne détient plus le token (vendu à la main) →
+            // resynchronise au lieu de réessayer en boucle toutes les 30s
+            this.syncWallet().catch(() => {});
+            if (notify) notify(`🔀 Position <code>${shortMint}</code> absente du wallet — resynchronisation automatique du tracking.`);
+          } else if (notify) {
+            notify(`⚠️ Erreur vente SL/TP pour <code>${shortMint}</code>: ${err.message}`);
+          }
         }
       }
     }

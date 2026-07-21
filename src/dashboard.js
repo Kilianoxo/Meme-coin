@@ -3,6 +3,15 @@
  *
  * Accès : http://localhost:3000 (ou DASHBOARD_PORT dans .env)
  * Aucune dépendance externe — HTTP natif Node.js uniquement.
+ *
+ * Routes :
+ *   GET  /              → HTML statique
+ *   GET  /api/data      → Stats trading (positions, PnL, historique)
+ *   GET  /api/floor     → Trading Floor (chatLog, agentsEnabled, mémoire, suggestions)
+ *   GET  /api/events    → SSE — push temps réel des messages agents
+ *   POST /api/agents/toggle    → Active/désactive les débats IA
+ *   POST /api/suggestions/:id/approve
+ *   POST /api/suggestions/:id/reject
  */
 
 const http  = require('http');
@@ -11,13 +20,36 @@ const fs    = require('fs');
 const path  = require('path');
 const url   = require('url');
 
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const state         = require('./state');
+const agentMemory   = require('./agentMemory');
+const personalAgent = require('./personalAgent');
+const { agentBus } = require('./agents');
+const gmgn          = require('./gmgn');
+
+const PUBLIC_DIR   = path.join(__dirname, 'public');
+const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
 
 class Dashboard {
-  constructor(trader) {
-    this.trader = trader;
-    this.port   = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
-    this.server = http.createServer((req, res) => this._handle(req, res));
+  constructor(trader, paperTrader, opts = {}) {
+    this.trader      = trader;
+    this.paperTrader = paperTrader;
+    this.agios       = opts.agios      || null;
+    this.agiosPaper  = opts.agiosPaper || null;
+    this.port       = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
+    this.server     = http.createServer((req, res) => this._handle(req, res));
+
+    // Trading Floor — log des messages agents (in-memory, max 120)
+    this.chatLog    = [];
+    // SSE — liste des clients connectés à /api/events
+    this.sseClients = [];
+
+    // Écoute le bus des agents → alimente le chatLog et les SSE
+    agentBus.on('message', (msg) => this._onAgentMessage(msg));
+    agentBus.on('system',  (msg) => this._onSystemMessage(msg));
+
+    // ARIA + Agios → push SSE en temps réel vers le dashboard
+    personalAgent.setSSECallback((entry) => this._broadcastSSE(entry));
+    if (this.agios) this.agios.setSSECallback((entry) => this._broadcastSSE(entry));
   }
 
   start() {
@@ -26,21 +58,176 @@ class Dashboard {
     });
   }
 
+  // ─── Bus agents → chatLog + SSE ─────────────────────────────────────────────
+
+  _onAgentMessage(msg) {
+    const entry = { type: 'agent', ...msg };
+    this._pushChat(entry);
+  }
+
+  _onSystemMessage(msg) {
+    const entry = { type: 'system', ...msg };
+    this._pushChat(entry);
+  }
+
+  _pushChat(entry) {
+    this.chatLog.push(entry);
+    if (this.chatLog.length > MAX_CHAT_LOG) {
+      this.chatLog = this.chatLog.slice(-MAX_CHAT_LOG);
+    }
+    this._broadcastSSE(entry);
+  }
+
+  _broadcastSSE(data) {
+    const payload = `data: ${JSON.stringify(data)}\n\n`;
+    this.sseClients = this.sseClients.filter(({ res }) => {
+      try {
+        res.write(payload);
+        return true;
+      } catch {
+        return false; // client déconnecté
+      }
+    });
+  }
+
   // ─── Routing ──────────────────────────────────────────────────────────────
 
   _handle(req, res) {
-    const { pathname } = url.parse(req.url);
+    const parsed   = url.parse(req.url);
+    const pathname = parsed.pathname;
 
-    if (pathname === '/api/data') {
+    // ── CORS preflight ───────────────────────────────────────────────────────
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin':  '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age':       '86400',
+      });
+      res.end();
+      return;
+    }
+
+    // ── API ──────────────────────────────────────────────────────────────────
+
+    if (pathname === '/api/data' && req.method === 'GET') {
       this._apiData(res);
       return;
     }
 
-    // Fichiers statiques depuis src/public/
+    if (pathname === '/api/floor' && req.method === 'GET') {
+      this._apiFloor(res);
+      return;
+    }
+
+    if (pathname === '/api/events' && req.method === 'GET') {
+      this._apiEvents(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agents/toggle' && req.method === 'POST') {
+      this._apiToggleAgents(res);
+      return;
+    }
+
+    const suggestMatch = pathname.match(/^\/api\/suggestions\/([^/]+)\/(approve|reject)$/);
+    if (suggestMatch && req.method === 'POST') {
+      this._apiSuggestion(res, suggestMatch[1], suggestMatch[2]);
+      return;
+    }
+
+    if (pathname === '/api/paper' && req.method === 'GET') {
+      this._apiPaper(res);
+      return;
+    }
+
+    if (pathname === '/api/paper/reset' && req.method === 'POST') {
+      this._apiPaperReset(req, res);
+      return;
+    }
+
+    if (pathname === '/api/paper/config' && req.method === 'POST') {
+      this._apiPaperConfig(req, res);
+      return;
+    }
+
+    const paperSellMatch = pathname.match(/^\/api\/paper\/sell\/([^/]+)$/);
+    if (paperSellMatch && req.method === 'POST') {
+      this._apiPaperSell(res, paperSellMatch[1]);
+      return;
+    }
+
+    if (pathname === '/api/paper/buy' && req.method === 'POST') {
+      this._apiPaperBuy(req, res);
+      return;
+    }
+
+    if (pathname === '/api/debate' && req.method === 'POST') {
+      this._apiDebate(req, res);
+      return;
+    }
+
+    // ── Agent ARIA ───────────────────────────────────────────────────────────
+
+    if (pathname === '/api/agent' && req.method === 'GET') {
+      this._apiAgent(res);
+      return;
+    }
+
+    if (pathname === '/api/agent/chat' && req.method === 'POST') {
+      this._apiAgentChat(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/watchlist' && req.method === 'POST') {
+      this._apiAgentWatchlist(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/autonomy' && req.method === 'POST') {
+      this._apiAgentAutonomy(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agent/journal' && req.method === 'GET') {
+      this._jsonOk(res, { journal: personalAgent.getJournal(80) });
+      return;
+    }
+
+    // ── Agios (Robinhood Chain) ─────────────────────────────────────────────
+
+    if (pathname === '/api/agios' && req.method === 'GET') {
+      this._apiAgios(res);
+      return;
+    }
+
+    if (pathname === '/api/agios/chat' && req.method === 'POST') {
+      this._apiAgiosChat(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agios/equities/live' && req.method === 'POST') {
+      this._apiAgiosEquitiesLive(req, res);
+      return;
+    }
+
+    if (pathname === '/api/agios/equities/connect' && req.method === 'POST') {
+      this._apiAgiosConnect(res);
+      return;
+    }
+
+    const confirmMatch = pathname.match(/^\/api\/agios\/equities\/confirm\/([^/]+)\/(yes|no)$/);
+    if (confirmMatch && req.method === 'POST') {
+      this._apiAgiosConfirm(res, confirmMatch[1], confirmMatch[2] === 'yes');
+      return;
+    }
+
+    // ── Fichiers statiques depuis src/public/ ─────────────────────────────
+
     const filePath = pathname === '/' ? '/index.html' : pathname;
     const full = path.resolve(PUBLIC_DIR, '.' + filePath);
 
-    // Sécurité: empêcher la traversée de dossier
     if (!full.startsWith(PUBLIC_DIR)) {
       res.writeHead(403); res.end(); return;
     }
@@ -54,13 +241,15 @@ class Dashboard {
     });
   }
 
+  // ─── API /api/data ────────────────────────────────────────────────────────
+
   async _apiData(res) {
     try {
       const data = await this._buildData();
       res.writeHead(200, {
-        'Content-Type': 'application/json',
+        'Content-Type':                'application/json',
         'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache',
+        'Cache-Control':               'no-cache',
       });
       res.end(JSON.stringify(data));
     } catch (err) {
@@ -69,15 +258,122 @@ class Dashboard {
     }
   }
 
-  // ─── Construction des données ─────────────────────────────────────────────
+  // ─── API /api/floor ──────────────────────────────────────────────────────
+
+  _apiFloor(res) {
+    const data = {
+      agentsEnabled: state.agentsEnabled,
+      chatLog:       this.chatLog,
+      lessons:        agentMemory.getLessons(20),
+      agentStats:     agentMemory.getStats(),
+      dynamicWeights: agentMemory.getDynamicWeights(),
+      suggestions:    agentMemory.getSuggestions(),
+    };
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':               'no-cache',
+    });
+    res.end(JSON.stringify(data));
+  }
+
+  // ─── API /api/events — Server-Sent Events ────────────────────────────────
+
+  _apiEvents(req, res) {
+    res.writeHead(200, {
+      'Content-Type':                'text/event-stream',
+      'Cache-Control':               'no-cache',
+      'Connection':                  'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.write(': connected\n\n');
+
+    // Heartbeat toutes les 25s pour garder la connexion vivante
+    const hb = setInterval(() => {
+      try { res.write(': ping\n\n'); } catch { clearInterval(hb); }
+    }, 25_000);
+
+    this.sseClients.push({ res });
+
+    req.on('close', () => {
+      clearInterval(hb);
+      this.sseClients = this.sseClients.filter(c => c.res !== res);
+    });
+  }
+
+  // ─── API /api/agents/toggle ──────────────────────────────────────────────
+
+  _apiToggleAgents(res) {
+    state.agentsEnabled = !state.agentsEnabled;
+    const status = state.agentsEnabled ? 'activés' : 'désactivés';
+    console.log(`[Dashboard] Débats IA ${status}`);
+
+    // Notifie le Trading Floor
+    this._pushChat({
+      type:      'system',
+      content:   state.agentsEnabled
+        ? '✅ Débats IA activés — les agents vont analyser les prochains tokens.'
+        : '⏸️ Débats IA désactivés — aucun crédit API consommé.',
+      timestamp: Date.now(),
+    });
+
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ agentsEnabled: state.agentsEnabled }));
+  }
+
+  // ─── API /api/suggestions/:id/(approve|reject) ──────────────────────────
+
+  _apiSuggestion(res, id, action) {
+    const ok = action === 'approve'
+      ? agentMemory.approveSuggestion(id)
+      : agentMemory.rejectSuggestion(id);
+
+    if (!ok) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Suggestion introuvable' }));
+      return;
+    }
+
+    const label = action === 'approve' ? 'approuvée' : 'rejetée';
+    this._pushChat({
+      type:      'system',
+      content:   `${action === 'approve' ? '✅' : '❌'} Suggestion ${label} par l'utilisateur.`,
+      timestamp: Date.now(),
+    });
+
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ ok: true, action, id }));
+  }
+
+  // ─── Construction des données /api/data ──────────────────────────────────
 
   async _buildData() {
     const positions = Array.from(this.trader.positions.values());
     const history   = this.trader.history || [];
 
-    // Prix live pour les positions ouvertes (Jupiter Price API)
-    const mints  = positions.map(p => p.tokenMint);
-    const prices = mints.length > 0 ? await this._fetchPrices(mints) : {};
+    // Balance SOL + tokens SPL du wallet (best effort)
+    let walletBalance = null;
+    let walletTokens  = [];
+    try {
+      if (this.trader.isReady()) {
+        [walletBalance, walletTokens] = await Promise.all([
+          this.trader.getSolBalance(),
+          this.trader.getWalletTokens(),
+        ]);
+      }
+    } catch { /* silencieux */ }
+
+    // Prix live pour les positions ouvertes + tokens wallet (Jupiter Price API)
+    const posMints    = positions.map(p => p.tokenMint);
+    const tokenMints  = walletTokens.map(t => t.mint);
+    const allMints    = [...new Set([...posMints, ...tokenMints])];
+    const prices      = allMints.length > 0 ? await this._fetchPrices(allMints) : {};
 
     const enrichedPositions = positions.map(p => {
       const currentPrice = prices[p.tokenMint] ?? null;
@@ -85,7 +381,11 @@ class Dashboard {
         ? ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100
         : null;
       const pnlSol = pnlPct !== null ? p.solSpent * (pnlPct / 100) : null;
-      return { ...p, currentPrice, pnlPct, pnlSol };
+      // Market cap live = supply estimée à l'entrée × prix actuel
+      const currentMcapUsd = p.tokenSupply && currentPrice
+        ? Math.round(p.tokenSupply * currentPrice)
+        : null;
+      return { ...p, currentPrice, pnlPct, pnlSol, currentMcapUsd };
     });
 
     // Stats globales
@@ -94,7 +394,7 @@ class Dashboard {
     const wins        = sells.filter(h => h.pnlSol > 0).length;
     const winRate     = sells.length > 0 ? Math.round((wins / sells.length) * 100) : null;
 
-    // Timeline PnL cumulatif (pour le graphique)
+    // Timeline PnL cumulatif (positions fermées par le bot)
     const pnlTimeline = [];
     let cum = 0;
     sells
@@ -105,6 +405,16 @@ class Dashboard {
         pnlTimeline.push({ t: h.timestamp, pnl: parseFloat(cum.toFixed(6)) });
       });
 
+    // Timeline PnL manuel (positions importées — non réalisé cumulatif en temps réel)
+    const importedPositions = enrichedPositions.filter(p => p.imported && p.pnlSol != null);
+    const manualTimeline = [];
+    if (importedPositions.length > 0) {
+      const sorted = importedPositions.slice().sort((a, b) => a.entryTimestamp - b.entryTimestamp);
+      manualTimeline.push({ t: sorted[0].entryTimestamp, pnl: 0 }); // point de départ = 0 à l'import
+      const totalManualPnl = importedPositions.reduce((s, p) => s + p.pnlSol, 0);
+      manualTimeline.push({ t: Date.now(), pnl: parseFloat(totalManualPnl.toFixed(6)) });
+    }
+
     // PnL par jour sur 7 jours
     const dailyPnl = this._dailyPnl(sells, 7);
 
@@ -114,8 +424,19 @@ class Dashboard {
     const weekPnl   = weekSells.reduce((s, h) => s + h.pnlSol, 0);
     const weekWins  = weekSells.filter(h => h.pnlSol > 0).length;
 
+    // Enrichit les tokens wallet avec prix + valeur USD
+    const enrichedWalletTokens = walletTokens.map(t => {
+      const price    = prices[t.mint] ?? null;
+      const valueUsd = price ? price * t.amount : null;
+      return { ...t, price, valueUsd };
+    }).sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0)); // tri par valeur décroissante
+
     return {
-      updatedAt: Date.now(),
+      updatedAt:       Date.now(),
+      walletBalance:   walletBalance !== null ? parseFloat(walletBalance.toFixed(6)) : null,
+      walletAddress:   this.trader.walletAddress || null,
+      walletTokens:    enrichedWalletTokens,
+      recentAnalyses:  state.recentAnalyses,
       stats: {
         realizedPnl:   parseFloat(realizedPnl.toFixed(6)),
         winRate,
@@ -130,6 +451,7 @@ class Dashboard {
         alerts:  this._weekAlerts(weekSells, sells),
       },
       pnlTimeline,
+      manualTimeline,
       dailyPnl,
       positions: enrichedPositions,
       history:   history.slice(-100).reverse(),
@@ -169,29 +491,24 @@ class Dashboard {
       return alerts;
     }
 
-    // Win rate faible
     const wr = Math.round((weekSells.filter(h => h.pnlSol > 0).length / weekSells.length) * 100);
     if (wr < 40 && weekSells.length >= 3)
       alerts.push({ type: 'warn', msg: `Win rate faible cette semaine : ${wr}%` });
 
-    // SL consécutifs (sur les 5 derniers trades)
     const recent = allSells.slice(-5).reverse();
     const streak = recent.findIndex(h => h.pnlSol > 0);
     const consecutiveLosses = streak === -1 ? recent.length : streak;
     if (consecutiveLosses >= 3)
       alerts.push({ type: 'warn', msg: `${consecutiveLosses} stop-loss consécutifs récents` });
 
-    // Meilleur trade de la semaine
     const best = weekSells.reduce((b, h) => h.pnlSol > (b?.pnlSol ?? -Infinity) ? h : b, null);
     if (best?.pnlSol > 0)
       alerts.push({ type: 'good', msg: `Meilleur trade : +${best.pnlSol.toFixed(4)} SOL (${best.tokenMint.slice(0, 6)}…)` });
 
-    // Pire trade de la semaine
     const worst = weekSells.reduce((w, h) => h.pnlSol < (w?.pnlSol ?? Infinity) ? h : w, null);
     if (worst?.pnlSol < 0)
       alerts.push({ type: 'bad', msg: `Pire trade : ${worst.pnlSol.toFixed(4)} SOL (${worst.tokenMint.slice(0, 6)}…)` });
 
-    // PnL semaine positif
     const weekTotal = weekSells.reduce((s, h) => s + h.pnlSol, 0);
     if (weekTotal > 0 && consecutiveLosses < 3 && wr >= 40)
       alerts.push({ type: 'good', msg: `Bonne semaine : ${weekSells.length} trades, ${wr}% win rate` });
@@ -202,15 +519,26 @@ class Dashboard {
   // ─── Prix live Jupiter ────────────────────────────────────────────────────
 
   async _fetchPrices(mints) {
+    const out = {};
     try {
       const ids  = mints.join(',');
-      const data = await this._get(`https://api.jup.ag/price/v2?ids=${ids}`);
-      const out  = {};
+      const data = await this._get(`https://lite-api.jup.ag/price/v2?ids=${ids}`);
       for (const [mint, info] of Object.entries(data?.data ?? {})) {
         if (info?.price) out[mint] = parseFloat(info.price);
       }
-      return out;
-    } catch { return {}; }
+    } catch { /* silencieux */ }
+
+    // Fallback GMGN (token info, caché 60s) pour les mints inconnus de Jupiter —
+    // limité aux 5 premiers pour préserver le quota CLI
+    const missing = mints.filter(m => !out[m]).slice(0, 5);
+    if (missing.length > 0 && await gmgn.isAvailable()) {
+      for (const mint of missing) {
+        const price = await gmgn.getTokenPrice(mint).catch(() => null);
+        if (price) out[mint] = price;
+      }
+    }
+
+    return out;
   }
 
   _get(targetUrl) {
@@ -220,6 +548,282 @@ class Dashboard {
         res.on('data', c => (raw += c));
         res.on('end', () => { try { resolve(JSON.parse(raw)); } catch (e) { reject(e); } });
       }).on('error', reject);
+    });
+  }
+
+  // ─── API Paper Trading ────────────────────────────────────────────────────
+
+  async _apiPaper(res) {
+    if (!this.paperTrader) {
+      this._jsonOk(res, { error: 'Paper trader non initialisé' });
+      return;
+    }
+    try {
+      const data      = this.paperTrader.getStats();
+      const addresses = data.positions.map(p => p.address);
+      const prices    = addresses.length > 0 ? await this._fetchPrices(addresses) : {};
+
+      data.positions = data.positions.map(p => {
+        // Prix live si dispo, sinon dernier prix connu du moniteur paper
+        const currentPrice = prices[p.address] ?? p.currentPrice ?? null;
+        const pnlPct = currentPrice
+          ? ((currentPrice - p.entryPrice) / p.entryPrice) * 100
+          : (p.pnlPct ?? null);
+        const pnlSol = pnlPct !== null ? p.amountSolIn * (pnlPct / 100) : (p.pnlSol ?? null);
+        const currentMcap = p.supply && currentPrice
+          ? Math.round(p.supply * currentPrice)
+          : (p.currentMcap ?? null);
+        return { ...p, currentPrice, pnlPct, pnlSol, currentMcap };
+      });
+
+      this._jsonOk(res, data);
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  _apiPaperReset(req, res) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+    this._readBody(req, (body) => {
+      const { balance } = body;
+      const ok = this.paperTrader.reset(balance ?? 10);
+      this._jsonOk(res, { ok, config: this.paperTrader.state.config });
+    });
+  }
+
+  _apiPaperConfig(req, res) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+    this._readBody(req, (body) => {
+      const config = this.paperTrader.updateConfig(body);
+      this._jsonOk(res, { ok: true, config });
+    });
+  }
+
+  async _apiPaperSell(res, address) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+    await this.paperTrader.manualSell(address);
+    this._jsonOk(res, { ok: true });
+  }
+
+  _apiPaperBuy(req, res) {
+    if (!this.paperTrader) { this._jsonOk(res, { ok: false, error: 'Paper trader non initialisé' }); return; }
+    this._readBody(req, async (body) => {
+      const { address, amountSol } = body;
+      const result = await this.paperTrader.manualBuy(address, amountSol);
+      this._jsonOk(res, result);
+    });
+  }
+
+  // ─── API /api/debate ──────────────────────────────────────────────────────
+
+  _apiDebate(req, res) {
+    this._readBody(req, async ({ address }) => {
+      if (!address || typeof address !== 'string' || !address.trim()) {
+        this._jsonOk(res, { ok: false, error: 'Adresse manquante' });
+        return;
+      }
+      const addr = address.trim();
+
+      // Annonce immédiate dans le Trading Floor
+      this._pushChat({
+        type:      'system',
+        content:   `🔍 Débat manuel demandé pour <code>${addr.slice(0, 8)}…</code>`,
+        timestamp: Date.now(),
+      });
+
+      try {
+        if (!(await gmgn.isAvailable())) {
+          this._jsonOk(res, { ok: false, error: 'GMGN non configuré (gmgn-cli + GMGN_API_KEY requis)' });
+          return;
+        }
+        const pair = await personalAgent._fetchPair(addr);
+        if (!pair) {
+          this._jsonOk(res, { ok: false, error: 'Token introuvable sur GMGN' });
+          return;
+        }
+
+        const sec = await gmgn.getTokenSecurity(addr);
+        const g   = pair._gmgn || {};
+        const security = sec ? {
+          mintAuthority:      sec.renouncedMint   ? null : 'active',
+          freezeAuthority:    sec.renouncedFreeze ? null : 'active',
+          top10HolderPercent: (sec.top10 || 0) * 100,
+        } : null;
+        const overview = { holder: g.holderCount || null };
+
+        const debate = await personalAgent.analyzeToken(pair, security, null, overview, null);
+
+        const sym = pair.baseToken?.symbol || addr.slice(0, 6);
+        this._pushChat({
+          type:      'system',
+          content:   `📊 ARIA — <b>$${sym}</b> → ${debate.decision?.decision} (${debate.decision?.score ?? '?'}/100)`,
+          timestamp: Date.now(),
+        });
+
+        this._jsonOk(res, { ok: true, debate, pair });
+      } catch (err) {
+        this._pushChat({ type: 'system', content: `❌ Erreur débat : ${err.message}`, timestamp: Date.now() });
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
+    });
+  }
+
+  // ─── API /api/agent ────────────────────────────────────────────────────────
+
+  _apiAgent(res) {
+    this._jsonOk(res, {
+      state:        personalAgent.getState(),
+      conversation: personalAgent.getConversation(40),
+      autonomy:     personalAgent.getAutonomy(),
+      journal:      personalAgent.getJournal(60),
+    });
+  }
+
+  _apiAgentAutonomy(req, res) {
+    this._readBody(req, (body) => {
+      try {
+        const autonomy = personalAgent.setAutonomy(body || {});
+        this._jsonOk(res, { ok: true, autonomy });
+      } catch (err) {
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
+    });
+  }
+
+  _apiAgentChat(req, res) {
+    this._readBody(req, async ({ message }) => {
+      if (!message || typeof message !== 'string' || !message.trim()) {
+        this._jsonOk(res, { ok: false, error: 'Message vide' });
+        return;
+      }
+      try {
+        // Le serveur injecte lui-même le contexte live — pas besoin que le frontend le passe
+        let balance   = null;
+        let positions = [];
+        if (this.trader?.isReady()) {
+          balance = await this.trader.getSolBalance().catch(() => null);
+          // Positions enrichies avec PnL si dispo
+          const raw    = Array.from(this.trader.positions?.values?.() || []);
+          const mints  = raw.map(p => p.tokenMint).filter(Boolean);
+          const prices = mints.length > 0 ? await this._fetchPrices(mints).catch(() => ({})) : {};
+          positions = raw.map(p => {
+            const cur    = prices[p.tokenMint] ?? null;
+            const pnlPct = p.entryPriceUsd && cur
+              ? ((cur - p.entryPriceUsd) / p.entryPriceUsd) * 100
+              : null;
+            return { ...p, currentPrice: cur, pnlPct };
+          });
+        }
+
+        const ctx   = { balance, positions };
+        const reply = await personalAgent.chat(message.trim(), ctx);
+        this._jsonOk(res, { ok: true, reply, ariaState: personalAgent.getState() });
+      } catch (err) {
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
+    });
+  }
+
+  _apiAgentWatchlist(req, res) {
+    this._readBody(req, ({ action, type, address, symbol, name, label, reason }) => {
+      if (!address || !['add', 'remove'].includes(action) || !['token', 'wallet'].includes(type)) {
+        this._jsonOk(res, { ok: false, error: 'Paramètres invalides' });
+        return;
+      }
+      let ok = false;
+      if (action === 'add' && type === 'token')
+        ok = personalAgent.addWatchToken(address, symbol || '?', name || '', reason || '');
+      else if (action === 'remove' && type === 'token')
+        { personalAgent.removeWatchToken(address); ok = true; }
+      else if (action === 'add' && type === 'wallet')
+        ok = personalAgent.addWatchWallet(address, label || '');
+      else if (action === 'remove' && type === 'wallet')
+        { personalAgent.removeWatchWallet(address); ok = true; }
+      this._jsonOk(res, { ok, watchlist: personalAgent.getState().watchlist });
+    });
+  }
+
+  // ─── API Agios (Robinhood Chain) ──────────────────────────────────────────
+
+  async _apiAgios(res) {
+    if (!this.agios) {
+      this._jsonOk(res, { error: 'Agios non initialisé' });
+      return;
+    }
+    const paper = this.agiosPaper ? this.agiosPaper.getStats() : null;
+    const equities = await this.agios.getEquitiesState().catch(() => ({ connected: false, liveTrading: false }));
+    this._jsonOk(res, {
+      state:        { ...this.agios.getState(), equities },
+      conversation: this.agios.getConversation(30),
+      journal:      this.agios.getJournal(60),
+      pendingConfirmations: this.agios.getPendingConfirmations(),
+      paper,
+    });
+  }
+
+  _apiAgiosConnect(res) {
+    if (!this.agios) { this._jsonOk(res, { ok: false, error: 'Agios non initialisé' }); return; }
+    // Répond tout de suite — la connexion (avec attente du navigateur) tourne en tâche de fond,
+    // le lien d'autorisation et le résultat arrivent par SSE (aria_journal type agios_journal + agios_auth_url)
+    this._jsonOk(res, { ok: true, note: "Connexion démarrée — le lien d'autorisation va arriver via le journal/Telegram." });
+    this.agios.connectEquities((url) => {
+      this._broadcastSSE({ type: 'agios_auth_url', url, timestamp: Date.now() });
+    }).catch((err) => console.error('[Dashboard] Erreur connexion Robinhood:', err.message));
+  }
+
+  _apiAgiosEquitiesLive(req, res) {
+    if (!this.agios) { this._jsonOk(res, { ok: false, error: 'Agios non initialisé' }); return; }
+    this._readBody(req, async ({ enabled }) => {
+      this.agios.setEquitiesLiveTrading(!!enabled);
+      const equities = await this.agios.getEquitiesState().catch(() => ({ connected: false, liveTrading: false }));
+      this._jsonOk(res, { ok: true, equities });
+    });
+  }
+
+  async _apiAgiosConfirm(res, id, approve) {
+    if (!this.agios) { this._jsonOk(res, { ok: false, error: 'Agios non initialisé' }); return; }
+    try {
+      const result = await this.agios.confirmAction(id, approve);
+      this._jsonOk(res, result);
+    } catch (err) {
+      this._jsonOk(res, { ok: false, error: err.message });
+    }
+  }
+
+  _apiAgiosChat(req, res) {
+    if (!this.agios) {
+      this._jsonOk(res, { ok: false, error: 'Agios non initialisé' });
+      return;
+    }
+    this._readBody(req, async ({ message }) => {
+      if (!message || typeof message !== 'string' || !message.trim()) {
+        this._jsonOk(res, { ok: false, error: 'Message vide' });
+        return;
+      }
+      try {
+        const reply = await this.agios.chat(message.trim());
+        this._jsonOk(res, { ok: true, reply });
+      } catch (err) {
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
+    });
+  }
+
+  _jsonOk(res, data) {
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control':               'no-cache',
+    });
+    res.end(JSON.stringify(data));
+  }
+
+  _readBody(req, cb) {
+    let raw = '';
+    req.on('data', c => (raw += c));
+    req.on('end', () => {
+      try { cb(JSON.parse(raw)); } catch { cb({}); }
     });
   }
 }

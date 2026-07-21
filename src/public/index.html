@@ -9,17 +9,22 @@
     /* ── Reset & variables ───────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg:      #0d1117;
-      --card:    #161b22;
-      --card2:   #1c2128;
-      --border:  #21262d;
-      --txt:     #e6edf3;
-      --txt2:    #7d8590;
-      --green:   #3fb950;
-      --red:     #f85149;
-      --blue:    #58a6ff;
-      --yellow:  #e3b341;
-      --purple:  #bc8cff;
+      --bg:      #070b15;
+      --bg2:     #0b1120;
+      --card:    #0e1526;
+      --card2:   #141d33;
+      --border:  #1d2740;
+      --txt:     #e9edf8;
+      --txt2:    #8c94ad;
+      --txt-muted: #8c94ad;
+      --green:   #2ee6a8;
+      --red:     #ff5c7a;
+      --blue:    #6f8dff;
+      --yellow:  #ffd166;
+      --purple:  #b78cff;
+      --orange:  #ff9e64;
+      --robin:   #c5ff4a;   /* lime Robinhood — accent Agios */
+      --grad:    linear-gradient(135deg, #6f8dff 0%, #b78cff 100%);
     }
 
     /* ── Base ─────────────────────────────────────────────────────────── */
@@ -57,8 +62,176 @@
     }
     @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 
+    /* ── ARIA chat bubbles ───────────────────────────────────────────── */
+    .aria-bubble { max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .aria-bubble.user     { background: var(--blue); color: #fff; align-self: flex-end; border-bottom-right-radius: 3px; }
+    .aria-bubble.assistant { background: var(--bg2); border: 1px solid var(--border); align-self: flex-start; border-bottom-left-radius: 3px; }
+    .aria-bubble.proactive { background: rgba(240,136,62,.12); border: 1px solid rgba(240,136,62,.35); align-self: flex-start; border-bottom-left-radius: 3px; }
+    .aria-msg-wrap { display: flex; flex-direction: column; }
+    .aria-ts { font-size: 10px; color: var(--txt-muted); margin-top: 2px; }
+    .aria-ts.right { align-self: flex-end; }
+    .trait-pill { background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px; font-size: 11px; color: var(--txt-muted); }
+    .watch-item { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+    .watch-item:last-child { border-bottom: none; }
+    .btn-rm { background: none; border: none; color: var(--red); cursor: pointer; font-size: 14px; padding: 0 2px; opacity: .6; }
+    .btn-rm:hover { opacity: 1; }
+
+    /* ── Boutons primaires (chat ARIA, watchlist) ────────────────────── */
+    .btn-primary {
+      background: var(--blue);
+      border: 1px solid var(--blue);
+      color: #0d1117;
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-primary:hover { opacity: .85; }
+    .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── ARIA autonomie ──────────────────────────────────────────────── */
+    .auto-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 0;
+      font-size: 12px;
+    }
+    .auto-row + .auto-row { border-top: 1px solid var(--border); }
+    .auto-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--txt);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 4px 8px;
+      width: 70px;
+      text-align: right;
+    }
+    .auto-input:focus { outline: none; border-color: var(--blue); }
+    .auto-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      letter-spacing: .4px;
+    }
+    .auto-badge.on   { background: rgba(63,185,80,.15);  color: var(--green); }
+    .auto-badge.off  { background: rgba(125,133,144,.15); color: var(--txt2); }
+    .auto-badge.live { background: rgba(248,81,73,.15);  color: var(--red); }
+    .mini-toggle {
+      position: relative;
+      display: inline-block;
+      width: 34px; height: 19px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .mini-toggle input { opacity: 0; width: 0; height: 0; }
+    .mini-toggle .track {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 19px;
+      transition: background .2s;
+    }
+    .mini-toggle input:checked + .track { background: var(--green); }
+    .mini-toggle input:checked + .track.danger { background: var(--red); }
+    .mini-toggle .thumb {
+      position: absolute;
+      top: 2.5px; left: 3px;
+      width: 14px; height: 14px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform .2s;
+      pointer-events: none;
+    }
+    .mini-toggle input:checked ~ .thumb { transform: translateX(14px); }
+
+    /* ── Journal d'activité ARIA ─────────────────────────────────────── */
+    .journal-feed {
+      max-height: 340px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .journal-feed::-webkit-scrollbar { width: 5px; }
+    .journal-feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .journal-item {
+      display: flex;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      line-height: 1.5;
+      animation: fadeIn .25s ease;
+    }
+    .journal-item:last-child { border-bottom: none; }
+    .journal-icon { flex-shrink: 0; font-size: 13px; }
+    .journal-detail { flex: 1; min-width: 0; color: var(--txt); word-break: break-word; }
+    .journal-ts { color: var(--txt2); font-size: 10px; white-space: nowrap; }
+    .journal-item.j-BUY    .journal-detail { color: var(--green); }
+    .journal-item.j-SELL   .journal-detail { color: var(--red); }
+    .journal-item.j-PAUSE  .journal-detail { color: var(--orange); }
+    .journal-item.j-ERROR  .journal-detail { color: var(--red); }
+
+    /* ── Header : chip ARIA ──────────────────────────────────────────── */
+    .aria-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--txt2);
+    }
+    .aria-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--txt2); }
+    .aria-chip.on   .dot { background: var(--green); animation: pulse 2s ease-in-out infinite; }
+    .aria-chip.live .dot { background: var(--red);   animation: pulse 2s ease-in-out infinite; }
+
+    /* ── ARIA layout responsive ──────────────────────────────────────── */
+    .aria-grid {
+      display: grid;
+      grid-template-columns: 280px 1fr 300px;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 1100px) {
+      .aria-grid { grid-template-columns: 1fr; }
+      .aria-grid .aria-chat-col { height: 60vh !important; }
+    }
+    /* ── Tab navigation ──────────────────────────────────────────────── */
+    .tab-nav {
+      display: flex;
+      gap: 0;
+      padding: 0 28px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-nav-btn {
+      padding: 10px 22px;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      color: var(--txt2);
+      border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-nav-btn:hover  { color: var(--txt); }
+    .tab-nav-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+
     /* ── Layout ──────────────────────────────────────────────────────── */
     .main  { padding: 24px 28px; max-width: 1440px; margin: 0 auto; }
+    .tab-page { display: none; }
+    .tab-page.active { display: block; }
 
     /* ── Stat cards ──────────────────────────────────────────────────── */
     .cards {
@@ -188,6 +361,8 @@
     .c-red    { color: var(--red); }
     .c-yellow { color: var(--yellow); }
     .c-blue   { color: var(--blue); }
+    .c-purple { color: var(--purple); }
+    .c-orange { color: var(--orange); }
     .c-muted  { color: var(--txt2); }
 
     /* ── Misc ────────────────────────────────────────────────────────── */
@@ -220,6 +395,466 @@
       border-radius: 4px;
       height: 22px;
     }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       TRADING FLOOR
+    ══════════════════════════════════════════════════════════════════ */
+
+    /* ── Toggle switch ───────────────────────────────────────────────── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .toggle-label { font-size: 13px; color: var(--txt2); }
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 44px; height: 24px;
+      cursor: pointer;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 24px;
+      transition: background .2s;
+    }
+    .toggle-switch input:checked + .toggle-track { background: var(--green); }
+    .toggle-thumb {
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 18px; height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform .2s;
+    }
+    .toggle-switch input:checked ~ .toggle-thumb { transform: translateX(20px); }
+    .toggle-status {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 4px;
+    }
+    .toggle-status.on  { background: rgba(63,185,80,.15);  color: var(--green); }
+    .toggle-status.off { background: rgba(248,81,73,.15);  color: var(--red); }
+
+    /* ── Chat feed ───────────────────────────────────────────────────── */
+    .chat-feed {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding: 16px;
+      background: var(--bg);
+      border-radius: 8px;
+      scroll-behavior: smooth;
+    }
+    .chat-feed::-webkit-scrollbar { width: 6px; }
+    .chat-feed::-webkit-scrollbar-track { background: transparent; }
+    .chat-feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .chat-msg {
+      display: flex;
+      gap: 10px;
+      animation: fadeIn .25s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .chat-avatar {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .chat-avatar.Momentum     { background: rgba(88,166,255,.18); }
+    .chat-avatar.Whale        { background: rgba(188,140,255,.18); }
+    .chat-avatar.Bull         { background: rgba(63,185,80,.18); }
+    .chat-avatar.Bear         { background: rgba(248,81,73,.18); }
+    .chat-avatar.Coordinateur { background: rgba(227,179,65,.18); }
+    .chat-avatar.system       { background: rgba(120,120,120,.12); }
+
+    .chat-body { flex: 1; min-width: 0; }
+    .chat-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .chat-name {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .chat-name.Momentum     { color: var(--blue); }
+    .chat-name.Whale        { color: var(--purple); }
+    .chat-name.Bull         { color: var(--green); }
+    .chat-name.Bear         { color: var(--red); }
+    .chat-name.Coordinateur { color: var(--yellow); }
+    .chat-name.system       { color: var(--txt2); }
+
+    .chat-token {
+      font-size: 11px;
+      color: var(--txt2);
+      background: var(--card2);
+      padding: 1px 7px;
+      border-radius: 10px;
+    }
+    .chat-round {
+      font-size: 10px;
+      color: var(--txt2);
+      margin-left: auto;
+    }
+    .chat-time {
+      font-size: 11px;
+      color: var(--txt2);
+    }
+    .chat-content {
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--txt);
+      background: var(--card);
+      padding: 9px 13px;
+      border-radius: 0 8px 8px 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .chat-msg.system .chat-content {
+      background: rgba(120,120,120,.08);
+      color: var(--txt2);
+      font-style: italic;
+      border-radius: 8px;
+    }
+
+    /* ── Agent stats grid ────────────────────────────────────────────── */
+    .agent-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+    }
+    .agent-stat-card {
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 13px 16px;
+      text-align: center;
+    }
+    .agent-icon { font-size: 22px; margin-bottom: 6px; }
+    .agent-name { font-size: 11px; color: var(--txt2); text-transform: uppercase; letter-spacing: .5px; }
+    .agent-acc  { font-size: 24px; font-weight: 700; margin: 4px 0; }
+    .agent-sub  { font-size: 11px; color: var(--txt2); }
+
+    /* ── Lessons table compact ───────────────────────────────────────── */
+    .lesson-row td { padding: 8px 12px; font-size: 12px; }
+    .outcome-win  { color: var(--green); font-weight: 600; }
+    .outcome-loss { color: var(--red);   font-weight: 600; }
+    .outcome-run  { color: var(--txt2); }
+
+    /* ── Suggestions ─────────────────────────────────────────────────── */
+    .suggestion-card {
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .suggestion-card.approved { border-left: 3px solid var(--green); }
+    .suggestion-card.rejected { border-left: 3px solid var(--red); opacity: .6; }
+    .suggestion-card.pending  { border-left: 3px solid var(--yellow); }
+
+    .sugg-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+      color: var(--txt2);
+    }
+    .sugg-agent {
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+    .sugg-text { font-size: 13px; line-height: 1.55; }
+    .sugg-actions { display: flex; gap: 8px; }
+    .btn {
+      padding: 5px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all .15s;
+      font-weight: 500;
+    }
+    .btn-approve {
+      background: rgba(63,185,80,.1);
+      border-color: rgba(63,185,80,.3);
+      color: var(--green);
+    }
+    .btn-approve:hover { background: rgba(63,185,80,.2); }
+    .btn-reject {
+      background: rgba(248,81,73,.08);
+      border-color: rgba(248,81,73,.25);
+      color: var(--red);
+    }
+    .btn-reject:hover { background: rgba(248,81,73,.18); }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    .empty-floor {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--txt2);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+    .empty-floor .big { font-size: 36px; margin-bottom: 12px; }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       PAPER TRADING
+    ══════════════════════════════════════════════════════════════════ */
+
+    /* ── Portfolio header ─────────────────────────────────────────────── */
+    .paper-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 0 18px;
+    }
+    .paper-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(227,179,65,.12);
+      border: 1px solid rgba(227,179,65,.3);
+      color: var(--yellow);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 20px;
+      letter-spacing: .4px;
+    }
+
+    /* ── Config panel ─────────────────────────────────────────────────── */
+    .config-panel {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      align-items: flex-end;
+    }
+    .config-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .config-label {
+      font-size: 11px;
+      color: var(--txt2);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .config-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--txt);
+      font-family: inherit;
+      font-size: 13px;
+      padding: 7px 11px;
+      width: 90px;
+      transition: border-color .15s;
+    }
+    .config-input:focus { outline: none; border-color: var(--yellow); }
+
+    .reset-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      margin-top: 6px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .btn-save {
+      background: rgba(227,179,65,.12);
+      border: 1px solid rgba(227,179,65,.35);
+      color: var(--yellow);
+    }
+    .btn-save:hover { background: rgba(227,179,65,.22); }
+    .btn-reset {
+      background: rgba(248,81,73,.08);
+      border: 1px solid rgba(248,81,73,.25);
+      color: var(--red);
+    }
+    .btn-reset:hover { background: rgba(248,81,73,.18); }
+    .btn-sell-paper {
+      background: rgba(248,81,73,.08);
+      border: 1px solid rgba(248,81,73,.22);
+      color: var(--red);
+      padding: 3px 10px;
+      font-size: 11px;
+    }
+    .btn-sell-paper:hover { background: rgba(248,81,73,.18); }
+    .btn-buy-paper {
+      background: rgba(63,185,80,.12);
+      border: 1px solid rgba(63,185,80,.35);
+      color: var(--green);
+    }
+    .btn-buy-paper:hover  { background: rgba(63,185,80,.22); }
+    .btn-buy-paper:disabled { opacity: .45; cursor: not-allowed; }
+    .manual-addr-input {
+      width: 340px;
+      font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+      font-size: 12px;
+    }
+    @media (max-width: 700px) { .manual-addr-input { width: 100%; } }
+
+    /* ── Paper PnL total card ─────────────────────────────────────────── */
+    .pnl-total-big {
+      font-size: 32px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    /* ── Recent analyses grid ─────────────────────────────────────────── */
+    .analyses-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 10px;
+      padding: 16px 20px;
+    }
+    .analysis-card {
+      background: var(--card2);
+      border-radius: 8px;
+      padding: 12px 14px;
+      border: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: transform .12s, box-shadow .12s;
+    }
+    .analysis-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.35); }
+    .analysis-card.ac-green  { border-color: var(--green);  box-shadow: 0 0 0 1px rgba(63,185,80,.25); }
+    .analysis-card.ac-orange { border-color: var(--orange); box-shadow: 0 0 0 1px rgba(240,136,62,.25); }
+    .analysis-card.ac-red    { border-color: var(--red);    box-shadow: 0 0 0 1px rgba(248,81,73,.25); }
+    .ac-symbol { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ac-score  { font-size: 22px; font-weight: 800; line-height: 1; }
+    .ac-score.ac-green  { color: var(--green); }
+    .ac-score.ac-orange { color: var(--orange); }
+    .ac-score.ac-red    { color: var(--red); }
+    .ac-decision { font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+    .ac-decision.ac-green  { color: var(--green); }
+    .ac-decision.ac-orange { color: var(--orange); }
+    .ac-decision.ac-red    { color: var(--red); }
+    .ac-time { font-size: 11px; color: var(--txt2); margin-top: 2px; }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       SKIN MODERNE — overrides (cascade)
+    ══════════════════════════════════════════════════════════════════ */
+    body {
+      font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+      background:
+        radial-gradient(1100px 500px at 85% -10%, rgba(111,141,255,.10), transparent 60%),
+        radial-gradient(900px 480px at -10% 110%, rgba(183,140,255,.07), transparent 60%),
+        var(--bg);
+      background-attachment: fixed;
+    }
+    .header {
+      background: rgba(11,17,32,.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid rgba(111,141,255,.14);
+    }
+    .header h1 {
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-size: 18px;
+    }
+    .tab-nav {
+      background: transparent;
+      border-bottom: none;
+      padding: 12px 28px 4px;
+      gap: 8px;
+    }
+    .tab-nav-btn {
+      border: 1px solid transparent;
+      border-radius: 99px;
+      padding: 8px 18px;
+      transition: all .18s;
+    }
+    .tab-nav-btn:hover { background: var(--card2); }
+    .tab-nav-btn.active {
+      color: #fff;
+      background: linear-gradient(135deg, rgba(111,141,255,.22), rgba(183,140,255,.16));
+      border-color: rgba(111,141,255,.4);
+      border-bottom-color: rgba(111,141,255,.4);
+      box-shadow: 0 4px 18px rgba(111,141,255,.18);
+    }
+    .card, .section {
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,.022), transparent 45%), var(--card);
+      box-shadow: 0 10px 30px rgba(2,6,18,.35);
+    }
+    .card { transition: transform .15s, border-color .15s; }
+    .card:hover { transform: translateY(-2px); border-color: rgba(111,141,255,.35); }
+    .card-value { letter-spacing: -0.5px; }
+    .sec-head { border-bottom-color: rgba(29,39,64,.8); }
+    .btn-primary {
+      background: var(--grad);
+      border: none;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(111,141,255,.30);
+    }
+    .aria-bubble.user { background: var(--grad); }
+    .toggle-switch input:checked + .toggle-track,
+    .mini-toggle input:checked + .track { background: var(--blue); }
+    .mini-toggle input:checked + .track.danger { background: var(--red); }
+    .analysis-card { border-radius: 12px; }
+    th { border-bottom-color: rgba(29,39,64,.9); }
+    td { border-bottom-color: rgba(29,39,64,.5); }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    /* ── Agios (Robinhood Chain) ────────────────────────────────────── */
+    .agios-hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 18px 22px;
+      border-radius: 16px;
+      margin-bottom: 18px;
+      border: 1px solid rgba(197,255,74,.22);
+      background:
+        radial-gradient(600px 200px at 90% 0%, rgba(197,255,74,.10), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,.02), transparent 45%), var(--card);
+    }
+    .agios-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: rgba(197,255,74,.10);
+      border: 1px solid rgba(197,255,74,.35);
+      color: var(--robin);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 99px;
+      letter-spacing: .4px;
+    }
+    .agios-accent { color: var(--robin); }
+    .aria-bubble.agios-user { background: linear-gradient(135deg, #9dc72e, #5f8f1f); color: #fff; align-self: flex-end; border-bottom-right-radius: 3px; }
   </style>
 </head>
 <body>
@@ -228,6 +863,10 @@
 <header class="header">
   <h1>🪙 Meme Coin Bot</h1>
   <div class="header-right">
+    <span class="aria-chip" id="ariaChip" title="État de l'autonomie ARIA">
+      <span class="dot"></span>
+      <span id="ariaChipText">ARIA…</span>
+    </span>
     <span>
       <span class="status-dot" id="sDot"></span>
       <span id="sText" style="margin-left:6px">Connexion…</span>
@@ -236,168 +875,960 @@
   </div>
 </header>
 
+<!-- ── Tab navigation ──────────────────────────────────────────────────── -->
+<nav class="tab-nav">
+  <button class="tab-nav-btn active" data-page="dashboard">📊 Dashboard</button>
+  <button class="tab-nav-btn"        data-page="aria">🤖 ARIA</button>
+  <button class="tab-nav-btn"        data-page="agios">🏛 Agios · Robinhood</button>
+  <button class="tab-nav-btn"        data-page="paper">🧪 Paper Trading</button>
+  <!-- Trading Floor suspendu — bouton conservé mais caché (réactivable) -->
+  <button class="tab-nav-btn" data-page="floor" style="display:none">💬 Trading Floor</button>
+</nav>
+
 <div class="main">
 
-  <!-- ── Stat cards ────────────────────────────────────────────────────── -->
-  <div class="cards">
-    <div class="card">
-      <div class="card-label">Positions ouvertes</div>
-      <div class="card-value" id="cPos">—</div>
-      <div class="card-sub">tokens actifs</div>
-    </div>
-    <div class="card">
-      <div class="card-label">PnL réalisé (total)</div>
-      <div class="card-value" id="cPnl">—</div>
-      <div class="card-sub" id="cTrades">— trades fermés</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Win Rate</div>
-      <div class="card-value" id="cWr">—</div>
-      <div class="card-sub">trades gagnants / total</div>
-    </div>
-    <div class="card">
-      <div class="card-label">PnL — cette semaine</div>
-      <div class="card-value" id="cWkPnl">—</div>
-      <div class="card-sub" id="cWkTrades">— trades</div>
-    </div>
-  </div>
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : DASHBOARD
+  ════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page active" id="page-dashboard">
 
-  <!-- ── PnL cumulatif ─────────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>📈 PnL Cumulatif</h2>
-      <div class="tabs" id="rangeTabs">
-        <button class="tab" data-range="1">24h</button>
-        <button class="tab" data-range="7">7j</button>
-        <button class="tab" data-range="30">30j</button>
-        <button class="tab active" data-range="0">Tout</button>
+    <!-- ── Stat cards ────────────────────────────────────────────────────── -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">💰 Balance Wallet</div>
+        <div class="card-value" id="cBalance">—</div>
+        <div class="card-sub" id="cBalanceAddr" style="font-size:11px;word-break:break-all;">— SOL</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Positions ouvertes</div>
+        <div class="card-value" id="cPos">—</div>
+        <div class="card-sub">tokens actifs</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL réalisé (total)</div>
+        <div class="card-value" id="cPnl">—</div>
+        <div class="card-sub" id="cTrades">— trades fermés</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value" id="cWr">—</div>
+        <div class="card-sub">trades gagnants / total</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL — cette semaine</div>
+        <div class="card-value" id="cWkPnl">—</div>
+        <div class="card-sub" id="cWkTrades">— trades</div>
       </div>
     </div>
-    <div class="sec-body">
-      <div class="chart-wrap"><canvas id="cumulChart"></canvas></div>
-    </div>
-  </div>
 
-  <!-- ── Weekly + Daily ────────────────────────────────────────────────── -->
-  <div class="two-col">
-
-    <!-- Résumé semaine -->
+    <!-- ── PnL cumulatif ─────────────────────────────────────────────────── -->
     <div class="section">
-      <div class="sec-head"><h2>📅 Résumé de la semaine</h2></div>
+      <div class="sec-head">
+        <h2>📈 PnL Cumulatif</h2>
+        <div class="tabs" id="rangeTabs">
+          <button class="tab" data-range="1">24h</button>
+          <button class="tab" data-range="7">7j</button>
+          <button class="tab" data-range="30">30j</button>
+          <button class="tab active" data-range="0">Tout</button>
+        </div>
+      </div>
       <div class="sec-body">
-        <div class="week-grid">
-          <div class="week-stat">
-            <div class="week-val" id="wPnl">—</div>
-            <div class="week-lbl">PnL en SOL</div>
+        <div class="chart-wrap"><canvas id="cumulChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- ── Weekly + Daily ────────────────────────────────────────────────── -->
+    <div class="two-col">
+
+      <div class="section">
+        <div class="sec-head"><h2>📅 Résumé de la semaine</h2></div>
+        <div class="sec-body">
+          <div class="week-grid">
+            <div class="week-stat">
+              <div class="week-val" id="wPnl">—</div>
+              <div class="week-lbl">PnL en SOL</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="wWr">—</div>
+              <div class="week-lbl">Win Rate</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="wTrades">—</div>
+              <div class="week-lbl">Trades</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val c-green" id="wWins">—</div>
+              <div class="week-lbl">Gagnants</div>
+            </div>
           </div>
-          <div class="week-stat">
-            <div class="week-val" id="wWr">—</div>
-            <div class="week-lbl">Win Rate</div>
-          </div>
-          <div class="week-stat">
-            <div class="week-val" id="wTrades">—</div>
-            <div class="week-lbl">Trades</div>
-          </div>
-          <div class="week-stat">
-            <div class="week-val c-green" id="wWins">—</div>
-            <div class="week-lbl">Gagnants</div>
+          <ul class="alert-list" id="alertList">
+            <li class="alert-item info"><span>Chargement…</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="sec-head"><h2>📊 PnL journalier — 7 derniers jours</h2></div>
+        <div class="sec-body">
+          <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Tokens wallet on-chain ───────────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>💼 Tokens dans le Wallet</h2>
+        <span class="c-muted" id="walletTokenCount" style="font-size:13px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Mint</th>
+              <th>Quantité</th>
+              <th>Prix USD</th>
+              <th>Valeur USD</th>
+              <th>Suivi bot</th>
+            </tr>
+          </thead>
+          <tbody id="walletTokenBody">
+            <tr><td colspan="5" class="empty">Wallet non chargé ou aucun token</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Positions actuelles ───────────────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>📂 Positions Actuelles</h2>
+        <span class="c-muted" id="posCount" style="font-size:13px">0 position</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>MC entrée</th>
+              <th>MC actuel</th>
+              <th>PnL %</th>
+              <th>PnL SOL</th>
+              <th>Investi</th>
+              <th>SL</th>
+              <th>TP</th>
+              <th>Durée</th>
+            </tr>
+          </thead>
+          <tbody id="posBody">
+            <tr><td colspan="9" class="empty">Aucune position ouverte</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Historique trades ─────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>📋 Historique des Trades</h2>
+        <span class="c-muted" id="histCount" style="font-size:13px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Token</th>
+              <th>Action</th>
+              <th>SOL</th>
+              <th>PnL</th>
+              <th>Raison</th>
+              <th>Résultat</th>
+            </tr>
+          </thead>
+          <tbody id="histBody">
+            <tr><td colspan="7" class="empty">Aucun trade dans l'historique</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── 20 derniers tokens analysés ──────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>🔬 Derniers tokens analysés</h2>
+        <span class="c-muted" style="font-size:12px" id="analysesCount">—</span>
+      </div>
+      <div id="analysesGrid" class="analyses-grid">
+        <div class="empty" style="grid-column:1/-1">Aucune analyse pour l'instant</div>
+      </div>
+    </div>
+
+  </div><!-- /page-dashboard -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : TRADING FLOOR
+  ════════════════════════════════════════════════════════════════════ -->
+  <!-- ══════════════════════════════════════════════════════════════════════
+       PAGE : ARIA — Agent IA Personnel
+  ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="page-aria">
+    <div class="aria-grid">
+
+      <!-- ── Colonne gauche : Personnalité + Autonomie ─────────────────── -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>🤖 ARIA</h2><span id="ariaMoodBadge" class="c-muted" style="font-size:12px">—</span></div>
+          <div class="sec-body" style="padding:12px 16px">
+            <div style="text-align:center; padding:8px 0 16px">
+              <div id="ariaAvatar" style="font-size:48px; line-height:1">🤖</div>
+              <div id="ariaName" style="font-size:16px; font-weight:700; margin-top:6px">ARIA</div>
+              <div id="ariaStyle" class="c-muted" style="font-size:12px; margin-top:2px">style: —</div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:8px">
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:3px">
+                  <span class="c-muted">Confiance</span><span id="ariaConfidence" class="c-blue">—</span>
+                </div>
+                <div style="height:4px; background:var(--border); border-radius:2px">
+                  <div id="barConfidence" style="height:100%; background:var(--blue); border-radius:2px; width:50%; transition:width .4s"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:3px">
+                  <span class="c-muted">Risque</span><span id="ariaRisk" class="c-yellow">—</span>
+                </div>
+                <div style="height:4px; background:var(--border); border-radius:2px">
+                  <div id="barRisk" style="height:100%; background:#f0883e; border-radius:2px; width:50%; transition:width .4s"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:3px">
+                  <span class="c-muted">Agressivité</span><span id="ariaAggr" class="c-red">—</span>
+                </div>
+                <div style="height:4px; background:var(--border); border-radius:2px">
+                  <div id="barAggr" style="height:100%; background:#f85149; border-radius:2px; width:50%; transition:width .4s"></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-top:14px">
+              <div class="c-muted" style="font-size:11px; margin-bottom:6px">Traits de personnalité</div>
+              <div id="ariaTraits" style="display:flex; flex-wrap:wrap; gap:5px"></div>
+            </div>
+
+            <div id="ariaLessons" style="margin-top:14px; display:none">
+              <div class="c-muted" style="font-size:11px; margin-bottom:6px">📚 Leçons apprises</div>
+              <div id="ariaLessonsList" style="font-size:11px; color:var(--txt-muted)"></div>
+            </div>
+
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border); display:flex; justify-content:space-between; font-size:11px">
+              <span class="c-muted">Analyses</span><span id="ariaStatAnalyses" class="c-blue">0</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:11px">
+              <span class="c-muted">Correct</span><span id="ariaStatCorrect" class="c-green">0</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:11px">
+              <span class="c-muted">Win streak</span><span id="ariaStatWin" class="c-green">0</span>
+            </div>
           </div>
         </div>
-        <ul class="alert-list" id="alertList">
-          <li class="alert-item info"><span>Chargement…</span></li>
-        </ul>
+
+        <!-- Autonomie -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head">
+            <h2>⚡ Autonomie</h2>
+            <span class="auto-badge off" id="autoBadge">—</span>
+          </div>
+          <div class="sec-body" style="padding:8px 16px 14px">
+
+            <div class="auto-row">
+              <span>Autonomie (signaux, watchlist, gestion)</span>
+              <label class="mini-toggle">
+                <input type="checkbox" id="autoEnabled" onchange="saveAutonomy()">
+                <span class="track"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+
+            <div class="auto-row">
+              <span class="c-red" style="font-weight:600">Trading réel (achète/vend seule)</span>
+              <label class="mini-toggle">
+                <input type="checkbox" id="autoLive" onchange="confirmLiveTrading(this)">
+                <span class="track danger"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+
+            <div class="auto-row">
+              <span title="Réplique les achats des wallets suivis (après gates + analyse)">Copy-trading wallets suivis</span>
+              <label class="mini-toggle">
+                <input type="checkbox" id="autoCopy" onchange="saveAutonomy()">
+                <span class="track"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+
+            <div class="auto-row">
+              <span class="c-muted">Score min BUY auto</span>
+              <input class="auto-input" id="autoMinScore" type="number" min="40" max="95" step="1">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted" title="Suffit si un signal fort l'accompagne (smart money massif, rotation, rupture, micro-cap)">Score flex (signal fort)</span>
+              <input class="auto-input" id="autoFlexScore" type="number" min="40" max="90" step="1">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted">Confiance min /10</span>
+              <input class="auto-input" id="autoMinConf" type="number" min="1" max="10" step="1">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted" title="Taille de position à confiance 5/10">SOL min / trade</span>
+              <input class="auto-input" id="autoMinSol" type="number" min="0.001" max="10" step="0.01">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted" title="Taille de position à confiance 9+/10">SOL max / trade</span>
+              <input class="auto-input" id="autoMaxSol" type="number" min="0.001" max="10" step="0.01">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted">Positions max</span>
+              <input class="auto-input" id="autoMaxPos" type="number" min="1" max="10" step="1">
+            </div>
+            <div class="auto-row">
+              <span class="c-muted">Perte max / jour (SOL)</span>
+              <input class="auto-input" id="autoMaxLoss" type="number" min="0.01" max="50" step="0.05">
+            </div>
+
+            <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
+              <button class="btn-primary" style="padding:6px 14px; font-size:12px" onclick="saveAutonomy()">💾 Sauvegarder</button>
+              <span id="autoSaveMsg" style="font-size:11px"></span>
+            </div>
+            <div class="c-muted" style="font-size:10px; margin-top:8px; line-height:1.5">
+              Trading réel OFF : ARIA envoie les signaux BUY sur Telegram avec confirmation.<br>
+              ON : elle achète, gère et vend seule dans les plafonds ci-dessus.
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /colonne gauche -->
+
+      <!-- ── Colonne centre : Chat ──────────────────────────────────────── -->
+      <div class="section aria-chat-col" style="margin-bottom:0; display:flex; flex-direction:column; height:calc(100vh - 160px)">
+        <div class="sec-head"><h2>💬 Conversation</h2></div>
+        <div id="ariaChat" style="flex:1; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:10px; min-height:0"></div>
+        <div style="padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px">
+          <input id="ariaChatInput" type="text" placeholder="Parle avec ARIA…"
+            style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:8px 12px; color:var(--txt); font-size:13px; outline:none"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAriaChat()}"
+          >
+          <button onclick="sendAriaChat()" class="btn-primary" style="white-space:nowrap">Envoyer</button>
+        </div>
+      </div><!-- /chat -->
+
+      <!-- ── Colonne droite : Watchlist ─────────────────────────────────── -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+
+        <!-- Tokens surveillés -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>👁 Tokens suivis</h2></div>
+          <div class="sec-body" style="padding:8px 12px">
+            <div style="display:flex; gap:6px; margin-bottom:8px">
+              <input id="watchTokenAddr" type="text" placeholder="Adresse CA…"
+                style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <input id="watchTokenSym" type="text" placeholder="Ticker"
+                style="width:60px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <button onclick="addWatchItem('token')" class="btn-primary" style="padding:5px 8px; font-size:11px">+</button>
+            </div>
+            <div id="watchTokenList"><div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun token suivi</div></div>
+          </div>
+        </div>
+
+        <!-- Wallets surveillés -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>🔭 Wallets suivis</h2></div>
+          <div class="sec-body" style="padding:8px 12px">
+            <div style="display:flex; gap:6px; margin-bottom:8px">
+              <input id="watchWalletAddr" type="text" placeholder="Adresse wallet…"
+                style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <input id="watchWalletLabel" type="text" placeholder="Label"
+                style="width:70px; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--txt); font-size:11px; outline:none">
+              <button onclick="addWatchItem('wallet')" class="btn-primary" style="padding:5px 8px; font-size:11px">+</button>
+            </div>
+            <div id="watchWalletList"><div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun wallet suivi</div></div>
+          </div>
+        </div>
+
+        <!-- Journal d'activité autonome -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head">
+            <h2>📜 Journal d'activité</h2>
+            <span class="c-muted" id="journalCount" style="font-size:11px">—</span>
+          </div>
+          <div class="sec-body" style="padding:4px 14px 10px">
+            <div class="journal-feed" id="journalFeed">
+              <div class="c-muted" style="font-size:11px; text-align:center; padding:14px">
+                Les actions autonomes d'ARIA<br>(achats, ventes, alertes, apprentissage)<br>apparaîtront ici.
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /colonne droite -->
+    </div>
+  </div><!-- /page-aria -->
+
+  <div class="tab-page" id="page-floor">
+
+    <!-- ── Toggle + état des agents ─────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:16px">
+      <div class="sec-head">
+        <h2>⚙️ Contrôle des débats IA</h2>
+        <div class="toggle-row">
+          <span class="toggle-label">Débats LLM :</span>
+          <label class="toggle-switch" title="Active/désactive les appels Claude API">
+            <input type="checkbox" id="agentToggle" onchange="toggleAgents(this.checked)">
+            <span class="toggle-track"></span>
+            <span class="toggle-thumb"></span>
+          </label>
+          <span class="toggle-status off" id="toggleStatus">OFF</span>
+        </div>
+      </div>
+      <div class="sec-body" style="padding: 12px 20px; font-size:13px; color: var(--txt2); line-height:1.7">
+        <strong style="color:var(--txt)">ON</strong> — Les agents analysent chaque token scanné via Claude API (consomme des crédits).<br>
+        <strong style="color:var(--txt)">OFF</strong> — Le scanner continue de tourner mais aucun débat n'est lancé. Économise les crédits.
       </div>
     </div>
 
-    <!-- PnL journalier -->
-    <div class="section">
-      <div class="sec-head"><h2>📊 PnL journalier — 7 derniers jours</h2></div>
+    <!-- ── Soumettre un token au débat ──────────────────────────────────── -->
+    <div class="section" style="margin-bottom:16px">
+      <div class="sec-head">
+        <h2>🔍 Soumettre un token au débat</h2>
+        <span class="c-muted" style="font-size:12px">Tu colles un CA, les 4 agents analysent — résultat ici + dans le fil</span>
+      </div>
       <div class="sec-body">
-        <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+        <div class="config-panel">
+          <div class="config-field" style="flex:1">
+            <label class="config-label">Adresse du token (Solana)</label>
+            <input class="config-input manual-addr-input" id="debateAddr" type="text"
+                   placeholder="Ex: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap">
+            <button class="btn btn-save" id="debateBtn" onclick="submitDebate()">🤖 Lancer le débat</button>
+            <span id="debateMsg" style="font-size:12px; align-self:center"></span>
+          </div>
+        </div>
+        <div id="debateResult" style="display:none; margin-top:16px"></div>
       </div>
     </div>
 
-  </div>
+    <!-- ── Live chat + stats agents ─────────────────────────────────────── -->
+    <div class="two-col" style="margin-bottom:16px">
 
-  <!-- ── Positions actuelles ───────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>📂 Positions Actuelles</h2>
-      <span class="c-muted" id="posCount" style="font-size:13px">0 position</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Token</th>
-            <th>Entry USD</th>
-            <th>Prix actuel</th>
-            <th>PnL %</th>
-            <th>PnL SOL</th>
-            <th>Investi</th>
-            <th>SL</th>
-            <th>TP</th>
-            <th>Durée</th>
-          </tr>
-        </thead>
-        <tbody id="posBody">
-          <tr><td colspan="9" class="empty">Aucune position ouverte</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+      <!-- Chat -->
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head">
+          <h2>💬 Fil des agents</h2>
+          <span class="c-muted" style="font-size:12px" id="chatCount">0 message</span>
+        </div>
+        <div id="chatFeed" class="chat-feed">
+          <div class="empty-floor">
+            <div class="big">🤖</div>
+            En attente des agents…<br>
+            <span style="font-size:12px">Les messages apparaîtront ici lors des prochains débats.</span>
+          </div>
+        </div>
+      </div>
 
-  <!-- ── Évolution holders ─────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>👥 Évolution des Holders</h2>
-    </div>
-    <div class="sec-body">
-      <div class="holder-ph">
-        <div class="icon">📡</div>
-        <strong>Tracking continu des holders</strong><br>
-        Le bot enregistre le nombre de holders au moment de chaque scan.<br>
-        Les données s'afficheront ici au fil des positions ouvertes.<br>
-        <br>
-        <span style="font-size:12px">Requiert <code>BIRDEYE_API_KEY</code> — sécurité on-chain activée.</span>
+      <!-- Stats agents -->
+      <div style="display:flex; flex-direction:column; gap:16px">
+
+        <!-- Précision agents -->
+        <div class="section" style="margin-bottom:0">
+          <div class="sec-head"><h2>🧠 Précision des agents</h2><span class="c-muted" style="font-size:12px" id="weightsStatus">poids fixes (manque de données)</span></div>
+          <div class="sec-body">
+            <div class="agent-stats-grid" id="agentStatsGrid">
+              <div class="agent-stat-card"><div class="agent-icon">📈</div><div class="agent-name">Momentum</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+              <div class="agent-stat-card"><div class="agent-icon">🐳</div><div class="agent-name">Whale</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+              <div class="agent-stat-card"><div class="agent-icon">🐂</div><div class="agent-name">Bull</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+              <div class="agent-stat-card"><div class="agent-icon">🐻</div><div class="agent-name">Bear</div><div class="agent-acc c-muted">—</div><div class="agent-sub">0 signaux</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mémoire — derniers trades analysés -->
+        <div class="section" style="margin-bottom:0; flex:1">
+          <div class="sec-head"><h2>🗂️ Mémoire — débats récents</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Score</th>
+                  <th>Décision</th>
+                  <th>Outcome</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="lessonsBody">
+                <tr><td colspan="5" class="empty">Aucun débat enregistré</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </div>
     </div>
-  </div>
 
-  <!-- ── Historique trades ─────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="sec-head">
-      <h2>📋 Historique des Trades</h2>
-      <span class="c-muted" id="histCount" style="font-size:13px">—</span>
+    <!-- ── Suggestions d'amélioration ──────────────────────────────────── -->
+    <div class="section">
+      <div class="sec-head">
+        <h2>💡 Suggestions des agents</h2>
+        <span class="c-muted" style="font-size:12px" id="suggCount">—</span>
+      </div>
+      <div class="sec-body" id="suggBody">
+        <div class="empty-floor" style="padding:28px">
+          <div class="big" style="font-size:28px">💡</div>
+          Les agents proposeront des améliorations ici<br>après suffisamment de trades analysés.
+        </div>
+      </div>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Token</th>
-            <th>Action</th>
-            <th>SOL</th>
-            <th>PnL</th>
-            <th>Résultat</th>
-          </tr>
-        </thead>
-        <tbody id="histBody">
-          <tr><td colspan="6" class="empty">Aucun trade dans l'historique</td></tr>
-        </tbody>
-      </table>
+
+  </div><!-- /page-floor -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : AGIOS — Agent Robinhood Chain
+  ════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="page-agios">
+
+    <div class="agios-hero">
+      <div>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+          <span style="font-size:26px">🏛</span>
+          <span style="font-size:19px; font-weight:800">Agios</span>
+          <span class="agios-badge">ROBINHOOD CHAIN · L2 ARBITRUM · BLOCS 100MS</span>
+          <span class="agios-badge" style="border-color:rgba(255,209,102,.35); color:var(--yellow); background:rgba(255,209,102,.08)">🧪 PAPER TRADING</span>
+        </div>
+        <div class="c-muted" style="font-size:12px; margin-top:6px; line-height:1.6">
+          Mainnet depuis juillet 2026 — actions US tokenisées 24/7 + memecoins, gas en ETH, données GMGN.
+          Exécution réelle à venir (wallet Robinhood Chain requis) — Agios trade en simulation et journalise tout.
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="c-muted" style="font-size:11px">Tokens analysés</div>
+        <div id="agStatAnalyzed" class="agios-accent" style="font-size:26px; font-weight:800">—</div>
+      </div>
     </div>
-  </div>
+
+    <!-- Robinhood Agentic Trading (courtage réel) -->
+    <div class="section" style="margin-bottom:18px; border-color:rgba(197,255,74,.18)">
+      <div class="sec-head">
+        <h2>💵 Robinhood Agentic Trading <span class="c-muted" style="font-size:11px; font-weight:400">— compte réel, actions US</span></h2>
+        <span class="auto-badge off" id="rhBadge">—</span>
+      </div>
+      <div class="sec-body" style="padding:14px 20px">
+        <div id="rhNotConnected">
+          <div class="c-muted" style="font-size:12px; line-height:1.7; margin-bottom:10px">
+            Connecte le compte Robinhood "Agentic" dédié de ton trader (fonds pré-chargés, isolé de son compte
+            principal) via OAuth. Le reste de son compte Robinhood reste en lecture seule.
+            <strong style="color:var(--txt)">Étape à faire depuis un navigateur sur la machine qui fait tourner le bot</strong> —
+            pas depuis un téléphone ni un environnement cloud.
+          </div>
+          <button class="btn-primary" style="padding:8px 18px; font-size:13px" onclick="connectRobinhood()">🔗 Connecter Robinhood</button>
+          <span id="rhConnectMsg" style="font-size:12px; margin-left:10px"></span>
+          <div id="rhAuthLinkBox" style="display:none; margin-top:12px; padding:12px; background:var(--card2); border-radius:10px; border:1px solid rgba(197,255,74,.3)">
+            <div style="font-size:12px; margin-bottom:6px">🔗 Ouvre ce lien, connecte-toi à Robinhood et autorise Agios (5 min) :</div>
+            <a id="rhAuthLink" href="#" target="_blank" style="font-size:12px; word-break:break-all; color:var(--robin)"></a>
+          </div>
+        </div>
+        <div id="rhConnected" style="display:none">
+          <div class="auto-row">
+            <span>Trading réel <span class="c-muted">(exécution directe des ordres, vrai argent)</span></span>
+            <label class="mini-toggle">
+              <input type="checkbox" id="rhLiveToggle" onchange="toggleRobinhoodLive(this.checked)">
+              <span class="track danger"></span>
+              <span class="thumb"></span>
+            </label>
+          </div>
+          <div class="c-muted" style="font-size:11px; margin-top:8px" id="rhLiveHint">Confirmation Telegram requise avant chaque action non-lecture.</div>
+        </div>
+        <div id="rhPendingBox" style="display:none; margin-top:14px">
+          <div class="c-muted" style="font-size:11px; margin-bottom:8px">⏳ Actions en attente de confirmation :</div>
+          <div id="rhPendingList"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats paper -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Portefeuille (paper)</div>
+        <div class="card-value" id="agPortfolio">—</div>
+        <div class="card-sub" id="agPortfolioSub">— de départ</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL réalisé</div>
+        <div class="card-value" id="agPnl">—</div>
+        <div class="card-sub" id="agTrades">— trades</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value" id="agWr">—</div>
+        <div class="card-sub" id="agWrSub">— W / — L</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Positions ouvertes</div>
+        <div class="card-value agios-accent" id="agOpen">—</div>
+        <div class="card-sub" id="agOpenSub">— investi</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Signaux BUY</div>
+        <div class="card-value" id="agSignals">—</div>
+        <div class="card-sub">détectés sur la chaîne</div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <!-- Positions paper -->
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head">
+          <h2>📂 Positions Agios</h2>
+          <span class="c-muted" id="agPosCount" style="font-size:12px">—</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Token</th><th>Score</th><th>MC entrée</th><th>MC actuel</th><th>PnL %</th><th>SL/TP</th><th>Durée</th></tr>
+            </thead>
+            <tbody id="agPosBody">
+              <tr><td colspan="7" class="empty">Aucune position — Agios scanne le trending Robinhood Chain</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Journal -->
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head">
+          <h2>📜 Journal d'Agios</h2>
+          <span class="c-muted" id="agJournalCount" style="font-size:12px">—</span>
+        </div>
+        <div class="sec-body" style="padding:4px 14px 10px">
+          <div class="journal-feed" id="agJournalFeed" style="max-height:300px">
+            <div class="c-muted" style="font-size:11px; text-align:center; padding:14px">
+              Les signaux et trades paper d'Agios<br>apparaîtront ici en temps réel.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Historique paper -->
+    <div class="section" style="margin-top:18px">
+      <div class="sec-head">
+        <h2>📋 Historique Agios</h2>
+        <span class="c-muted" id="agHistCount" style="font-size:12px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Token</th><th>Score</th><th>PnL %</th><th>PnL</th><th>Raison</th><th>Résultat</th></tr>
+          </thead>
+          <tbody id="agHistBody">
+            <tr><td colspan="7" class="empty">Aucun trade fermé</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="section" style="margin-top:18px">
+      <div class="sec-head"><h2>💬 Parler avec Agios</h2><span class="c-muted" style="font-size:12px">contexte live Robinhood Chain</span></div>
+      <div id="agiosChat" style="max-height:340px; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:10px"></div>
+      <div style="padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px">
+        <input id="agiosChatInput" type="text" placeholder="Demande-lui ce qui bouge sur Robinhood Chain…"
+          style="flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:9px 12px; color:var(--txt); font-size:13px; outline:none"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAgiosChat()}">
+        <button onclick="sendAgiosChat()" class="btn-primary" style="white-space:nowrap; background:linear-gradient(135deg,#9dc72e,#5f8f1f)">Envoyer</button>
+      </div>
+    </div>
+
+  </div><!-- /page-agios -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       PAGE : PAPER TRADING
+  ════════════════════════════════════════════════════════════════════ -->
+  <div class="tab-page" id="page-paper">
+
+    <div class="paper-header">
+      <span class="paper-badge">🧪 SIMULATION — Aucun SOL réel</span>
+      <span class="c-muted" style="font-size:12px">Les analyses proviennent du vrai bot, les trades sont virtuels.</span>
+    </div>
+
+    <!-- ── Stat cards ─────────────────────────────────────────────────────── -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Portefeuille</div>
+        <div class="pnl-total-big" id="ppPortfolio">—</div>
+        <div class="card-sub" id="ppPortfolioSub">— SOL de départ</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL Total</div>
+        <div class="card-value" id="ppTotalPnl">—</div>
+        <div class="card-sub" id="ppTotalPct">—</div>
+      </div>
+      <div class="card">
+        <div class="card-label">PnL Réalisé</div>
+        <div class="card-value" id="ppRealPnl">—</div>
+        <div class="card-sub" id="ppTrades">— trades</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value" id="ppWr">—</div>
+        <div class="card-sub" id="ppWrSub">— W / — L</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Positions ouvertes</div>
+        <div class="card-value" id="ppOpen">—</div>
+        <div class="card-sub" id="ppOpenSub">— SOL investi</div>
+      </div>
+    </div>
+
+    <!-- ── Paramètres ──────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:20px">
+      <div class="sec-head">
+        <h2>⚙️ Paramètres Paper Trading</h2>
+        <span class="c-muted" style="font-size:12px">Indépendants du vrai bot</span>
+      </div>
+      <div class="sec-body">
+
+        <div class="config-panel">
+          <div class="config-field">
+            <label class="config-label">Score min</label>
+            <input class="config-input" id="cfgMinScore"   type="number" min="0"   max="100" step="1"   placeholder="60">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Stop-Loss %</label>
+            <input class="config-input" id="cfgSl"         type="number" min="1"   max="90"  step="1"   placeholder="15">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Take-Profit %</label>
+            <input class="config-input" id="cfgTp"         type="number" min="5"   max="500" step="5"   placeholder="80">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Taille pos. %</label>
+            <input class="config-input" id="cfgPosPct"     type="number" min="1"   max="50"  step="1"   placeholder="5">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Max positions</label>
+            <input class="config-input" id="cfgMaxPos"     type="number" min="1"   max="20"  step="1"   placeholder="5">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Trailing activ. %</label>
+            <input class="config-input" id="cfgTrailAct"   type="number" min="5"   max="200" step="5"   placeholder="20">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Trailing dist. %</label>
+            <input class="config-input" id="cfgTrailDist"  type="number" min="2"   max="50"  step="1"   placeholder="10">
+          </div>
+          <div style="display:flex; align-items:flex-end">
+            <button class="btn btn-save" onclick="savePaperConfig()">💾 Sauvegarder</button>
+          </div>
+        </div>
+
+        <div class="reset-row">
+          <div class="config-field">
+            <label class="config-label">Portefeuille de départ (SOL)</label>
+            <input class="config-input" id="cfgResetBal" type="number" min="0.01" step="1" placeholder="10" style="width:120px">
+          </div>
+          <button class="btn btn-reset" onclick="resetPaper()">🔄 Reset portefeuille</button>
+          <span class="c-muted" style="font-size:12px; align-self:center">⚠️ Efface positions et historique</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Achat manuel ────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:20px">
+      <div class="sec-head">
+        <h2>➕ Ajouter un coin manuellement</h2>
+        <span class="c-muted" style="font-size:12px">Position fictive — les agents suivent et apprennent</span>
+      </div>
+      <div class="sec-body">
+        <div class="config-panel">
+          <div class="config-field" style="flex:1">
+            <label class="config-label">Adresse du token (Solana)</label>
+            <input class="config-input manual-addr-input" id="manualAddr" type="text"
+                   placeholder="Ex: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          <div class="config-field">
+            <label class="config-label">Montant fictif (SOL)</label>
+            <input class="config-input" id="manualAmt" type="number" min="0.001" step="0.1"
+                   placeholder="0.5" style="width:110px">
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap">
+            <button class="btn btn-buy-paper" id="manualBuyBtn" onclick="manualBuyPaper()">
+              📥 Ajouter la position
+            </button>
+            <span id="manualBuyMsg" style="font-size:12px; align-self:center"></span>
+          </div>
+        </div>
+        <div style="margin-top:10px; font-size:12px; color:var(--txt2); line-height:1.7">
+          Le bot récupère le prix en temps réel sur Jupiter, ouvre la position avec ton montant fictif et la surveille exactement comme les positions automatiques (SL / TP / Trailing).
+          Les agents noteront le résultat dans leur mémoire.
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PnL Chart ────────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-bottom:20px">
+      <div class="sec-head"><h2>📈 PnL Cumulatif — Paper</h2></div>
+      <div class="sec-body">
+        <div class="chart-wrap"><canvas id="paperCumulChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- ── Two col: daily chart + stats week ──────────────────────────────── -->
+    <div class="two-col">
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head"><h2>📊 PnL journalier — 7j</h2></div>
+        <div class="sec-body">
+          <div class="chart-wrap"><canvas id="paperDailyChart"></canvas></div>
+        </div>
+      </div>
+      <div class="section" style="margin-bottom:0">
+        <div class="sec-head"><h2>📋 Résumé</h2></div>
+        <div class="sec-body">
+          <div class="week-grid" style="grid-template-columns:1fr 1fr">
+            <div class="week-stat">
+              <div class="week-val" id="ppSumPnl">—</div>
+              <div class="week-lbl">PnL réalisé (SOL)</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="ppSumWr">—</div>
+              <div class="week-lbl">Win Rate</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val" id="ppSumW">—</div>
+              <div class="week-lbl">Gagnants</div>
+            </div>
+            <div class="week-stat">
+              <div class="week-val c-red" id="ppSumL">—</div>
+              <div class="week-lbl">Perdants</div>
+            </div>
+          </div>
+          <div style="margin-top:12px; font-size:12px; color:var(--txt2); line-height:1.7">
+            <strong style="color:var(--yellow)">Mode agressif</strong> : seuil d'entrée à <span id="ppMinScore">60</span>/100 (vs le seuil autonomie d'ARIA pour le vrai wallet).<br>
+            Utilise les mêmes analyses IA — seulement le seuil et les paramètres diffèrent.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Positions ouvertes ─────────────────────────────────────────────── -->
+    <div class="section" style="margin-top:20px">
+      <div class="sec-head">
+        <h2>📂 Positions Paper</h2>
+        <span class="c-muted" id="ppPosCount" style="font-size:13px">0 position</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Score</th>
+              <th>MC entrée</th>
+              <th>MC actuel</th>
+              <th>PnL %</th>
+              <th>PnL SOL</th>
+              <th>Investi</th>
+              <th>SL</th>
+              <th>TP</th>
+              <th>Durée</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="ppPosBody">
+            <tr><td colspan="11" class="empty">Aucune position paper ouverte</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Historique ─────────────────────────────────────────────────────── -->
+    <div class="section" style="margin-top:20px">
+      <div class="sec-head">
+        <h2>📋 Historique Paper</h2>
+        <span class="c-muted" id="ppHistCount" style="font-size:13px">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Token</th>
+              <th>Score</th>
+              <th>PnL %</th>
+              <th>PnL SOL</th>
+              <th>Raison</th>
+              <th>Résultat</th>
+            </tr>
+          </thead>
+          <tbody id="ppHistBody">
+            <tr><td colspan="7" class="empty">Aucun trade paper fermé</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /page-paper -->
 
 </div><!-- /main -->
 
 <script>
-// ── State ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════
 let cumulChart, dailyChart;
-let allTimeline = [];
-let chartRange  = 0;   // 0 = tout
+let allTimeline       = [];
+let allManualTimeline = [];
+let chartRange   = 0;
+let activePage   = 'dashboard';
+let chatMessages = [];
+let sseSource    = null;
 
-// ── Chart init ───────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB NAVIGATION
+// ═══════════════════════════════════════════════════════════════════════════
+document.querySelectorAll('.tab-nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const page = btn.dataset.page;
+    document.querySelectorAll('.tab-nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + page).classList.add('active');
+    activePage = page;
+
+    if (page === 'floor') {
+      fetchFloor();
+      startSSE();
+    }
+    if (page === 'aria') {
+      fetchAgent();
+      startSSE(); // SSE pour recevoir les messages proactifs d'ARIA
+    }
+    if (page === 'agios') {
+      fetchAgios();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHART INIT
+// ═══════════════════════════════════════════════════════════════════════════
 function initCharts() {
   const baseOpts = {
     responsive: true,
@@ -423,18 +1854,35 @@ function initCharts() {
     type: 'line',
     data: {
       labels: [],
-      datasets: [{
-        label: 'PnL cumulatif (SOL)',
-        data: [],
-        borderColor: '#58a6ff',
-        backgroundColor: 'rgba(88,166,255,0.07)',
-        borderWidth: 2,
-        pointRadius: 4,
-        pointHoverRadius: 6,
-        pointBackgroundColor: '#58a6ff',
-        fill: true,
-        tension: 0.3,
-      }],
+      datasets: [
+        {
+          label: 'PnL réalisé bot (SOL)',
+          data: [],
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.07)',
+          borderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#58a6ff',
+          fill: true,
+          tension: 0.3,
+          spanGaps: true,
+        },
+        {
+          label: 'PnL manuel non réalisé (SOL)',
+          data: [],
+          borderColor: '#f0883e',
+          backgroundColor: 'rgba(240,136,62,0.07)',
+          borderWidth: 2,
+          borderDash: [6, 3],
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#f0883e',
+          fill: true,
+          tension: 0.3,
+          spanGaps: true,
+        },
+      ],
     },
     options: {
       ...baseOpts,
@@ -476,7 +1924,9 @@ function initCharts() {
   });
 }
 
-// ── Fetch ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// DASHBOARD DATA
+// ═══════════════════════════════════════════════════════════════════════════
 async function fetchData() {
   try {
     const r = await fetch('/api/data');
@@ -492,18 +1942,33 @@ async function fetchData() {
   }
 }
 
-// ── Render ───────────────────────────────────────────────────────────────
 function render(d) {
-  renderStats(d.stats, d.weekly);
-  renderCumulChart(d.pnlTimeline);
+  renderStats(d.stats, d.weekly, d.walletBalance, d.walletAddress);
+  renderCumulChart(d.pnlTimeline, d.manualTimeline);
   renderDailyChart(d.dailyPnl);
   renderWeekly(d.weekly);
+  renderWalletTokens(d.walletTokens || [], d.positions || []);
   renderPositions(d.positions);
   renderHistory(d.history);
+  renderRecentAnalyses(d.recentAnalyses);
 }
 
-// ── Stats cards ──────────────────────────────────────────────────────────
-function renderStats(s, w) {
+function renderStats(s, w, walletBalance, walletAddress) {
+  // Balance wallet
+  const balEl = document.getElementById('cBalance');
+  if (walletBalance !== null && walletBalance !== undefined) {
+    balEl.textContent = walletBalance.toFixed(4) + ' SOL';
+    balEl.className = 'card-value c-blue';
+    if (walletAddress) {
+      const short = walletAddress.slice(0, 6) + '…' + walletAddress.slice(-4);
+      document.getElementById('cBalanceAddr').textContent = short;
+    }
+  } else {
+    balEl.textContent = '— SOL';
+    balEl.className = 'card-value';
+    document.getElementById('cBalanceAddr').textContent = 'Wallet non chargé';
+  }
+
   setText('cPos', s.openPositions);
 
   const pnlEl = document.getElementById('cPnl');
@@ -521,32 +1986,56 @@ function renderStats(s, w) {
   setText('cWkTrades', w.trades + ' trade(s) cette semaine');
 }
 
-// ── PnL cumulatif ────────────────────────────────────────────────────────
-function renderCumulChart(timeline) {
-  allTimeline = timeline || [];
+function renderCumulChart(timeline, manualTimeline) {
+  allTimeline       = timeline       || [];
+  allManualTimeline = manualTimeline || [];
   drawCumul();
 }
 
 function drawCumul() {
-  let data = allTimeline;
+  let data       = allTimeline;
+  let manualData = allManualTimeline;
+
   if (chartRange > 0) {
     const cut = Date.now() - chartRange * 864e5;
-    data = data.filter(p => p.t >= cut);
+    data       = data.filter(p => p.t >= cut);
+    manualData = manualData.filter(p => p.t >= cut);
   }
 
-  const points = data.length === 0 ? [{ t: Date.now(), pnl: 0 }] : data;
-  const lastPnl = points[points.length - 1]?.pnl ?? 0;
+  // Fusionne tous les timestamps des deux séries → axe X commun
+  const allTs = [...new Set([
+    ...(data.length       ? data       : [{ t: Date.now() }]).map(p => p.t),
+    ...(manualData.length ? manualData : []).map(p => p.t),
+  ])].sort((a, b) => a - b);
 
-  cumulChart.data.labels = points.map(p =>
-    new Date(p.t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  const labels = allTs.map(t =>
+    new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
   );
-  cumulChart.data.datasets[0].data            = points.map(p => p.pnl);
-  cumulChart.data.datasets[0].borderColor     = lastPnl >= 0 ? '#58a6ff' : '#f85149';
-  cumulChart.data.datasets[0].backgroundColor = lastPnl >= 0 ? 'rgba(88,166,255,0.07)' : 'rgba(248,81,73,0.07)';
+
+  // Step-function : pour chaque timestamp, prend la dernière valeur connue (ou null)
+  function stepValues(series, ts) {
+    return ts.map(t => {
+      const pts = series.filter(p => p.t <= t);
+      return pts.length > 0 ? pts[pts.length - 1].pnl : null;
+    });
+  }
+
+  const botValues    = stepValues(data,       allTs);
+  const manualValues = stepValues(manualData, allTs);
+
+  const lastBotPnl = botValues.filter(v => v !== null).pop() ?? 0;
+
+  cumulChart.data.labels = labels;
+
+  cumulChart.data.datasets[0].data            = botValues;
+  cumulChart.data.datasets[0].borderColor     = lastBotPnl >= 0 ? '#58a6ff' : '#f85149';
+  cumulChart.data.datasets[0].backgroundColor = lastBotPnl >= 0 ? 'rgba(88,166,255,0.07)' : 'rgba(248,81,73,0.07)';
+
+  cumulChart.data.datasets[1].data = manualValues;
+
   cumulChart.update();
 }
 
-// ── PnL journalier ───────────────────────────────────────────────────────
 function renderDailyChart(daily) {
   if (!daily) return;
   dailyChart.data.labels                         = daily.map(d => d.label);
@@ -557,7 +2046,6 @@ function renderDailyChart(daily) {
   dailyChart.update();
 }
 
-// ── Résumé semaine ───────────────────────────────────────────────────────
 function renderWeekly(w) {
   const pEl = document.getElementById('wPnl');
   pEl.textContent = fSol(w.pnl);
@@ -576,7 +2064,39 @@ function renderWeekly(w) {
     .join('') || '<li class="alert-item info"><span>Aucune alerte.</span></li>';
 }
 
-// ── Positions ────────────────────────────────────────────────────────────
+function renderWalletTokens(tokens, positions) {
+  const tbody = document.getElementById('walletTokenBody');
+  const countEl = document.getElementById('walletTokenCount');
+
+  if (!tokens || tokens.length === 0) {
+    countEl.textContent = '0 token';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Aucun token SPL dans le wallet</td></tr>';
+    return;
+  }
+
+  // Index des mints trackés par le bot
+  const trackedMints = new Set((positions || []).map(p => p.tokenMint));
+
+  countEl.textContent = tokens.length + ' token' + (tokens.length !== 1 ? 's' : '');
+
+  tbody.innerHTML = tokens.map(t => {
+    const mintShortStr = t.mint ? t.mint.slice(0, 6) + '…' + t.mint.slice(-4) : '—';
+    const qtyStr   = t.amount < 0.000001 ? t.amount.toExponential(2) : t.amount.toLocaleString('fr-FR', { maximumFractionDigits: 4 });
+    const priceStr = t.price  != null ? '$' + (t.price < 0.0001 ? t.price.toExponential(4) : t.price.toFixed(6)) : '—';
+    const valueStr = t.valueUsd != null ? '$' + t.valueUsd.toFixed(2) : '—';
+    const tracked  = trackedMints.has(t.mint);
+    const dexUrl   = `https://gmgn.ai/sol/token/${t.mint}`;
+
+    return `<tr>
+      <td><a href="${dexUrl}" target="_blank" class="mono" title="${t.mint}">${mintShortStr}</a></td>
+      <td class="mono">${qtyStr}</td>
+      <td>${priceStr}</td>
+      <td class="${t.valueUsd > 0 ? 'c-green' : ''}">${valueStr}</td>
+      <td>${tracked ? '<span class="c-green">✅ Suivi</span>' : '<span class="c-muted">—</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
 function renderPositions(positions) {
   document.getElementById('posCount').textContent =
     positions.length + ' position' + (positions.length !== 1 ? 's' : '');
@@ -593,10 +2113,10 @@ function renderPositions(positions) {
       <tr>
         <td>
           <span class="mono c-blue" title="${p.tokenMint}">${mintShort(p.tokenMint)}</span><br>
-          <a class="dex-link" href="https://dexscreener.com/solana/${p.tokenMint}" target="_blank">DexScreener ↗</a>
+          <a class="dex-link" href="https://gmgn.ai/sol/token/${p.tokenMint}" target="_blank">GMGN ↗</a>
         </td>
-        <td>${fPrice(p.entryPriceUsd)}</td>
-        <td>${fPrice(p.currentPrice)}</td>
+        <td title="${fPrice(p.entryPriceUsd)}">${p.entryMcapUsd ? fMcap(p.entryMcapUsd) : fPrice(p.entryPriceUsd)}</td>
+        <td title="${fPrice(p.currentPrice)}">${p.currentMcapUsd ? fMcap(p.currentMcapUsd) : fPrice(p.currentPrice)}</td>
         <td class="${cClass(p.pnlPct)}">${fPct(p.pnlPct)}</td>
         <td class="${cClass(p.pnlSol)}">${fSol(p.pnlSol)}</td>
         <td class="c-muted">${p.solSpent?.toFixed(3)} ◎</td>
@@ -607,15 +2127,20 @@ function renderPositions(positions) {
   }).join('');
 }
 
-// ── Historique ───────────────────────────────────────────────────────────
 function renderHistory(history) {
   document.getElementById('histCount').textContent = history.length + ' entrées';
 
   const tbody = document.getElementById('histBody');
   if (history.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucun trade dans l\'historique</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucun trade dans l\'historique</td></tr>';
     return;
   }
+
+  const reasonMap = {
+    STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 TP palier 1', TAKE_PROFIT_2: '🎯🎯 TP palier 2', TRAILING_STOP: '📐 Trailing',
+    MANUAL: '👆 Manuel', ARIA_DECISION: '🤖 ARIA', ESCAPE_SIGNAL: '🚨 Fuite rug',
+    BREAKEVEN_STOP: '⚖️ Break-even', EXTERNAL_SELL: '🔀 Vendu hors bot',
+  };
 
   tbody.innerHTML = history.map(h => {
     const isSell = h.action === 'SELL';
@@ -628,6 +2153,9 @@ function renderHistory(history) {
     const badge  = isSell
       ? '<span class="badge b-sell">SELL</span>'
       : '<span class="badge b-buy">BUY</span>';
+    const reason = isSell
+      ? (reasonMap[h.exitReason] || esc(h.exitReason || '—'))
+      : (h.imported ? '📥 Importé' : '—');
     const result = isSell && h.pnlSol != null
       ? (h.pnlSol > 0
           ? '<span class="badge b-win">✅ WIN</span>'
@@ -641,12 +2169,38 @@ function renderHistory(history) {
         <td>${badge}</td>
         <td class="c-muted">${sol}</td>
         <td>${pnlStr}</td>
+        <td class="c-muted">${reason}</td>
         <td>${result}</td>
       </tr>`;
   }).join('');
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────
+function renderRecentAnalyses(analyses) {
+  const grid  = document.getElementById('analysesGrid');
+  const count = document.getElementById('analysesCount');
+  if (!analyses || analyses.length === 0) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1">Aucune analyse pour l\'instant</div>';
+    count.textContent = '—';
+    return;
+  }
+  count.textContent = analyses.length + ' / 20';
+  grid.innerHTML = analyses.map(a => {
+    const isBuy    = a.decision === 'BUY';
+    const isHot    = !isBuy && a.score != null && a.score > 50;
+    const cls      = isBuy ? 'ac-green' : isHot ? 'ac-orange' : 'ac-red';
+    const scoreStr = a.score != null ? a.score + '/100' : '—';
+    const timeStr  = a.timestamp ? fTime(a.timestamp) : '';
+    const dexUrl   = `https://gmgn.ai/sol/token/${a.mint}`;
+    const label    = isBuy ? '✅ VALIDÉ' : isHot ? '🔶 REFUSÉ' : '❌ REFUSÉ';
+    return `<a class="analysis-card ${cls}" href="${dexUrl}" target="_blank" title="${esc(a.mint)}">
+      <div class="ac-symbol">$${esc(a.symbol)}</div>
+      <div class="ac-score ${cls}">${scoreStr}</div>
+      <div class="ac-decision ${cls}">${label}</div>
+      <div class="ac-time">${timeStr}</div>
+    </a>`;
+  }).join('');
+}
+
 document.querySelectorAll('.tab[data-range]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab[data-range]').forEach(b => b.classList.remove('active'));
@@ -656,7 +2210,311 @@ document.querySelectorAll('.tab[data-range]').forEach(btn => {
   });
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// TRADING FLOOR
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function fetchFloor() {
+  try {
+    const r = await fetch('/api/floor');
+    if (!r.ok) return;
+    const d = await r.json();
+
+    // Toggle state
+    const cb = document.getElementById('agentToggle');
+    cb.checked = d.agentsEnabled;
+    updateToggleUI(d.agentsEnabled);
+
+    // Chat log (historique)
+    chatMessages = d.chatLog || [];
+    renderChatLog();
+
+    // Stats agents + statut poids dynamiques
+    renderAgentStats(d.agentStats, d.dynamicWeights);
+    const wStatus = document.getElementById('weightsStatus');
+    if (wStatus && d.dynamicWeights) {
+      if (d.dynamicWeights.adapted) {
+        wStatus.textContent  = '⚡ poids adaptatifs actifs';
+        wStatus.style.color  = '#f0883e';
+      } else {
+        wStatus.textContent  = 'poids fixes (< 5 signaux/agent)';
+        wStatus.style.color  = '';
+      }
+    }
+
+    // Lessons
+    renderLessons(d.lessons);
+
+    // Suggestions
+    renderSuggestions(d.suggestions);
+
+  } catch (err) {
+    console.error('fetchFloor error:', err);
+  }
+}
+
+// ─── Toggle ────────────────────────────────────────────────────────────────
+
+async function toggleAgents(enabled) {
+  try {
+    const r = await fetch('/api/agents/toggle', { method: 'POST' });
+    const d = await r.json();
+    updateToggleUI(d.agentsEnabled);
+    // Resync checkbox au cas où
+    document.getElementById('agentToggle').checked = d.agentsEnabled;
+  } catch {
+    // Revert checkbox si erreur réseau
+    document.getElementById('agentToggle').checked = !enabled;
+  }
+}
+
+function updateToggleUI(enabled) {
+  const el = document.getElementById('toggleStatus');
+  el.textContent  = enabled ? 'ON' : 'OFF';
+  el.className    = 'toggle-status ' + (enabled ? 'on' : 'off');
+}
+
+// ─── Chat ──────────────────────────────────────────────────────────────────
+
+const AGENT_ICONS = {
+  Momentum: '📈', Whale: '🐳', Bull: '🐂', Bear: '🐻', Coordinateur: '🎯', system: '🤖',
+};
+
+function renderChatLog() {
+  const feed = document.getElementById('chatFeed');
+  if (chatMessages.length === 0) {
+    feed.innerHTML = `<div class="empty-floor"><div class="big">🤖</div>En attente des agents…<br><span style="font-size:12px">Les messages apparaîtront lors des prochains débats.</span></div>`;
+    return;
+  }
+  feed.innerHTML = chatMessages.map(m => buildChatBubble(m)).join('');
+  setText('chatCount', chatMessages.length + ' message' + (chatMessages.length > 1 ? 's' : ''));
+  scrollChatToBottom();
+}
+
+function buildChatBubble(m) {
+  if (m.type === 'system') {
+    return `<div class="chat-msg system">
+      <div class="chat-avatar system">🤖</div>
+      <div class="chat-body">
+        <div class="chat-header">
+          <span class="chat-name system">Système</span>
+          <span class="chat-time">${fTime(m.timestamp)}</span>
+        </div>
+        <div class="chat-content">${esc(m.content)}</div>
+      </div>
+    </div>`;
+  }
+
+  const icon = AGENT_ICONS[m.agent] || '🤖';
+  const roundLabel = m.round ? `R${m.round}` : '';
+  return `<div class="chat-msg">
+    <div class="chat-avatar ${esc(m.agent)}">${icon}</div>
+    <div class="chat-body">
+      <div class="chat-header">
+        <span class="chat-name ${esc(m.agent)}">${icon} ${esc(m.agent)}</span>
+        ${m.token ? `<span class="chat-token">$${esc(m.token)}</span>` : ''}
+        ${roundLabel ? `<span class="chat-round">Round ${m.round}</span>` : ''}
+        <span class="chat-time">${fTime(m.timestamp)}</span>
+      </div>
+      <div class="chat-content">${esc(m.content)}</div>
+    </div>
+  </div>`;
+}
+
+function appendChatMessage(m) {
+  chatMessages.push(m);
+  if (chatMessages.length > 120) chatMessages = chatMessages.slice(-120);
+
+  const feed = document.getElementById('chatFeed');
+  // Enlève le placeholder si présent
+  if (feed.querySelector('.empty-floor')) feed.innerHTML = '';
+
+  const div = document.createElement('div');
+  div.innerHTML = buildChatBubble(m);
+  feed.appendChild(div.firstElementChild);
+
+  setText('chatCount', chatMessages.length + ' message' + (chatMessages.length > 1 ? 's' : ''));
+  scrollChatToBottom();
+}
+
+function scrollChatToBottom() {
+  const feed = document.getElementById('chatFeed');
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ─── SSE ───────────────────────────────────────────────────────────────────
+
+function startSSE() {
+  if (sseSource) return; // déjà connecté
+  sseSource = new EventSource('/api/events');
+  sseSource.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      // Toujours traiter les messages ARIA (quel que soit l'onglet actif)
+      if (msg.type === 'aria_response' || msg.type === 'aria_proactive') {
+        handleAriaSSE(msg);
+        return;
+      }
+      // Journal d'activité autonome — live
+      if (msg.type === 'aria_journal') {
+        prependJournalEntry(msg.entry);
+        return;
+      }
+      if (msg.type === 'agios_journal') {
+        prependAgiosJournal(msg.entry);
+        return;
+      }
+      if (msg.type === 'agios_auth_url') {
+        showRobinhoodAuthLink(msg.url);
+        return;
+      }
+      if (activePage === 'floor') {
+        appendChatMessage(msg);
+        // Met aussi à jour les sections si un débat vient de finir
+        if (msg.agent === 'Coordinateur') {
+          fetchFloor(); // refresh stats + lessons
+        }
+      }
+    } catch {}
+  };
+  sseSource.onerror = () => {
+    sseSource.close();
+    sseSource = null;
+    // Reconnexion automatique dans 5s (toujours — le journal et les alertes sont globaux)
+    setTimeout(() => startSSE(), 5000);
+  };
+}
+
+// ─── Agent stats ──────────────────────────────────────────────────────────
+
+const AGENT_DEFS = [
+  { key: 'momentum', icon: '📈', name: 'Momentum', colorClass: 'c-blue' },
+  { key: 'whale',    icon: '🐳', name: 'Whale',    colorClass: 'c-purple' },
+  { key: 'bull',     icon: '🐂', name: 'Bull',     colorClass: 'c-green' },
+  { key: 'bear',     icon: '🐻', name: 'Bear',     colorClass: 'c-red' },
+];
+
+function renderAgentStats(stats, dynWeights) {
+  if (!stats) return;
+  const grid = document.getElementById('agentStatsGrid');
+  const w    = dynWeights?.weights   || {};
+  const defs = dynWeights?.defaults  || { momentum: 25, bull: 20, bear: 25, whale: 15 };
+  grid.innerHTML = AGENT_DEFS.map(a => {
+    const s          = stats[a.key] || { accuracy: null, total: 0, correct: 0 };
+    const acc        = s.accuracy != null ? s.accuracy + '%' : '—';
+    const cl         = s.accuracy == null ? 'c-muted' : s.accuracy >= 60 ? 'c-green' : s.accuracy >= 40 ? 'c-yellow' : 'c-red';
+    const curW       = w[a.key]    ?? defs[a.key];
+    const defW       = defs[a.key] ?? curW;
+    const adapted    = dynWeights?.adapted && w[a.key] != null && Math.abs(curW - defW) >= 0.2;
+    const weightDir  = curW > defW ? '↑' : curW < defW ? '↓' : '';
+    const weightCl   = !adapted ? 'c-muted' : curW > defW ? 'c-green' : 'c-red';
+    const weightHint = adapted
+      ? `poids: <span class="${weightCl}">${curW.toFixed(1)} ${weightDir}</span> <span class="c-muted">(déf: ${defW})</span>`
+      : `<span class="c-muted">poids: ${defW} (défaut)</span>`;
+    return `<div class="agent-stat-card">
+      <div class="agent-icon">${a.icon}</div>
+      <div class="agent-name">${a.name}</div>
+      <div class="agent-acc ${cl}">${acc}</div>
+      <div class="agent-sub">${s.total} signal${s.total !== 1 ? 's' : ''} · ${s.correct} ✓</div>
+      <div class="agent-sub" style="margin-top:4px">${weightHint}</div>
+    </div>`;
+  }).join('');
+}
+
+// ─── Lessons ───────────────────────────────────────────────────────────────
+
+function renderLessons(lessons) {
+  const tbody = document.getElementById('lessonsBody');
+  if (!lessons || lessons.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Aucun débat enregistré</td></tr>';
+    return;
+  }
+  tbody.innerHTML = lessons.slice(0, 15).map(l => {
+    const outcomeHtml = l.outcome === 'WIN'
+      ? `<span class="outcome-win">✅ WIN</span>`
+      : l.outcome === 'LOSS'
+      ? `<span class="outcome-loss">❌ LOSS</span>`
+      : `<span class="outcome-run">⏳ en cours</span>`;
+    const pnlHtml = l.pnlPct != null
+      ? `<span class="${cClass(l.pnlPct)}">${l.pnlPct >= 0 ? '+' : ''}${l.pnlPct.toFixed(1)}%</span>`
+      : '—';
+    const decClass = l.decision === 'BUY' ? 'c-green' : l.decision === 'SKIP' ? 'c-red' : 'c-yellow';
+    return `<tr class="lesson-row">
+      <td><strong>$${esc(l.symbol)}</strong></td>
+      <td class="c-blue">${l.score ?? '—'}/100</td>
+      <td class="${decClass}">${l.decision}</td>
+      <td>${outcomeHtml}</td>
+      <td>${pnlHtml}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── Suggestions ──────────────────────────────────────────────────────────
+
+const AGENT_LABEL = { bull: '🐂 Bull', bear: '🐻 Bear', momentum: '📈 Momentum', whale: '🐳 Whale', coordinator: '🎯 Coordinateur', risk: '⚠️ Risk' };
+
+function renderSuggestions(suggestions) {
+  const body = document.getElementById('suggBody');
+  const count = document.getElementById('suggCount');
+
+  if (!suggestions || suggestions.length === 0) {
+    body.innerHTML = `<div class="empty-floor" style="padding:28px"><div class="big" style="font-size:28px">💡</div>Les agents proposeront des améliorations ici<br>après suffisamment de trades analysés.</div>`;
+    count.textContent = '—';
+    return;
+  }
+
+  const pending = suggestions.filter(s => s.status === 'pending').length;
+  count.textContent = `${pending} en attente · ${suggestions.length} total`;
+
+  body.innerHTML = suggestions.map(s => {
+    const agentLabel = AGENT_LABEL[s.agent] || s.agent;
+    const isPending  = s.status === 'pending';
+    const dateStr    = new Date(s.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const statusBadge = s.status === 'approved'
+      ? `<span class="c-green" style="font-size:11px">✅ Approuvée</span>`
+      : s.status === 'rejected'
+      ? `<span class="c-red" style="font-size:11px">❌ Rejetée</span>`
+      : `<span class="c-yellow" style="font-size:11px">⏳ En attente</span>`;
+
+    const actionBtns = isPending
+      ? `<div class="sugg-actions">
+          <button class="btn btn-approve" onclick="approveSugg('${esc(s.id)}', this)">✅ Appliquer</button>
+          <button class="btn btn-reject"  onclick="rejectSugg('${esc(s.id)}', this)">❌ Ignorer</button>
+        </div>`
+      : '';
+
+    return `<div class="suggestion-card ${esc(s.status)}" id="sugg-${esc(s.id)}">
+      <div class="sugg-meta">
+        <span class="sugg-agent">${agentLabel}</span>
+        <span>·</span>
+        <span>${dateStr}</span>
+        <span style="margin-left:auto">${statusBadge}</span>
+      </div>
+      <div class="sugg-text">${esc(s.suggestion)}</div>
+      ${actionBtns}
+    </div>`;
+  }).join('');
+}
+
+async function approveSugg(id, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/suggestions/${id}/approve`, { method: 'POST' });
+    fetchFloor();
+  } catch { btn.disabled = false; }
+}
+
+async function rejectSugg(id, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/suggestions/${id}/reject`, { method: 'POST' });
+    fetchFloor();
+  } catch { btn.disabled = false; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
 function fSol(v) {
   if (v == null) return '—';
   return (v >= 0 ? '+' : '') + v.toFixed(4) + ' ◎';
@@ -665,6 +2523,14 @@ function fPct(v) { return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1)
 function fPrice(v) {
   if (v == null) return '—';
   return '$' + (v < 0.0001 ? v.toExponential(2) : v.toFixed(6));
+}
+/* Market cap compact — l'unité parlante des meme coins */
+function fMcap(v) {
+  if (v == null || v <= 0) return '—';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+  return '$' + v.toFixed(0);
 }
 function fDur(ms) {
   const s = Math.floor(ms / 1000);
@@ -675,20 +2541,1007 @@ function fDur(ms) {
   if (h < 24)   return h + 'h' + (m % 60 ? (m % 60) + 'm' : '');
   return Math.floor(h / 24) + 'j';
 }
+function fTime(ts) {
+  if (!ts) return '';
+  return new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 function mintShort(m) { return m ? m.slice(0, 4) + '…' + m.slice(-4) : '—'; }
 function cClass(v)    { return v > 0 ? 'c-green' : v < 0 ? 'c-red' : ''; }
-function setText(id, v) { document.getElementById(id).textContent = v; }
+function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
 function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-// ── Boot ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// ARIA — AGENT IA PERSONNEL
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ARIA_MOOD_EMOJI = { focused:'🎯', excited:'🚀', cautious:'🛡️', concerned:'😟', satisfied:'😊' };
+
+async function fetchAgent() {
+  try {
+    const r    = await fetch('/api/agent');
+    const data = await r.json();
+    renderAriaState(data.state);
+    renderAriaConversation(data.conversation);
+    renderAutonomy(data.autonomy);
+    renderJournal(data.journal);
+  } catch (err) {
+    console.error('fetchAgent error:', err);
+  }
+}
+
+// ─── Autonomie ──────────────────────────────────────────────────────────────
+
+let currentAutonomy = null;
+
+function renderAutonomy(a) {
+  if (!a) return;
+  currentAutonomy = a;
+
+  document.getElementById('autoEnabled').checked = a.enabled;
+  document.getElementById('autoLive').checked    = a.liveTrading;
+  document.getElementById('autoCopy').checked    = a.copyTrading !== false;
+  document.getElementById('autoMinScore').value  = a.minScore;
+  document.getElementById('autoFlexScore').value = a.flexScore ?? 55;
+  document.getElementById('autoMinConf').value   = a.minConfidence;
+  document.getElementById('autoMinSol').value    = a.minSolPerTrade ?? 0.05;
+  document.getElementById('autoMaxSol').value    = a.maxSolPerTrade;
+  document.getElementById('autoMaxPos').value    = a.maxOpenPositions;
+  document.getElementById('autoMaxLoss').value   = a.maxDailyLossSol;
+
+  const badge = document.getElementById('autoBadge');
+  if (a.liveTrading && a.enabled) {
+    badge.textContent = '🔴 TRADING RÉEL';
+    badge.className   = 'auto-badge live';
+  } else if (a.enabled) {
+    badge.textContent = '✅ ACTIVE (signaux)';
+    badge.className   = 'auto-badge on';
+  } else {
+    badge.textContent = 'OFF';
+    badge.className   = 'auto-badge off';
+  }
+
+  updateAriaChip(a);
+}
+
+function updateAriaChip(a) {
+  const chip = document.getElementById('ariaChip');
+  const txt  = document.getElementById('ariaChipText');
+  if (!chip || !a) return;
+  if (a.liveTrading && a.enabled) {
+    chip.className = 'aria-chip live';
+    txt.textContent = 'ARIA · trading réel';
+  } else if (a.enabled) {
+    chip.className = 'aria-chip on';
+    txt.textContent = 'ARIA · autonome';
+  } else {
+    chip.className = 'aria-chip';
+    txt.textContent = 'ARIA · off';
+  }
+}
+
+function confirmLiveTrading(cb) {
+  if (cb.checked) {
+    const ok = confirm(
+      '⚠️ TRADING RÉEL\n\nARIA va acheter et vendre SEULE avec les vrais SOL de ton wallet, ' +
+      'dans les plafonds configurés.\n\nActiver ?'
+    );
+    if (!ok) { cb.checked = false; return; }
+  }
+  saveAutonomy();
+}
+
+async function saveAutonomy() {
+  const patch = {
+    enabled:          document.getElementById('autoEnabled').checked,
+    liveTrading:      document.getElementById('autoLive').checked,
+    copyTrading:      document.getElementById('autoCopy').checked,
+    minScore:         parseFloat(document.getElementById('autoMinScore').value),
+    flexScore:        parseFloat(document.getElementById('autoFlexScore').value),
+    minConfidence:    parseFloat(document.getElementById('autoMinConf').value),
+    minSolPerTrade:   parseFloat(document.getElementById('autoMinSol').value),
+    maxSolPerTrade:   parseFloat(document.getElementById('autoMaxSol').value),
+    maxOpenPositions: parseFloat(document.getElementById('autoMaxPos').value),
+    maxDailyLossSol:  parseFloat(document.getElementById('autoMaxLoss').value),
+  };
+  const msg = document.getElementById('autoSaveMsg');
+  try {
+    const r = await fetch('/api/agent/autonomy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      renderAutonomy(d.autonomy);
+      msg.textContent = '✅ Sauvegardé';
+      msg.className   = 'c-green';
+    } else {
+      msg.textContent = '❌ ' + (d.error || 'Erreur');
+      msg.className   = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className   = 'c-red';
+  }
+  setTimeout(() => { msg.textContent = ''; }, 2500);
+}
+
+// ─── Journal d'activité ─────────────────────────────────────────────────────
+
+const JOURNAL_ICONS = {
+  SIGNAL: '📡', BUY: '🟢', SELL: '🔴', ADJUST: '🛠', WATCHLIST: '👁', WALLET: '🔭',
+  ALERT: '🔔', REPORT: '📊', LEARN: '📚', PAUSE: '⏸', CONFIG: '⚙️', ERROR: '❌',
+};
+
+function journalItemHtml(e) {
+  const icon = JOURNAL_ICONS[e.type] || '·';
+  const ts   = new Date(e.ts).toLocaleString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  return `<div class="journal-item j-${esc(e.type)}">
+    <span class="journal-icon">${icon}</span>
+    <span class="journal-detail">${esc(e.detail)}</span>
+    <span class="journal-ts">${ts}</span>
+  </div>`;
+}
+
+function renderJournal(journal) {
+  const feed  = document.getElementById('journalFeed');
+  const count = document.getElementById('journalCount');
+  if (!feed) return;
+  if (!journal || journal.length === 0) {
+    feed.innerHTML = `<div class="c-muted" style="font-size:11px; text-align:center; padding:14px">
+      Les actions autonomes d'ARIA<br>(achats, ventes, alertes, apprentissage)<br>apparaîtront ici.
+    </div>`;
+    if (count) count.textContent = '0 action';
+    return;
+  }
+  feed.innerHTML = journal.map(journalItemHtml).join('');
+  if (count) count.textContent = journal.length + ' action' + (journal.length > 1 ? 's' : '');
+}
+
+function prependJournalEntry(entry) {
+  const feed = document.getElementById('journalFeed');
+  if (!feed) return;
+  if (feed.querySelector('.c-muted')) feed.innerHTML = '';
+  feed.insertAdjacentHTML('afterbegin', journalItemHtml(entry));
+}
+
+function renderAriaState(s) {
+  if (!s) return;
+  const emoji = ARIA_MOOD_EMOJI[s.mood] || '🤖';
+  document.getElementById('ariaAvatar').textContent   = emoji;
+  document.getElementById('ariaName').textContent     = s.name;
+  document.getElementById('ariaStyle').textContent    = `style: ${s.tradingStyle}`;
+  document.getElementById('ariaMoodBadge').textContent = s.moodLabel;
+  document.getElementById('ariaConfidence').textContent = `${s.confidence}/10`;
+  document.getElementById('ariaRisk').textContent       = `${s.riskTolerance}/10`;
+  document.getElementById('ariaAggr').textContent       = `${s.aggressiveness}/10`;
+  document.getElementById('barConfidence').style.width  = `${s.confidence * 10}%`;
+  document.getElementById('barRisk').style.width        = `${s.riskTolerance * 10}%`;
+  document.getElementById('barAggr').style.width        = `${s.aggressiveness * 10}%`;
+  document.getElementById('ariaStatAnalyses').textContent = s.stats.tradesAnalyzed;
+  document.getElementById('ariaStatCorrect').textContent  = s.stats.correctCalls;
+  document.getElementById('ariaStatWin').textContent      = s.stats.winStreak > 0 ? `🔥 ${s.stats.winStreak}` : s.stats.winStreak;
+
+  const traitsEl = document.getElementById('ariaTraits');
+  traitsEl.innerHTML = s.traits.map(t => `<span class="trait-pill">${esc(t)}</span>`).join('');
+
+  const lessonsEl = document.getElementById('ariaLessons');
+  if (s.lessons && s.lessons.length > 0) {
+    lessonsEl.style.display = '';
+    document.getElementById('ariaLessonsList').innerHTML = s.lessons.map(l => `<div style="margin-bottom:4px">• ${esc(l)}</div>`).join('');
+  } else {
+    lessonsEl.style.display = 'none';
+  }
+
+  renderAriaWatchlist(s.watchlist);
+}
+
+function renderAriaConversation(conv) {
+  const chat = document.getElementById('ariaChat');
+  if (!conv || conv.length === 0) {
+    chat.innerHTML = `<div class="c-muted" style="text-align:center; margin:auto; font-size:13px">
+      ARIA attend que tu lui parles 👋<br><br>
+      <span style="font-size:11px">Tu peux lui poser des questions, lui donner des tokens à surveiller,<br>lui demander son avis sur le marché…</span>
+    </div>`;
+    return;
+  }
+  chat.innerHTML = conv.map(m => {
+    const bubbleClass = m.proactive ? 'proactive' : m.role === 'user' ? 'user' : 'assistant';
+    const tsClass     = m.role === 'user' ? 'right' : '';
+    const prefix      = m.proactive ? '🔔 ' : '';
+    const time        = m.timestamp ? new Date(m.timestamp).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }) : '';
+    return `<div class="aria-msg-wrap">
+      <div class="aria-bubble ${bubbleClass}">${prefix}${esc(m.content)}</div>
+      <div class="aria-ts ${tsClass}">${time}</div>
+    </div>`;
+  }).join('');
+  // Scroll en bas
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function renderAriaWatchlist(wl) {
+  const tokenEl = document.getElementById('watchTokenList');
+  const walletEl = document.getElementById('watchWalletList');
+
+  if (!wl.tokens || wl.tokens.length === 0) {
+    tokenEl.innerHTML = `<div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun token suivi</div>`;
+  } else {
+    tokenEl.innerHTML = wl.tokens.map(t => `
+      <div class="watch-item">
+        <div>
+          <span style="font-weight:600">${esc(t.symbol || '?')}</span>
+          ${t.auto ? '<span title="Ajouté automatiquement par ARIA" style="font-size:10px">🤖</span>' : ''}
+          <span class="c-muted" style="margin-left:4px">${esc(t.address.slice(0,6))}…</span>
+          ${t.reason ? `<div class="c-muted" style="font-size:10px">${esc(t.reason)}</div>` : ''}
+        </div>
+        <button class="btn-rm" onclick="removeWatchItem('token','${esc(t.address)}')" title="Retirer">✕</button>
+      </div>`).join('');
+  }
+
+  if (!wl.wallets || wl.wallets.length === 0) {
+    walletEl.innerHTML = `<div class="c-muted" style="font-size:11px; text-align:center; padding:8px">Aucun wallet suivi</div>`;
+  } else {
+    walletEl.innerHTML = wl.wallets.map(w => `
+      <div class="watch-item">
+        <div>
+          <span style="font-weight:600">${esc(w.label || w.address.slice(0,8)+'…')}</span>
+          <div class="c-muted" style="font-size:10px">${esc(w.address.slice(0,10))}…</div>
+        </div>
+        <button class="btn-rm" onclick="removeWatchItem('wallet','${esc(w.address)}')" title="Retirer">✕</button>
+      </div>`).join('');
+  }
+}
+
+let ariaSending = false;
+async function sendAriaChat() {
+  if (ariaSending) return;
+  const input = document.getElementById('ariaChatInput');
+  const msg   = input.value.trim();
+  if (!msg) return;
+
+  ariaSending = true;
+  input.value = '';
+
+  // Affiche le message utilisateur immédiatement
+  const chat = document.getElementById('ariaChat');
+  const time  = new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+  chat.innerHTML += `<div class="aria-msg-wrap">
+    <div class="aria-bubble user">${esc(msg)}</div>
+    <div class="aria-ts right">${time}</div>
+  </div>
+  <div id="ariaTyping" class="aria-msg-wrap">
+    <div class="aria-bubble assistant c-muted">…</div>
+  </div>`;
+  chat.scrollTop = chat.scrollHeight;
+
+  try {
+    const r    = await fetch('/api/agent/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    const data = await r.json();
+
+    document.getElementById('ariaTyping')?.remove();
+    if (data.ok) {
+      const t = new Date().toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+      chat.innerHTML += `<div class="aria-msg-wrap">
+        <div class="aria-bubble assistant">${esc(data.reply)}</div>
+        <div class="aria-ts">${t}</div>
+      </div>`;
+      if (data.ariaState) renderAriaState(data.ariaState);
+    } else {
+      chat.innerHTML += `<div class="aria-bubble assistant c-red">Erreur: ${esc(data.error)}</div>`;
+    }
+  } catch (err) {
+    document.getElementById('ariaTyping')?.remove();
+    chat.innerHTML += `<div class="aria-bubble assistant c-red">Erreur réseau</div>`;
+  } finally {
+    ariaSending = false;
+    chat.scrollTop = chat.scrollHeight;
+  }
+}
+
+async function addWatchItem(type) {
+  const addrEl   = document.getElementById(type === 'token' ? 'watchTokenAddr' : 'watchWalletAddr');
+  const labelEl  = document.getElementById(type === 'token' ? 'watchTokenSym'  : 'watchWalletLabel');
+  const address  = addrEl.value.trim();
+  const labelVal = labelEl.value.trim();
+  if (!address) return;
+
+  const body = { action: 'add', type, address };
+  if (type === 'token')  body.symbol = labelVal || '?';
+  if (type === 'wallet') body.label  = labelVal;
+
+  try {
+    const r = await fetch('/api/agent/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      addrEl.value = ''; labelEl.value = '';
+      renderAriaWatchlist(data.watchlist);
+    }
+  } catch (err) { console.error('addWatchItem:', err); }
+}
+
+async function removeWatchItem(type, address) {
+  try {
+    const r = await fetch('/api/agent/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'remove', type, address }),
+    });
+    const data = await r.json();
+    if (data.ok) renderAriaWatchlist(data.watchlist);
+  } catch (err) { console.error('removeWatchItem:', err); }
+}
+
+// Écoute les messages proactifs d'ARIA via SSE
+function handleAriaSSE(entry) {
+  if (entry.type !== 'aria_response' && entry.type !== 'aria_proactive') return;
+  const chat = document.getElementById('ariaChat');
+  if (!chat) return;
+  const bubbleClass = entry.type === 'aria_proactive' ? 'proactive' : 'assistant';
+  const prefix      = entry.type === 'aria_proactive' ? '🔔 ' : '';
+  const time        = new Date(entry.timestamp || Date.now()).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' });
+  chat.innerHTML += `<div class="aria-msg-wrap">
+    <div class="aria-bubble ${bubbleClass}">${prefix}${esc(entry.content)}</div>
+    <div class="aria-ts">${time}</div>
+  </div>`;
+  chat.scrollTop = chat.scrollHeight;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PAPER TRADING
+// ═══════════════════════════════════════════════════════════════════════════
+let paperCumulChart, paperDailyChart;
+
+function initPaperCharts() {
+  const baseOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#1c2128', borderColor: '#21262d', borderWidth: 1,
+        titleColor: '#7d8590', bodyColor: '#e6edf3', padding: 10,
+      },
+    },
+  };
+  const gridColor = '#21262d';
+  const tickColor = '#7d8590';
+
+  paperCumulChart = new Chart(document.getElementById('paperCumulChart').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'PnL paper (SOL)', data: [],
+        borderColor: '#e3b341', backgroundColor: 'rgba(227,179,65,0.07)',
+        borderWidth: 2, pointRadius: 4, pointHoverRadius: 6,
+        pointBackgroundColor: '#e3b341', fill: true, tension: 0.3,
+      }],
+    },
+    options: {
+      ...baseOpts,
+      scales: {
+        x: { ticks: { color: tickColor, maxTicksLimit: 8, maxRotation: 0 }, grid: { color: gridColor } },
+        y: { ticks: { color: tickColor, callback: v => v.toFixed(3) + ' ◎' }, grid: { color: gridColor } },
+      },
+    },
+  });
+
+  paperDailyChart = new Chart(document.getElementById('paperDailyChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [{ label: 'PnL journalier paper (SOL)', data: [], backgroundColor: [], borderRadius: 5, borderSkipped: false }],
+    },
+    options: {
+      ...baseOpts,
+      scales: {
+        x: { ticks: { color: tickColor }, grid: { display: false } },
+        y: { ticks: { color: tickColor, callback: v => v.toFixed(3) + ' ◎' }, grid: { color: gridColor } },
+      },
+    },
+  });
+}
+
+async function fetchPaper() {
+  try {
+    const r = await fetch('/api/paper');
+    if (!r.ok) return;
+    const d = await r.json();
+    renderPaper(d);
+  } catch {}
+}
+
+function renderPaper(d) {
+  const { stats, config, positions, history, timeline, dailyPnl } = d;
+
+  // Cards
+  const portEl = document.getElementById('ppPortfolio');
+  portEl.textContent = fSol(stats.portfolioValue).replace('+', '');
+  portEl.className   = 'pnl-total-big ' + cClass(stats.totalPnlPct);
+  setText('ppPortfolioSub', config.startingBalance + ' SOL de départ');
+
+  const tpEl = document.getElementById('ppTotalPnl');
+  tpEl.textContent = (stats.totalPnlPct >= 0 ? '+' : '') + stats.totalPnlPct.toFixed(2) + '%';
+  tpEl.className   = 'card-value ' + cClass(stats.totalPnlPct);
+  setText('ppTotalPct', fSol(stats.portfolioValue - config.startingBalance) + ' vs départ');
+
+  const rpEl = document.getElementById('ppRealPnl');
+  rpEl.textContent = fSol(stats.realizedPnl);
+  rpEl.className   = 'card-value ' + cClass(stats.realizedPnl);
+  setText('ppTrades', stats.totalTrades + ' trades fermés');
+
+  const wrEl = document.getElementById('ppWr');
+  wrEl.textContent = stats.winRate != null ? stats.winRate + '%' : '—';
+  wrEl.className   = 'card-value ' + (stats.winRate >= 50 ? 'c-green' : stats.winRate != null ? 'c-red' : '');
+  setText('ppWrSub', stats.wins + ' W / ' + stats.losses + ' L');
+
+  const openEl = document.getElementById('ppOpen');
+  openEl.textContent = stats.openPositions;
+  setText('ppOpenSub', stats.totalInvested.toFixed(3) + ' SOL investi');
+
+  // Config inputs
+  document.getElementById('cfgMinScore').value   = config.minScore;
+  document.getElementById('cfgSl').value          = config.slPct;
+  document.getElementById('cfgTp').value          = config.tpPct;
+  document.getElementById('cfgPosPct').value      = config.maxPositionPct;
+  document.getElementById('cfgMaxPos').value      = config.maxPositions;
+  document.getElementById('cfgTrailAct').value    = config.trailingActivation;
+  document.getElementById('cfgTrailDist').value   = config.trailingDistance;
+  document.getElementById('cfgResetBal').value    = config.startingBalance;
+  setText('ppMinScore', config.minScore);
+
+  // Summary
+  const sumPnlEl = document.getElementById('ppSumPnl');
+  sumPnlEl.textContent = fSol(stats.realizedPnl);
+  sumPnlEl.className   = 'week-val ' + cClass(stats.realizedPnl);
+  const sumWrEl = document.getElementById('ppSumWr');
+  sumWrEl.textContent = stats.winRate != null ? stats.winRate + '%' : '—';
+  sumWrEl.className   = 'week-val ' + (stats.winRate >= 50 ? 'c-green' : stats.winRate != null ? 'c-red' : '');
+  setText('ppSumW', stats.wins);
+  setText('ppSumL', stats.losses);
+
+  // Charts
+  if (timeline && paperCumulChart) {
+    const pts = timeline.length === 0 ? [{ t: Date.now(), pnl: 0 }] : timeline;
+    const lastPnl = pts[pts.length - 1]?.pnl ?? 0;
+    paperCumulChart.data.labels           = pts.map(p => new Date(p.t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
+    paperCumulChart.data.datasets[0].data = pts.map(p => p.pnl);
+    paperCumulChart.data.datasets[0].borderColor     = lastPnl >= 0 ? '#e3b341' : '#f85149';
+    paperCumulChart.data.datasets[0].backgroundColor = lastPnl >= 0 ? 'rgba(227,179,65,0.07)' : 'rgba(248,81,73,0.07)';
+    paperCumulChart.update();
+  }
+  if (dailyPnl && paperDailyChart) {
+    paperDailyChart.data.labels                         = dailyPnl.map(d => d.label);
+    paperDailyChart.data.datasets[0].data               = dailyPnl.map(d => d.pnl);
+    paperDailyChart.data.datasets[0].backgroundColor    = dailyPnl.map(d => d.pnl >= 0 ? 'rgba(227,179,65,0.75)' : 'rgba(248,81,73,0.75)');
+    paperDailyChart.update();
+  }
+
+  // Positions
+  renderPaperPositions(positions || []);
+
+  // History
+  renderPaperHistory(history || []);
+}
+
+function renderPaperPositions(positions) {
+  setText('ppPosCount', positions.length + ' position' + (positions.length !== 1 ? 's' : ''));
+  const tbody = document.getElementById('ppPosBody');
+  if (positions.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="11" class="empty">Aucune position paper ouverte</td></tr>';
+    return;
+  }
+  tbody.innerHTML = positions.map(p => {
+    const dur = Date.now() - p.entryTime;
+    const graduated = p.isGraduated ? ' <span style="font-size:10px;color:var(--orange)">🎓</span>' : '';
+    return `<tr>
+      <td>
+        <strong class="c-yellow">$${esc(p.symbol)}</strong>${graduated}<br>
+        <a class="dex-link" href="https://gmgn.ai/sol/token/${esc(p.address)}" target="_blank">GMGN ↗</a>
+      </td>
+      <td class="c-blue">${p.score ?? '—'}/100</td>
+      <td title="${fPrice(p.entryPrice)}">${p.entryMcap ? fMcap(p.entryMcap) : fPrice(p.entryPrice)}</td>
+      <td title="${fPrice(p.currentPrice)}">${p.currentMcap ? fMcap(p.currentMcap) : fPrice(p.currentPrice)}</td>
+      <td class="${cClass(p.pnlPct)}">${fPct(p.pnlPct)}</td>
+      <td class="${cClass(p.pnlSol)}">${fSol(p.pnlSol)}</td>
+      <td class="c-muted">${p.amountSolIn?.toFixed(3)} ◎</td>
+      <td class="c-red">−${p.slPct}%</td>
+      <td class="c-green">+${p.tpPct}%</td>
+      <td class="c-muted">${fDur(dur)}</td>
+      <td><button class="btn btn-sell-paper" onclick="paperSell('${esc(p.address)}', this)">Vendre</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPaperHistory(history) {
+  setText('ppHistCount', history.length + ' entrées');
+  const tbody = document.getElementById('ppHistBody');
+  if (history.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucun trade paper fermé</td></tr>';
+    return;
+  }
+  tbody.innerHTML = history.map(h => {
+    const dtStr  = new Date(h.exitTime).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const result = h.pnlSol > 0
+      ? '<span class="badge b-win">✅ WIN</span>'
+      : '<span class="badge b-loss">❌ LOSS</span>';
+    const reasonMap = { STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 Take-Profit', TRAILING_STOP: '📐 Trailing', MANUAL: '👆 Manuel' };
+    return `<tr>
+      <td class="c-muted">${dtStr}</td>
+      <td><strong class="c-yellow">$${esc(h.symbol)}</strong></td>
+      <td class="c-blue">${h.score ?? '—'}/100</td>
+      <td class="${cClass(h.pnlPct)}">${fPct(h.pnlPct)}</td>
+      <td class="${cClass(h.pnlSol)}">${fSol(h.pnlSol)}</td>
+      <td class="c-muted">${reasonMap[h.reason] || esc(h.reason || '—')}</td>
+      <td>${result}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function savePaperConfig() {
+  const params = {
+    minScore:           parseFloat(document.getElementById('cfgMinScore').value),
+    slPct:              parseFloat(document.getElementById('cfgSl').value),
+    tpPct:              parseFloat(document.getElementById('cfgTp').value),
+    maxPositionPct:     parseFloat(document.getElementById('cfgPosPct').value),
+    maxPositions:       parseFloat(document.getElementById('cfgMaxPos').value),
+    trailingActivation: parseFloat(document.getElementById('cfgTrailAct').value),
+    trailingDistance:   parseFloat(document.getElementById('cfgTrailDist').value),
+  };
+  try {
+    const r = await fetch('/api/paper/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const d = await r.json();
+    if (d.ok) { setText('ppMinScore', d.config.minScore); fetchPaper(); }
+  } catch {}
+}
+
+async function resetPaper() {
+  const bal = parseFloat(document.getElementById('cfgResetBal').value) || 10;
+  if (!confirm(`Réinitialiser le portefeuille paper à ${bal} SOL ?\nToutes les positions et l'historique seront effacés.`)) return;
+  try {
+    await fetch('/api/paper/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ balance: bal }),
+    });
+    fetchPaper();
+  } catch {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DÉBAT MANUEL (Trading Floor)
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function submitDebate() {
+  const address = (document.getElementById('debateAddr').value || '').trim();
+  const btn = document.getElementById('debateBtn');
+  const msg = document.getElementById('debateMsg');
+  const result = document.getElementById('debateResult');
+
+  if (!address) { msg.textContent = '❌ Adresse requise'; msg.className = 'c-red'; return; }
+
+  btn.disabled = true;
+  msg.textContent = '⏳ Les agents analysent… (~15s)';
+  msg.className = 'c-muted';
+  result.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/debate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = `✅ ${d.debate?.decision?.decision ?? 'Terminé'}`;
+      msg.className = d.debate?.decision?.decision === 'BUY' ? 'c-green' : d.debate?.decision?.decision === 'WAIT' ? 'c-yellow' : 'c-red';
+      result.style.display = 'block';
+      result.innerHTML = renderDebateCard(d.debate, d.pair);
+    } else {
+      msg.textContent = `❌ ${d.error}`;
+      msg.className = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className = 'c-red';
+  }
+  btn.disabled = false;
+}
+
+function renderDebateCard(debate, pair) {
+  if (!debate || !pair) return '';
+  const { decision, bull, bear, momentum, whale } = debate;
+  const sym    = esc(pair.baseToken?.symbol || '???');
+  const name   = esc(pair.baseToken?.name   || '');
+  const price  = parseFloat(pair.priceUsd || 0);
+  const ch24   = pair.priceChange?.h24 || 0;
+  const pairUrl = pair.url || `https://gmgn.ai/sol/token/${pair.pairAddress || pair.baseToken?.address || ''}`;
+
+  const decColor = { BUY: 'var(--green)', SKIP: 'var(--red)', WAIT: 'var(--yellow)' }[decision?.decision] || 'var(--txt2)';
+  const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision?.decision] || '⚪';
+  const ch24cls  = ch24 >= 0 ? 'c-green' : 'c-red';
+
+  let h = `<div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:16px;font-size:13px;line-height:1.6">`;
+
+  // Header token
+  h += `<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;gap:12px">`;
+  h += `<div>`;
+  h += `<span style="font-size:16px;font-weight:700;color:var(--yellow)">$${sym}</span> <span class="c-muted">${name}</span><br>`;
+  h += `<span class="mono">$${price < 0.0001 ? price.toExponential(3) : price.toFixed(6)}</span> `;
+  h += `<span class="${ch24cls}">${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}% 24h</span>`;
+  h += `</div>`;
+  h += `<a href="${pairUrl}" target="_blank" style="font-size:12px;color:var(--blue);white-space:nowrap">GMGN ↗</a>`;
+  h += `</div>`;
+
+  // Verdict
+  h += `<div style="background:var(--card);border-radius:8px;padding:12px;margin-bottom:12px;border-left:3px solid ${decColor}">`;
+  h += `<div style="font-size:15px;font-weight:700;color:${decColor}">${decEmoji} ${decision?.decision}`;
+  if (decision?.score != null) h += ` — ${decision.score}/100`;
+  if (decision?.confidence != null) h += ` &nbsp;·&nbsp; confiance ${decision.confidence}/10`;
+  h += `</div>`;
+  if (decision?.reasoning) h += `<div style="color:var(--txt2);font-size:12px;margin-top:4px">${esc(decision.reasoning)}</div>`;
+  h += `</div>`;
+
+  // Agents
+  const agents = [
+    bull     && { icon: '🐂', label: `Bull ${bull.score}/10`,          color: 'var(--green)',  bg: 'rgba(63,185,80,.08)',   border: 'rgba(63,185,80,.2)',  sub: bull.narrative },
+    bear     && { icon: '🐻', label: `Bear ${bear.riskScore}/10`,      color: 'var(--red)',    bg: 'rgba(248,81,73,.08)',   border: 'rgba(248,81,73,.2)',  sub: bear.verdict },
+    momentum && { icon: '⚡', label: `Momentum ${momentum.score}/10`,  color: 'var(--blue)',   bg: 'rgba(88,166,255,.08)',  border: 'rgba(88,166,255,.2)', sub: momentum.trend },
+    whale    && { icon: '🐋', label: `Whale ${whale.score}/10`,        color: 'var(--purple)', bg: 'rgba(188,140,255,.08)', border: 'rgba(188,140,255,.2)',sub: whale.distributionSignal },
+  ].filter(Boolean);
+
+  const cols = agents.length;
+  h += `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:8px;margin-bottom:12px">`;
+  for (const a of agents) {
+    h += `<div style="background:${a.bg};border:1px solid ${a.border};border-radius:7px;padding:10px">`;
+    h += `<div style="font-weight:600;color:${a.color}">${a.icon} ${a.label}</div>`;
+    if (a.sub) h += `<div style="font-size:11px;color:var(--txt2);margin-top:3px">${esc(String(a.sub))}</div>`;
+    h += `</div>`;
+  }
+  h += `</div>`;
+
+  // SL/TP si BUY
+  if (decision?.decision === 'BUY' && decision.stopLossPct) {
+    h += `<div style="font-size:12px;color:var(--txt2)">💸 Taille suggérée: ${decision.suggestedAmountPct}%`;
+    h += `&nbsp;&nbsp;·&nbsp;&nbsp;🛑 SL: -${decision.stopLossPct}%&nbsp;&nbsp;·&nbsp;&nbsp;🎯 TP: +${decision.takeProfitPct}%</div>`;
+  }
+
+  h += `</div>`;
+  return h;
+}
+
+async function paperSell(address, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/paper/sell/${address}`, { method: 'POST' });
+    fetchPaper();
+  } catch { btn.disabled = false; }
+}
+
+async function manualBuyPaper() {
+  const address = (document.getElementById('manualAddr').value || '').trim();
+  const amountSol = parseFloat(document.getElementById('manualAmt').value);
+  const btn = document.getElementById('manualBuyBtn');
+  const msg = document.getElementById('manualBuyMsg');
+
+  if (!address) { msg.textContent = '❌ Adresse requise'; msg.className = 'c-red'; return; }
+  if (isNaN(amountSol) || amountSol <= 0) { msg.textContent = '❌ Montant invalide'; msg.className = 'c-red'; return; }
+
+  btn.disabled = true;
+  msg.textContent = '⏳ Récupération du prix…';
+  msg.className = 'c-muted';
+
+  try {
+    const r = await fetch('/api/paper/buy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, amountSol }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = d.position.entryMcap
+        ? `✅ Position ouverte @ MC ${fMcap(d.position.entryMcap)}`
+        : `✅ Position ouverte @ ${Number(d.position.entryPrice).toExponential(3)}`;
+      msg.className = 'c-green';
+      document.getElementById('manualAddr').value = '';
+      document.getElementById('manualAmt').value  = '';
+      fetchPaper();
+    } else {
+      msg.textContent = `❌ ${d.error}`;
+      msg.className = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className = 'c-red';
+  }
+  btn.disabled = false;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AGIOS — Agent Robinhood Chain
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function fetchAgios() {
+  try {
+    const r = await fetch('/api/agios');
+    const d = await r.json();
+    if (d.error) return;
+    renderAgios(d);
+  } catch (err) { console.error('fetchAgios:', err); }
+}
+
+function renderAgios(d) {
+  const st = d.state || {};
+  setText('agStatAnalyzed', st.stats?.tokensAnalyzed ?? 0);
+  setText('agSignals', st.stats?.signals ?? 0);
+
+  renderRobinhoodEquities(st.equities || { connected: false, liveTrading: false }, d.pendingConfirmations || []);
+
+  if (d.paper) {
+    const p = d.paper.stats;
+    const portEl = document.getElementById('agPortfolio');
+    portEl.textContent = p.portfolioValue;
+    portEl.className = 'card-value ' + cClass(p.portfolioValue - p.startingBalance);
+    setText('agPortfolioSub', p.startingBalance + ' de départ');
+    const pnlEl = document.getElementById('agPnl');
+    pnlEl.textContent = (p.realizedPnl >= 0 ? '+' : '') + p.realizedPnl;
+    pnlEl.className = 'card-value ' + cClass(p.realizedPnl);
+    setText('agTrades', p.totalTrades + ' trades');
+    const wrEl = document.getElementById('agWr');
+    wrEl.textContent = p.winRate != null ? p.winRate + '%' : '—';
+    wrEl.className = 'card-value ' + (p.winRate >= 50 ? 'c-green' : p.winRate != null ? 'c-red' : '');
+    setText('agWrSub', p.wins + ' W / ' + p.losses + ' L');
+    setText('agOpen', p.openPositions);
+    setText('agOpenSub', p.totalInvested + ' investi');
+
+    // Positions
+    const tbody = document.getElementById('agPosBody');
+    const poss = d.paper.positions || [];
+    setText('agPosCount', poss.length + ' position' + (poss.length !== 1 ? 's' : ''));
+    tbody.innerHTML = poss.length === 0
+      ? '<tr><td colspan="7" class="empty">Aucune position — Agios scanne le trending Robinhood Chain</td></tr>'
+      : poss.map(p2 => `<tr>
+          <td><strong class="agios-accent">$${esc(p2.symbol)}</strong></td>
+          <td class="c-blue">${p2.score ?? '—'}/100</td>
+          <td>${p2.entryMcap ? fMcap(p2.entryMcap) : fPrice(p2.entryPrice)}</td>
+          <td>${p2.currentMcap ? fMcap(p2.currentMcap) : fPrice(p2.currentPrice)}</td>
+          <td class="${cClass(p2.pnlPct)}">${fPct(p2.pnlPct)}</td>
+          <td class="c-muted">−${p2.slPct}% / +${p2.tpPct}%</td>
+          <td class="c-muted">${fDur(Date.now() - p2.entryTime)}</td>
+        </tr>`).join('');
+
+    // Historique
+    const hist = d.paper.history || [];
+    setText('agHistCount', hist.length + ' entrées');
+    const hb = document.getElementById('agHistBody');
+    const agReasons = { STOP_LOSS: '🛑 Stop-Loss', TAKE_PROFIT: '🎯 Take-Profit', TRAILING_STOP: '📐 Trailing', MANUAL: '👆 Manuel' };
+    hb.innerHTML = hist.length === 0
+      ? '<tr><td colspan="7" class="empty">Aucun trade fermé</td></tr>'
+      : hist.slice(0, 30).map(h => `<tr>
+          <td class="c-muted">${new Date(h.exitTime).toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</td>
+          <td><strong class="agios-accent">$${esc(h.symbol)}</strong></td>
+          <td class="c-blue">${h.score ?? '—'}/100</td>
+          <td class="${cClass(h.pnlPct)}">${fPct(h.pnlPct)}</td>
+          <td class="${cClass(h.pnlSol)}">${(h.pnlSol >= 0 ? '+' : '') + h.pnlSol.toFixed(4)}</td>
+          <td class="c-muted">${agReasons[h.reason] || esc(h.reason || '—')}</td>
+          <td>${h.pnlSol > 0 ? '<span class="badge b-win">✅ WIN</span>' : '<span class="badge b-loss">❌ LOSS</span>'}</td>
+        </tr>`).join('');
+  }
+
+  // Journal
+  renderAgiosJournal(d.journal || []);
+  // Conversation
+  renderAgiosConversation(d.conversation || []);
+}
+
+function agiosJournalHtml(e) {
+  const icon = JOURNAL_ICONS[e.type] || '·';
+  const ts = new Date(e.ts).toLocaleString('fr-FR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  return `<div class="journal-item j-${esc(e.type)}">
+    <span class="journal-icon">${icon}</span>
+    <span class="journal-detail">${esc(e.detail)}</span>
+    <span class="journal-ts">${ts}</span>
+  </div>`;
+}
+
+// ─── Robinhood Agentic Trading (courtage réel) ─────────────────────────────
+
+function renderRobinhoodEquities(eq, pending) {
+  const badge = document.getElementById('rhBadge');
+  if (eq.connected) {
+    badge.textContent = eq.liveTrading ? '💵 TRADING RÉEL' : '✅ CONNECTÉ';
+    badge.className   = 'auto-badge ' + (eq.liveTrading ? 'live' : 'on');
+  } else {
+    badge.textContent = 'NON CONNECTÉ';
+    badge.className   = 'auto-badge off';
+  }
+
+  document.getElementById('rhNotConnected').style.display = eq.connected ? 'none' : '';
+  document.getElementById('rhConnected').style.display    = eq.connected ? '' : 'none';
+  if (eq.connected) {
+    document.getElementById('rhLiveToggle').checked = !!eq.liveTrading;
+    setText('rhLiveHint', eq.liveTrading
+      ? "Agios exécute directement les ordres sur le compte Agentic — tu reçois une notification."
+      : "Confirmation Telegram/dashboard requise avant chaque action non-lecture.");
+  }
+
+  const box  = document.getElementById('rhPendingBox');
+  const list = document.getElementById('rhPendingList');
+  if (pending.length === 0) {
+    box.style.display = 'none';
+  } else {
+    box.style.display = '';
+    list.innerHTML = pending.map(p => `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; background:var(--card2); border-radius:8px; margin-bottom:6px">
+        <div style="font-size:12px">
+          <code>${esc(p.toolName)}</code>
+          <div class="c-muted" style="font-size:10px; margin-top:2px">${esc(JSON.stringify(p.input).slice(0, 120))}</div>
+        </div>
+        <div style="display:flex; gap:6px; flex-shrink:0">
+          <button class="btn btn-approve" style="padding:4px 10px; font-size:11px" onclick="confirmRobinhoodAction('${esc(p.id)}', true, this)">✅</button>
+          <button class="btn btn-reject" style="padding:4px 10px; font-size:11px" onclick="confirmRobinhoodAction('${esc(p.id)}', false, this)">❌</button>
+        </div>
+      </div>`).join('');
+  }
+}
+
+async function connectRobinhood() {
+  const msg = document.getElementById('rhConnectMsg');
+  msg.textContent = '⏳ Démarrage…';
+  msg.className = 'c-muted';
+  try {
+    const r = await fetch('/api/agios/equities/connect', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = '⏳ En attente du lien (quelques secondes)…';
+      msg.className = 'c-muted';
+    } else {
+      msg.textContent = '❌ ' + (d.error || 'erreur');
+      msg.className = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className = 'c-red';
+  }
+}
+
+function showRobinhoodAuthLink(url) {
+  const box  = document.getElementById('rhAuthLinkBox');
+  const link = document.getElementById('rhAuthLink');
+  link.href = url;
+  link.textContent = url;
+  box.style.display = '';
+  const msg = document.getElementById('rhConnectMsg');
+  if (msg) { msg.textContent = '🔗 Lien reçu — ouvre-le ci-dessous'; msg.className = 'agios-accent'; }
+}
+
+async function toggleRobinhoodLive(enabled) {
+  if (enabled && !confirm('⚠️ TRADING RÉEL ROBINHOOD\n\nAgios va exécuter directement les ordres sur ton compte Agentic (vrai argent), sans confirmation préalable.\n\nActiver ?')) {
+    document.getElementById('rhLiveToggle').checked = false;
+    return;
+  }
+  try {
+    const r = await fetch('/api/agios/equities/live', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const d = await r.json();
+    if (d.ok) renderRobinhoodEquities(d.equities, []);
+  } catch { document.getElementById('rhLiveToggle').checked = !enabled; }
+}
+
+async function confirmRobinhoodAction(id, approve, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/agios/equities/confirm/${id}/${approve ? 'yes' : 'no'}`, { method: 'POST' });
+    fetchAgios();
+  } catch { btn.disabled = false; }
+}
+
+function renderAgiosJournal(journal) {
+  const feed = document.getElementById('agJournalFeed');
+  if (!feed) return;
+  setText('agJournalCount', journal.length + ' action' + (journal.length > 1 ? 's' : ''));
+  if (journal.length === 0) return;
+  feed.innerHTML = journal.map(agiosJournalHtml).join('');
+}
+
+function prependAgiosJournal(entry) {
+  const feed = document.getElementById('agJournalFeed');
+  if (!feed) return;
+  if (feed.querySelector('.c-muted')) feed.innerHTML = '';
+  feed.insertAdjacentHTML('afterbegin', agiosJournalHtml(entry));
+}
+
+function renderAgiosConversation(conv) {
+  const chat = document.getElementById('agiosChat');
+  if (!chat) return;
+  if (conv.length === 0) {
+    chat.innerHTML = `<div class="c-muted" style="text-align:center; margin:auto; font-size:13px; padding:20px">
+      Agios surveille Robinhood Chain 🏛<br><span style="font-size:11px">Demande-lui ce qui bouge, son bilan, ou son avis sur un token.</span>
+    </div>`;
+    return;
+  }
+  chat.innerHTML = conv.map(m => `<div class="aria-msg-wrap">
+    <div class="aria-bubble ${m.role === 'user' ? 'agios-user' : 'assistant'}">${esc(m.content)}</div>
+    <div class="aria-ts ${m.role === 'user' ? 'right' : ''}">${m.timestamp ? new Date(m.timestamp).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }) : ''}</div>
+  </div>`).join('');
+  chat.scrollTop = chat.scrollHeight;
+}
+
+let agiosSending = false;
+async function sendAgiosChat() {
+  if (agiosSending) return;
+  const input = document.getElementById('agiosChatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  agiosSending = true;
+  input.value = '';
+  const chat = document.getElementById('agiosChat');
+  if (chat.querySelector('.c-muted')) chat.innerHTML = '';
+  chat.innerHTML += `<div class="aria-msg-wrap"><div class="aria-bubble agios-user">${esc(msg)}</div></div>
+    <div id="agiosTyping" class="aria-msg-wrap"><div class="aria-bubble assistant c-muted">…</div></div>`;
+  chat.scrollTop = chat.scrollHeight;
+  try {
+    const r = await fetch('/api/agios/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    const d = await r.json();
+    document.getElementById('agiosTyping')?.remove();
+    chat.innerHTML += `<div class="aria-msg-wrap"><div class="aria-bubble assistant ${d.ok ? '' : 'c-red'}">${esc(d.ok ? d.reply : ('Erreur: ' + d.error))}</div></div>`;
+  } catch {
+    document.getElementById('agiosTyping')?.remove();
+    chat.innerHTML += `<div class="aria-msg-wrap"><div class="aria-bubble assistant c-red">Erreur réseau</div></div>`;
+  } finally {
+    agiosSending = false;
+    chat.scrollTop = chat.scrollHeight;
+  }
+}
+
+setInterval(() => { if (activePage === 'agios') fetchAgios(); }, 20_000);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════════════════════════════════
 initCharts();
+initPaperCharts();
 fetchData();
+fetchAgent();      // état ARIA + autonomie + journal dès le chargement
+startSSE();        // alertes proactives + journal en temps réel sur tous les onglets
 setInterval(fetchData, 15_000);
+setInterval(() => { if (activePage === 'aria') fetchAgent(); }, 30_000);
+
+// Charge le paper trading quand on clique sur l'onglet
+document.querySelector('[data-page="paper"]').addEventListener('click', () => {
+  fetchPaper();
+  // Refresh toutes les 15s quand l'onglet est actif
+  if (!window._paperInterval) {
+    window._paperInterval = setInterval(() => {
+      if (activePage === 'paper') fetchPaper();
+    }, 15_000);
+  }
+});
 </script>
 </body>
 </html>
