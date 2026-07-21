@@ -18,6 +18,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const gmgn           = require('./gmgn');
 const personalAgent  = require('./personalAgent');
+const agios          = require('./agios');
 const tokenHistory  = require('./tokenHistory');
 const state         = require('./state');
 const logger        = require('./logger');
@@ -45,6 +46,22 @@ class Bot {
 
     // Donne à ARIA le moyen de pinguer Telegram pour les alertes haute priorité
     personalAgent.setNotifyCallback((msg) => this._send(msg, { parse_mode: 'HTML' }));
+
+    // Agios — notifications + boutons de confirmation pour les actions Robinhood réelles
+    agios.setNotifyCallback((msg) => this._send(msg, { parse_mode: 'HTML' }));
+    agios.setConfirmationUiCallback((id, toolName, input) => {
+      this.bot.telegram.sendMessage(
+        this.adminId,
+        `⚠️ <b>Agios veut exécuter sur Robinhood</b>\n<code>${this._esc(toolName)}</code>\n<code>${this._esc(JSON.stringify(input).slice(0, 300))}</code>`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            Markup.button.callback('✅ Confirmer', `rhconfirm:${id}:yes`),
+            Markup.button.callback('❌ Refuser', `rhconfirm:${id}:no`),
+          ]),
+        }
+      ).catch((err) => console.error('[Bot] Erreur bouton confirmation Robinhood:', err.message));
+    });
   }
 
   // ─── Middleware ────────────────────────────────────────────────────────────
@@ -181,7 +198,9 @@ class Bot {
         `/sell &lt;adresse&gt; [%] — Vente manuelle\n` +
         `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position externe\n` +
         `/recurring — Tokens récidivistes (boostés plusieurs fois)\n` +
-        `/agent [message] — Parler avec ARIA (ton agent IA personnel)\n\n` +
+        `/agent [message] — Parler avec ARIA (ton agent IA personnel, Solana)\n` +
+        `/agios [message] — Parler avec Agios (Robinhood Chain + Agentic Trading)\n` +
+        `/robinhood_connect — Connecter ton compte Robinhood Agentic Trading\n\n` +
         `/help — Aide détaillée de toutes les commandes`,
         { parse_mode: 'HTML' }
       );
@@ -209,6 +228,12 @@ class Bot {
         `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel en SOL\n` +
         `/sell &lt;adresse&gt; [%] — Vente manuelle (défaut: 100%)\n` +
         `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position achetée hors du bot\n\n` +
+
+        `<b>Agios — Robinhood</b>\n` +
+        `/agios [message] — Parler avec Agios (chain memecoins + courtage réel)\n` +
+        `/robinhood_connect — Connexion OAuth au compte Agentic Trading Robinhood\n` +
+        `/robinhood_status — État de la connexion + trading réel ON/OFF\n` +
+        `/robinhood_live — Activer/désactiver l'exécution directe des trades réels\n\n` +
 
         `<b>Suivi</b>\n` +
         `/positions — Positions ouvertes + PnL non réalisé\n` +
@@ -445,6 +470,84 @@ class Bot {
       }
     });
 
+    // ─── /agios — Chat Telegram avec Agios (Robinhood Chain + Agentic Trading) ──
+    bot.command('agios', async (ctx) => {
+      const parts = ctx.message.text.trim().split(/\s+(.+)/s);
+      const msg   = parts[1]?.trim();
+
+      if (!msg) {
+        const s  = agios.getState();
+        const eq = await agios.getEquitiesState();
+        return ctx.reply(
+          `🏛 <b>${s.name}</b> — Robinhood\n` +
+          `Style: ${s.tradingStyle}\n` +
+          `Chain (paper): ${s.stats.tokensAnalyzed} analysés, ${s.stats.signals} signaux\n\n` +
+          `💵 Agentic Trading (courtage réel): ${eq.connected ? '✅ connecté' : '❌ non connecté'}` +
+          (eq.connected ? `  |  Trading réel: ${eq.liveTrading ? '✅' : '❌'} (/robinhood_live)` : `\n<code>/robinhood_connect</code> pour le connecter`) +
+          `\n\nPour parler avec lui: <code>/agios qu'est-ce qui bouge ?</code>`,
+          { parse_mode: 'HTML' }
+        );
+      }
+
+      await ctx.reply('⏳');
+      try {
+        const reply = await agios.chat(msg);
+        await ctx.reply(`🏛 <b>Agios</b>\n${this._esc(reply)}`, { parse_mode: 'HTML' });
+      } catch (err) {
+        await ctx.reply(`❌ ${err.message}`);
+      }
+    });
+
+    // ─── Robinhood Agentic Trading — connexion OAuth, statut, toggle réel ──────
+    bot.command('robinhood_connect', async (ctx) => {
+      await ctx.reply(
+        '🔐 Connexion à Robinhood Agentic Trading…\n' +
+        "Un lien va arriver ici dans quelques secondes. Ouvre-le, connecte-toi à ton compte Robinhood, " +
+        "et autorise l'agent sur ton compte Agentic dédié.\n\n" +
+        "⚠️ Cette étape doit se faire depuis un navigateur sur la machine qui fait tourner le bot (pas ton téléphone).",
+        { parse_mode: 'HTML' }
+      );
+      try {
+        const result = await agios.connectEquities((url) => {
+          this._send(`🔗 <b>Lien d'autorisation Robinhood</b>\n${url}\n\nTu as 5 minutes pour l'ouvrir et autoriser l'agent.`, { parse_mode: 'HTML' });
+        });
+        if (result.ok) {
+          await ctx.reply('✅ Robinhood Agentic Trading connecté ! Le trading réel reste désactivé par défaut — active-le avec /robinhood_live.', { parse_mode: 'HTML' });
+        } else {
+          await ctx.reply(`❌ Connexion échouée : ${this._esc(result.error)}`, { parse_mode: 'HTML' });
+        }
+      } catch (err) {
+        await ctx.reply(`❌ ${err.message}`);
+      }
+    });
+
+    bot.command('robinhood_status', async (ctx) => {
+      const eq = await agios.getEquitiesState();
+      const pending = agios.getPendingConfirmations();
+      await ctx.reply(
+        `💵 <b>Robinhood Agentic Trading</b>\n` +
+        `Connecté: ${eq.connected ? '✅' : '❌'}\n` +
+        `Trading réel: ${eq.liveTrading ? '✅ ACTIF (exécution directe)' : '❌ confirmation requise'}\n` +
+        (pending.length > 0 ? `⏳ ${pending.length} action(s) en attente de confirmation` : ''),
+        { parse_mode: 'HTML' }
+      );
+    });
+
+    bot.command('robinhood_live', async (ctx) => {
+      const eq = await agios.getEquitiesState();
+      if (!eq.connected) {
+        return ctx.reply('❌ Connecte d\'abord Robinhood avec /robinhood_connect.');
+      }
+      agios.setEquitiesLiveTrading(!eq.liveTrading);
+      const next = !eq.liveTrading;
+      await ctx.reply(
+        next
+          ? `💵 Trading réel Robinhood <b>ACTIVÉ</b>\n⚠️ Agios exécute directement les ordres sur ton compte Agentic (vrai argent), tu reçois une notification.`
+          : `💵 Trading réel Robinhood <b>DÉSACTIVÉ</b>\nChaque action passera par une confirmation Telegram (10 min pour répondre).`,
+        { parse_mode: 'HTML' }
+      );
+    });
+
     // Redirecte /analyse et /debat vers ARIA (single agent) + gardé runDebate en fallback
     // Handler partagé pour /analyse et /debat
     const analyseHandler = async (ctx) => {
@@ -645,6 +748,24 @@ class Bot {
     this.bot.action('skip', async (ctx) => {
       await ctx.answerCbQuery('Skippé.');
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    });
+
+    // Format: rhconfirm:<id>:yes|no — confirmation d'une action Robinhood réelle (Agios)
+    this.bot.action(/^rhconfirm:([^:]+):(yes|no)$/, async (ctx) => {
+      const [, id, decision] = ctx.match;
+      const approve = decision === 'yes';
+      await ctx.answerCbQuery(approve ? '⏳ Exécution...' : 'Refusé.');
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+      try {
+        const result = await agios.confirmAction(id, approve);
+        if (!result.ok) {
+          await ctx.reply(`⚠️ ${this._esc(result.error)}`);
+        } else if (approve) {
+          await ctx.reply('✅ Action Robinhood confirmée et exécutée.');
+        }
+      } catch (err) {
+        await ctx.reply(`❌ ${err.message}`);
+      }
     });
   }
 

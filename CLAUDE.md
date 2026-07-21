@@ -3,9 +3,13 @@
 ## Contexte du projet
 Bot de trading automatique de meme coins Solana via Telegram + dashboard web.
 Piloté par ARIA, un agent IA personnel 100% autonome (Claude Haiku).
-Second agent : AGIOS — dédié à Robinhood Chain (L2 Ethereum/Arbitrum Orbit, mainnet
-juillet 2026, actions tokenisées 24/7 + memecoins, gas ETH) — v1 en PAPER TRADING
-(données GMGN --chain robinhood ; exécution réelle à venir, Jupiter = Solana only).
+Second agent : AGIOS — dédié à Robinhood, DEUX volets :
+  1. Robinhood Chain (L2 Ethereum/Arbitrum Orbit, mainnet juillet 2026, memecoins +
+     actions tokenisées, gas ETH) — PAPER TRADING (données GMGN --chain robinhood ;
+     exécution réelle à venir, Jupiter = Solana only)
+  2. Robinhood Agentic Trading (courtage réel, actions US) — connexion OAuth au
+     serveur MCP officiel agent.robinhood.com/mcp/trading, compte "Agentic" dédié
+     à fonds pré-chargés. Trading réel OFF par défaut (confirmation Telegram).
 Stack: Node.js, Telegraf, Jupiter API (swaps + prix), GMGN (source de données unique via gmgn-cli).
 Le propriétaire trade aussi manuellement sur GMGN — positions importables via /addposition.
 
@@ -15,7 +19,10 @@ Le propriétaire trade aussi manuellement sur GMGN — positions importables via
 - `src/scanner.js` — Détecte les tokens (GMGN trending UNIQUEMENT) — paramétrable { chain, label, analyzer } ; 2 instances : sol→ARIA, robinhood→Agios
 - `src/gmgn.js` — Client GMGN via gmgn-cli, MULTI-CHAIN (sol/robinhood/eth/bsc/base — trending/info/prix/sécurité/hot par chaîne, gates chain-aware : mint/freeze = sol only) — SOURCE DE DONNÉES UNIQUE (trending, hot-searches, token info/prix, sécurité, smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite). REQUIS pour le scan/analyse ; sans clé le scanner attend
 - `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop, persistance disque
-- `src/agios.js` — AGIOS : agent Robinhood Chain (persona propre, analyse LLM, journal data/agios_journal.json + SSE agios_journal, chat simple, paper trading dédié data/agios_paper.json via PaperTrader { chain:'robinhood' })
+- `src/agios.js` — AGIOS : agent Robinhood Chain (persona propre, analyse LLM, journal data/agios_journal.json + SSE agios_journal, chat agentique avec outils Robinhood MCP pontés dynamiquement, paper trading dédié data/agios_paper.json via PaperTrader { chain:'robinhood' })
+- `src/robinhoodMcp.js` — Client MCP Robinhood Agentic Trading (OAuth 2.0+PKCE via SDK officiel
+  @modelcontextprotocol/sdk, tokens persistés dans ~/.config/robinhood-mcp/ chmod 600). Aucun nom
+  d'outil codé en dur (MCP auto-descriptif, tools/list) — dégradé propre si non connecté
 - `src/personalAgent.js` — ARIA : analyse, chat agentique avec outils (tool use), autonomie (achat/vente auto), journal, apprentissage, heartbeat
 - `src/paperTrader.js` — Simulation sans risque — paramétrable { file, label, chain } (prix GMGN si chaîne non-sol)
 - `src/agents.js` — Ancien système multi-agents (suspendu — gardé pour agentBus/dashboard floor)
@@ -96,6 +103,25 @@ Chaque trade via chat est journalisé dans agent_journal.json.
 - Les données `_gmgn` (smart money, KOL, snipers, buy ratio, verdict) enrichissent le prompt d'ARIA
 - Le flux smart money/KOL LIVE du token analysé (track smartmoney/kol, cache 60s) est injecté
   dans chaque analyse autonome (getSmartMoneyForToken)
+
+## Agios — Robinhood Agentic Trading (courtage réel, actions US)
+Connexion OAuth 2.0+PKCE (jamais de mot de passe Robinhood dans le code) au serveur MCP officiel
+`agent.robinhood.com/mcp/trading`. Étape interactive UNIQUE (lien à ouvrir dans un navigateur)
+via `/robinhood_connect` sur Telegram ou le bouton dashboard — DOIT se faire depuis la machine qui
+fait tourner le bot (pas un environnement cloud sans navigateur/réseau vers agent.robinhood.com).
+- `src/robinhoodMcp.js` : `FileOAuthClientProvider` persiste tokens/client OAuth sur disque,
+  serveur de callback local (port 8090, `ROBINHOOD_MCP_CALLBACK_PORT`), `startSetup()` bloque
+  jusqu'à autorisation (timeout 5 min), `_connectSilent()` réutilise les tokens existants sans
+  jamais déclencher de flux interactif. `listTools()`/`callTool()` génériques (0 nom en dur).
+- `agios.js` : `equities.liveTrading` (OFF par défaut, persisté dans data/agios.json) — outils
+  Robinhood pontés dynamiquement dans la boucle de chat agentique (`_bridgeRobinhoodTools`,
+  `rh_<nom>` préfixé). Lecture seule (annotation MCP `readOnlyHint` ou heuristique de nom
+  `WRITE_TOOL_PAT`) → exécution libre. Action non-lecture : liveTrading ON → exécution directe +
+  notification ; OFF → confirmation Telegram (boutons inline `rhconfirm:<id>:yes|no`, dashboard
+  `/api/agios/equities/confirm/:id/:yesno`), timeout 10 min → annulée automatiquement.
+- Commandes Telegram : `/robinhood_connect`, `/robinhood_status`, `/robinhood_live` (toggle),
+  `/agios [message]` (chat). Dashboard : panneau dédié dans l'onglet Agios (connexion, toggle,
+  file de confirmations), lien d'autorisation reçu en live via SSE `agios_auth_url`.
 
 ## Commandes Telegram implémentées
 /start, /help, /status, /balance, /scan, /positions, /history

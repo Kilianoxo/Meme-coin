@@ -1422,6 +1422,45 @@
       </div>
     </div>
 
+    <!-- Robinhood Agentic Trading (courtage réel) -->
+    <div class="section" style="margin-bottom:18px; border-color:rgba(197,255,74,.18)">
+      <div class="sec-head">
+        <h2>💵 Robinhood Agentic Trading <span class="c-muted" style="font-size:11px; font-weight:400">— compte réel, actions US</span></h2>
+        <span class="auto-badge off" id="rhBadge">—</span>
+      </div>
+      <div class="sec-body" style="padding:14px 20px">
+        <div id="rhNotConnected">
+          <div class="c-muted" style="font-size:12px; line-height:1.7; margin-bottom:10px">
+            Connecte le compte Robinhood "Agentic" dédié de ton trader (fonds pré-chargés, isolé de son compte
+            principal) via OAuth. Le reste de son compte Robinhood reste en lecture seule.
+            <strong style="color:var(--txt)">Étape à faire depuis un navigateur sur la machine qui fait tourner le bot</strong> —
+            pas depuis un téléphone ni un environnement cloud.
+          </div>
+          <button class="btn-primary" style="padding:8px 18px; font-size:13px" onclick="connectRobinhood()">🔗 Connecter Robinhood</button>
+          <span id="rhConnectMsg" style="font-size:12px; margin-left:10px"></span>
+          <div id="rhAuthLinkBox" style="display:none; margin-top:12px; padding:12px; background:var(--card2); border-radius:10px; border:1px solid rgba(197,255,74,.3)">
+            <div style="font-size:12px; margin-bottom:6px">🔗 Ouvre ce lien, connecte-toi à Robinhood et autorise Agios (5 min) :</div>
+            <a id="rhAuthLink" href="#" target="_blank" style="font-size:12px; word-break:break-all; color:var(--robin)"></a>
+          </div>
+        </div>
+        <div id="rhConnected" style="display:none">
+          <div class="auto-row">
+            <span>Trading réel <span class="c-muted">(exécution directe des ordres, vrai argent)</span></span>
+            <label class="mini-toggle">
+              <input type="checkbox" id="rhLiveToggle" onchange="toggleRobinhoodLive(this.checked)">
+              <span class="track danger"></span>
+              <span class="thumb"></span>
+            </label>
+          </div>
+          <div class="c-muted" style="font-size:11px; margin-top:8px" id="rhLiveHint">Confirmation Telegram requise avant chaque action non-lecture.</div>
+        </div>
+        <div id="rhPendingBox" style="display:none; margin-top:14px">
+          <div class="c-muted" style="font-size:11px; margin-bottom:8px">⏳ Actions en attente de confirmation :</div>
+          <div id="rhPendingList"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Stats paper -->
     <div class="cards">
       <div class="card">
@@ -2323,6 +2362,10 @@ function startSSE() {
       }
       if (msg.type === 'agios_journal') {
         prependAgiosJournal(msg.entry);
+        return;
+      }
+      if (msg.type === 'agios_auth_url') {
+        showRobinhoodAuthLink(msg.url);
         return;
       }
       if (activePage === 'floor') {
@@ -3252,6 +3295,8 @@ function renderAgios(d) {
   setText('agStatAnalyzed', st.stats?.tokensAnalyzed ?? 0);
   setText('agSignals', st.stats?.signals ?? 0);
 
+  renderRobinhoodEquities(st.equities || { connected: false, liveTrading: false }, d.pendingConfirmations || []);
+
   if (d.paper) {
     const p = d.paper.stats;
     const portEl = document.getElementById('agPortfolio');
@@ -3317,6 +3362,100 @@ function agiosJournalHtml(e) {
     <span class="journal-detail">${esc(e.detail)}</span>
     <span class="journal-ts">${ts}</span>
   </div>`;
+}
+
+// ─── Robinhood Agentic Trading (courtage réel) ─────────────────────────────
+
+function renderRobinhoodEquities(eq, pending) {
+  const badge = document.getElementById('rhBadge');
+  if (eq.connected) {
+    badge.textContent = eq.liveTrading ? '💵 TRADING RÉEL' : '✅ CONNECTÉ';
+    badge.className   = 'auto-badge ' + (eq.liveTrading ? 'live' : 'on');
+  } else {
+    badge.textContent = 'NON CONNECTÉ';
+    badge.className   = 'auto-badge off';
+  }
+
+  document.getElementById('rhNotConnected').style.display = eq.connected ? 'none' : '';
+  document.getElementById('rhConnected').style.display    = eq.connected ? '' : 'none';
+  if (eq.connected) {
+    document.getElementById('rhLiveToggle').checked = !!eq.liveTrading;
+    setText('rhLiveHint', eq.liveTrading
+      ? "Agios exécute directement les ordres sur le compte Agentic — tu reçois une notification."
+      : "Confirmation Telegram/dashboard requise avant chaque action non-lecture.");
+  }
+
+  const box  = document.getElementById('rhPendingBox');
+  const list = document.getElementById('rhPendingList');
+  if (pending.length === 0) {
+    box.style.display = 'none';
+  } else {
+    box.style.display = '';
+    list.innerHTML = pending.map(p => `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; background:var(--card2); border-radius:8px; margin-bottom:6px">
+        <div style="font-size:12px">
+          <code>${esc(p.toolName)}</code>
+          <div class="c-muted" style="font-size:10px; margin-top:2px">${esc(JSON.stringify(p.input).slice(0, 120))}</div>
+        </div>
+        <div style="display:flex; gap:6px; flex-shrink:0">
+          <button class="btn btn-approve" style="padding:4px 10px; font-size:11px" onclick="confirmRobinhoodAction('${esc(p.id)}', true, this)">✅</button>
+          <button class="btn btn-reject" style="padding:4px 10px; font-size:11px" onclick="confirmRobinhoodAction('${esc(p.id)}', false, this)">❌</button>
+        </div>
+      </div>`).join('');
+  }
+}
+
+async function connectRobinhood() {
+  const msg = document.getElementById('rhConnectMsg');
+  msg.textContent = '⏳ Démarrage…';
+  msg.className = 'c-muted';
+  try {
+    const r = await fetch('/api/agios/equities/connect', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = '⏳ En attente du lien (quelques secondes)…';
+      msg.className = 'c-muted';
+    } else {
+      msg.textContent = '❌ ' + (d.error || 'erreur');
+      msg.className = 'c-red';
+    }
+  } catch {
+    msg.textContent = '❌ Erreur réseau';
+    msg.className = 'c-red';
+  }
+}
+
+function showRobinhoodAuthLink(url) {
+  const box  = document.getElementById('rhAuthLinkBox');
+  const link = document.getElementById('rhAuthLink');
+  link.href = url;
+  link.textContent = url;
+  box.style.display = '';
+  const msg = document.getElementById('rhConnectMsg');
+  if (msg) { msg.textContent = '🔗 Lien reçu — ouvre-le ci-dessous'; msg.className = 'agios-accent'; }
+}
+
+async function toggleRobinhoodLive(enabled) {
+  if (enabled && !confirm('⚠️ TRADING RÉEL ROBINHOOD\n\nAgios va exécuter directement les ordres sur ton compte Agentic (vrai argent), sans confirmation préalable.\n\nActiver ?')) {
+    document.getElementById('rhLiveToggle').checked = false;
+    return;
+  }
+  try {
+    const r = await fetch('/api/agios/equities/live', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const d = await r.json();
+    if (d.ok) renderRobinhoodEquities(d.equities, []);
+  } catch { document.getElementById('rhLiveToggle').checked = !enabled; }
+}
+
+async function confirmRobinhoodAction(id, approve, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/api/agios/equities/confirm/${id}/${approve ? 'yes' : 'no'}`, { method: 'POST' });
+    fetchAgios();
+  } catch { btn.disabled = false; }
 }
 
 function renderAgiosJournal(journal) {
