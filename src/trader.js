@@ -12,7 +12,6 @@ const {
   PublicKey,
   LAMPORTS_PER_SOL,
 } = require('@solana/web3.js');
-const { getAssociatedTokenAddress, getAccount } = require('@solana/spl-token');
 const bs58        = require('bs58');
 const fs          = require('fs');
 const https       = require('https');
@@ -161,11 +160,11 @@ class Trader {
    */
   async getWalletTokens() {
     if (!this.wallet) throw new Error('Wallet non chargé');
-    const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-    const { value } = await this.connection.getParsedTokenAccountsByOwner(
-      this.wallet.publicKey,
-      { programId: TOKEN_PROGRAM }
-    );
+    // SPL classique + Token-2022 (utilisé par une partie des meme coins récents)
+    const programs = ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'];
+    const results = await Promise.all(programs.map(id =>
+      this.connection.getParsedTokenAccountsByOwner(this.wallet.publicKey, { programId: new PublicKey(id) })));
+    const value = results.flatMap(r => r.value);
     return value
       .map(({ account }) => {
         const info = account.data.parsed?.info;
@@ -179,18 +178,20 @@ class Trader {
       .filter(t => t.mint && t.amount > 0);
   }
 
+  /**
+   * Solde brut d'un token (tous comptes, SPL classique ET Token-2022).
+   * Renvoie 0n seulement si le wallet ne détient vraiment aucun compte pour ce mint ;
+   * une erreur RPC est RELANCÉE — sinon une panne réseau ferait croire que le token
+   * a été vendu et la position serait clôturée à tort.
+   */
   async getTokenBalance(mintAddress) {
     if (!this.wallet) throw new Error('Wallet non chargé');
-    try {
-      const ata = await getAssociatedTokenAddress(
-        new PublicKey(mintAddress),
-        this.wallet.publicKey
-      );
-      const account = await getAccount(this.connection, ata);
-      return BigInt(account.amount);
-    } catch {
-      return BigInt(0);
-    }
+    const { value } = await this.connection.getParsedTokenAccountsByOwner(
+      this.wallet.publicKey,
+      { mint: new PublicKey(mintAddress) }
+    );
+    return value.reduce((sum, { account }) =>
+      sum + BigInt(account.data.parsed?.info?.tokenAmount?.amount || '0'), BigInt(0));
   }
 
   // ─── Jupiter Quote & Swap ─────────────────────────────────────────────────
@@ -258,16 +259,74 @@ class Trader {
   }
 
   /** Prix groupés : un seul appel Jupiter pour tous les mints, GMGN pour les manquants */
+  /**
+   * Prix groupés, du plus fiable au plus coûteux — sans jamais bloquer la surveillance :
+   *  1. Jupiter Price v3 (un appel pour tous les mints)
+   *  2. prix du classement GMGN déjà en mémoire (aucun appel réseau)
+   *  3. GMGN token info, en parallèle et borné à 3 s (la file GMGN peut être pleine ou en pause)
+   *  4. devis de vente Jupiter pour les positions détenues (indépendant de GMGN)
+   */
   async _pricesFor(mints) {
     const out = await prices.getPrices(mints);
-    const missing = mints.filter(m => out[m] == null).slice(0, 5);
-    if (missing.length > 0 && await gmgn.isAvailable()) {
-      for (const m of missing) {
-        const p = await gmgn.getTokenPrice(m).catch(() => null);
-        if (p) out[m] = p;
-      }
+    for (const m of mints) {
+      if (out[m] != null) continue;
+      const row = gmgn.findTrendingRow(m);
+      const p = row ? parseFloat(row.priceUsd) : 0;
+      if (p > 0) out[m] = p;
+    }
+    let missing = mints.filter(m => out[m] == null).slice(0, 5);
+    if (missing.length > 0 && !gmgn.rateStatus().banned && await gmgn.isAvailable()) {
+      const timeout = new Promise(r => setTimeout(() => r(null), 3_000));
+      const got = await Promise.all(missing.map(m => Promise.race([gmgn.getTokenPrice(m).catch(() => null), timeout])));
+      missing.forEach((m, i) => { if (got[i]) out[m] = got[i]; });
+    }
+    missing = mints.filter(m => out[m] == null && this.positions.has(m)).slice(0, 3);
+    for (const m of missing) {
+      const p = await this._quotePriceUsd(m).catch(() => null);
+      if (p) out[m] = p;
     }
     return out;
+  }
+
+  /** Décimales d'un mint (cache permanent — elles ne changent jamais) */
+  async _decimals(mint) {
+    this._decCache = this._decCache || new Map();
+    if (this._decCache.has(mint)) return this._decCache.get(mint);
+    const info = await this.connection.getParsedAccountInfo(new PublicKey(mint));
+    const dec = info?.value?.data?.parsed?.info?.decimals;
+    if (typeof dec !== 'number') throw new Error('décimales introuvables');
+    this._decCache.set(mint, dec);
+    return dec;
+  }
+
+  /**
+   * Prix USD d'un token détenu, déduit d'un devis de vente Jupiter (token → SOL).
+   * Dernier recours quand ni Jupiter Price ni GMGN ne donnent de prix ; c'est
+   * même la meilleure mesure de ce qu'une vente rapporterait. Cache 30 s par mint.
+   */
+  async _quotePriceUsd(mint) {
+    this._quoteCache = this._quoteCache || new Map();
+    const c = this._quoteCache.get(mint);
+    if (c && Date.now() - c.ts < 30_000) return c.price;
+    const [dec, raw, solUsd] = await Promise.all([this._decimals(mint), this.getTokenBalance(mint), prices.getPrice(WSOL)]);
+    if (!solUsd || raw === BigInt(0)) return null;
+    const quote = await this.getQuote(mint, WSOL, raw.toString(), 500);
+    const solOut = parseFloat(quote?.outAmount || 0) / LAMPORTS_PER_SOL;
+    const tokens = Number(raw) / 10 ** dec;
+    const price = solOut > 0 && tokens > 0 ? (solOut * solUsd) / tokens : null;
+    this._quoteCache.set(mint, { ts: Date.now(), price });
+    return price;
+  }
+
+  /** Prix d'entrée déduit du swap exécuté (si aucune source de prix n'a répondu avant l'achat) */
+  async _entryPriceFromQuote(tokenMint, solAmount, quote) {
+    try {
+      const [dec, solUsd] = await Promise.all([this._decimals(tokenMint), prices.getPrice(WSOL)]);
+      const tokens = Number(quote?.outAmount || 0) / 10 ** dec;
+      return solUsd && tokens > 0 ? (solAmount * solUsd) / tokens : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -321,11 +380,14 @@ class Trader {
     console.log(`[Trader] Achat: ${solAmount} SOL → ${tokenMint}`);
 
     // Prix d'entrée en USD (best effort — n'empêche pas le trade si indispo)
-    const entryPriceUsd = await this.getCurrentPrice(tokenMint);
-    const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
+    let entryPriceUsd = await this.getCurrentPrice(tokenMint);
 
     const quote = await this.getQuote(WSOL, tokenMint, lamports, slippageBps);
     const txId = await this.executeSwap(quote);
+    // Sans prix avant l'achat (Jupiter muet, GMGN en pause), le stop-loss serait inactif :
+    // on reconstitue le prix d'entrée à partir du swap réellement exécuté
+    if (!entryPriceUsd) entryPriceUsd = await this._entryPriceFromQuote(tokenMint, solAmount, quote);
+    const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
 
     const position = {
       positionId: `${tokenMint.slice(0, 6)}-${Date.now()}`,
@@ -585,10 +647,18 @@ class Trader {
   async _checkPositions(notify) {
     const live = await this._pricesFor([...this.positions.keys()]);
     for (const [tokenMint, pos] of [...this.positions]) {
-      if (!pos.entryPriceUsd) continue; // pas de prix d'entrée → skip
-
       const currentPrice = live[tokenMint];
       if (!currentPrice) continue;
+      if (!pos.entryPriceUsd) {
+        // Position sans prix d'entrée (achat ou import pendant une panne de prix) :
+        // on prend le premier prix connu comme référence pour activer SL/TP
+        pos.entryPriceUsd = currentPrice;
+        pos.highPriceUsd  = currentPrice;
+        pos.entryPriceReconstructed = true;
+        this._save();
+        if (notify) notify(`ℹ️ Prix d'entrée de <code>${pos.symbol || tokenMint.slice(0, 8)}</code> reconstitué ($${currentPrice.toPrecision(4)}) — stop-loss et take-profit actifs.`);
+        continue;
+      }
 
       // Trailing stop-loss : met à jour le prix le plus haut atteint
       if (currentPrice > (pos.highPriceUsd || pos.entryPriceUsd)) {
@@ -639,6 +709,9 @@ class Trader {
         exitReason = 'TAKE_PROFIT_2';
       }
 
+      // Vente précédente en échec : on attend la fin du délai avant de réessayer
+      if (reason && pos.nextSellAttemptAt && Date.now() < pos.nextSellAttemptAt) reason = null;
+
       if (reason) {
         const sym = pos.symbol || shortMint;
         const EXIT_LABELS = {
@@ -651,10 +724,10 @@ class Trader {
           // Stop-loss = sortie d'urgence → slippage large (5%) pour garantir le fill
           const slippage = exitReason === 'STOP_LOSS' ? 500 : 300;
           const { txId } = await this.sell(tokenMint, sellPct, slippage, exitReason);
-          if (stageAfter != null && sellPct < 100) {
-            const p = this.positions.get(tokenMint);
-            if (p) { p.tpStage = stageAfter; delete p.tpTaken; this._save(); }
-          }
+          const p = this.positions.get(tokenMint);
+          if (p) { delete p.sellFailCount; delete p.nextSellAttemptAt; delete p.lastSellAlertAt; }
+          if (stageAfter != null && sellPct < 100 && p) { p.tpStage = stageAfter; delete p.tpTaken; }
+          this._save();
           // Chaque ordre du moniteur dans le journal d'ARIA (adresse, %, prix, PnL)
           personalAgent.logAction('SELL',
             `${EXIT_LABELS[exitReason] || exitReason} $${sym} — vendu ${sellPct}% à $${currentPrice.toFixed(8)} (PnL ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%)`,
@@ -665,22 +738,37 @@ class Trader {
           }
         } catch (err) {
           console.error(`[Trader] Erreur vente SL/TP (${shortMint}): ${err.message}`);
-          personalAgent.logAction('ERROR',
-            `Vente ${EXIT_LABELS[exitReason] || exitReason} $${sym} échouée : ${err.message}`,
-            { symbol: sym, address: tokenMint }
-          );
           if (/balance token nulle/i.test(err.message)) {
             // Le wallet ne détient plus le token (vendu à la main) →
             // resynchronise au lieu de réessayer en boucle à chaque passage
+            personalAgent.logAction('ERROR', `Vente ${EXIT_LABELS[exitReason] || exitReason} $${sym} : token absent du wallet`, { symbol: sym, address: tokenMint });
             this.syncWallet().catch(() => {});
             if (notify) notify(`🔀 Position <code>${shortMint}</code> absente du wallet — resynchronisation automatique du tracking.`);
-          } else if (notify) {
-            notify(`⚠️ Erreur vente SL/TP pour <code>${shortMint}</code>: ${err.message}`);
+          } else {
+            // Réessais espacés (10 s, 30 s, 1 min, puis toutes les 5 min) et alertes limitées :
+            // une alerte au 1er échec puis au plus une toutes les 15 min
+            pos.sellFailCount = (pos.sellFailCount || 0) + 1;
+            const delays = [10_000, 30_000, 60_000, 300_000];
+            pos.nextSellAttemptAt = Date.now() + delays[Math.min(pos.sellFailCount - 1, delays.length - 1)];
+            this._save();
+            if (!pos.lastSellAlertAt || Date.now() - pos.lastSellAlertAt > 15 * 60_000) {
+              pos.lastSellAlertAt = Date.now();
+              personalAgent.logAction('ERROR',
+                `Vente ${EXIT_LABELS[exitReason] || exitReason} $${sym} échouée (${pos.sellFailCount}e essai) : ${err.message}`,
+                { symbol: sym, address: tokenMint });
+              if (notify) {
+                notify(`${pos.sellFailCount >= 6 ? '🚨' : '⚠️'} Vente ${EXIT_LABELS[exitReason] || exitReason} impossible pour <code>${this._escHtml(sym)}</code> (${pos.sellFailCount} essais) : ${this._escHtml(err.message.slice(0, 160))}\n` +
+                  `Nouvel essai automatique ${pos.sellFailCount >= 4 ? 'toutes les 5 min' : 'bientôt'}.` +
+                  (pos.sellFailCount >= 6 ? ' Vérifie la liquidité du token : tu devras peut-être vendre à la main.' : ''));
+              }
+            }
           }
         }
       }
     }
   }
+
+  _escHtml(t) { return String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
   // ─── État ─────────────────────────────────────────────────────────────────
 

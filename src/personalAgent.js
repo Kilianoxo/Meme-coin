@@ -1295,8 +1295,8 @@ class PersonalAgent {
     const rec  = token._recurring;
     const pers = this.data.personality;
 
-    if (rugReport?.rugged || security?.mintAuthority) {
-      const reason = rugReport?.rugged ? 'Rugpull confirmé' : 'Mint authority active';
+    if (rugReport?.rugged || security?.mintAuthority || security?.honeypot) {
+      const reason = rugReport?.rugged ? 'Rugpull confirmé' : security?.honeypot ? 'Honeypot détecté' : 'Mint authority active';
       return this._buildDebate(token, security, rugReport, overview, lpLock,
         { decision: 'SKIP', score: 0, confidence: 10, reasoning: reason, suggestedAmountPct: 0, stopLossPct: 20, takeProfitPct: 50 }
       );
@@ -1455,6 +1455,8 @@ class PersonalAgent {
    * sinon token info GMGN (minimal). null si introuvable.
    */
   async _fetchPair(address) {
+    const rl = gmgn.rateStatus();
+    if (rl.banned) throw new gmgn.RateLimitedError(rl.until);
     await gmgn.getTrending().catch(() => []);
     const row = gmgn.findTrendingRow(address);
     if (row) return row;
@@ -1476,10 +1478,13 @@ class PersonalAgent {
   /** Exécute un outil demandé par ARIA. Retourne toujours un objet sérialisable. */
   async _execTool(name, input = {}) {
     try {
-      if (!(await gmgn.isAvailable()) &&
-          ['rechercher_token', 'tokens_tendance', 'donnees_token', 'analyser_token',
-           'analyser_wallet', 'smart_money_moves'].includes(name)) {
+      const GMGN_TOOLS = ['rechercher_token', 'tokens_tendance', 'donnees_token', 'analyser_token', 'analyser_wallet', 'smart_money_moves'];
+      if (!(await gmgn.isAvailable()) && GMGN_TOOLS.includes(name)) {
         return { erreur: 'GMGN non configuré (gmgn-cli + GMGN_API_KEY requis)' };
+      }
+      const rl = gmgn.rateStatus();
+      if (rl.banned && GMGN_TOOLS.includes(name)) {
+        return { erreur: `GMGN en pause (limite de requêtes) jusqu'à ${new Date(rl.until).toLocaleTimeString('fr-FR')} — données indisponibles d'ici là, ne conclus rien sur le token` };
       }
 
       switch (name) {
@@ -1973,17 +1978,26 @@ class PersonalAgent {
 
       const sym     = pos.symbol || pos.tokenMint?.slice(0, 6) || '?';
       const sigText = signals.filter(s => s.hit).map(s => s.label).join(' + ') || 'signaux multiples';
-      this.logAction('ALERT', `Signal de fuite GMGN sur $${sym} (sévérité ${severity}) : ${sigText}`, { symbol: sym });
+      if (this._allowAlert(`escapelog:${pos.tokenMint}`, 15 * 60_000)) {
+        this.logAction('ALERT', `Signal de fuite GMGN sur $${sym} (sévérité ${severity}) : ${sigText}`, { symbol: sym });
+      }
 
       if (this.data.autonomy.enabled && this.data.autonomy.liveTrading) {
+        // Après 3 échecs de vente, on ne réessaie plus qu'une fois toutes les 15 min
+        if ((pos.escapeFailCount || 0) >= 3 && Date.now() - (pos.lastEscapeTryAt || 0) < 15 * 60_000) continue;
+        pos.lastEscapeTryAt = Date.now();
         try {
           // Slippage large (5%) : on sort VITE, le prix passe après la survie
           const { txId } = await this._trader.sell(pos.tokenMint, 100, 500, 'ESCAPE_SIGNAL');
           this.logAction('SELL', `Sortie d'urgence $${sym} — ${sigText}`, { symbol: sym, txId });
           await this.sendMessage(`🚨 SORTIE D'URGENCE $${sym} — ${sigText}. J'ai tout vendu.`, 'high');
         } catch (err) {
-          this.logAction('ERROR', `Sortie d'urgence $${sym} échouée : ${err.message}`, { symbol: sym });
-          await this.sendMessage(`🚨 $${sym} : ${sigText} — VENTE ÉCHOUÉE (${err.message}). Vends manuellement MAINTENANT.`, 'high');
+          pos.escapeFailCount = (pos.escapeFailCount || 0) + 1;
+          this._trader._save();
+          if (this._allowAlert(`escapefail:${pos.tokenMint}`, 15 * 60_000)) {
+            this.logAction('ERROR', `Sortie d'urgence $${sym} échouée (${pos.escapeFailCount}e essai) : ${err.message}`, { symbol: sym });
+            await this.sendMessage(`🚨 $${sym} : ${sigText} — VENTE ÉCHOUÉE (${err.message}). Vends manuellement MAINTENANT. Je réessaie ${pos.escapeFailCount >= 3 ? 'toutes les 15 min' : 'au prochain cycle'}.`, 'high');
+          }
         }
       } else if (this._allowAlert(`escape:${pos.tokenMint}`, 15 * 60_000)) {
         await this.sendMessage(`🚨 SIGNAL DE FUITE sur $${sym} : ${sigText}. Vends maintenant ou active /auto.`, 'high');
@@ -2164,6 +2178,14 @@ class PersonalAgent {
     const wallets = this.data.watchlist.wallets;
     if (wallets.length === 0) return;
     if (!(await gmgn.isAvailable())) return;
+    if (gmgn.rateStatus().banned) return; // le curseur n'avance pas : rien n'est perdu
+
+    // Copy-trades reportés pendant une pause : rejoués s'ils ont moins de 15 min
+    const pending = (this._pendingCopies || []).filter(p => Date.now() - p.at < 15 * 60_000);
+    this._pendingCopies = [];
+    for (const p of pending) {
+      await this._copyTrade(p.walletLabel, p.act).catch(err => console.error('[ARIA] Erreur copy-trade reporté:', err.message));
+    }
 
     for (const w of wallets) {
       try {
@@ -2220,13 +2242,25 @@ class PersonalAgent {
    * exécution avec tous les garde-fous (_execAutoBuy). Taille = sizing par
    * confiance × risk adaptatif — pas la taille du wallet copié.
    */
+  /** Copy-trade reporté pendant une pause GMGN (rejoué au cycle suivant, 15 min max) */
+  _deferCopy(walletLabel, act, why) {
+    this._pendingCopies = (this._pendingCopies || []).filter(p => p.act.tokenAddress !== act.tokenAddress);
+    this._pendingCopies.push({ walletLabel, act, at: Date.now() });
+    if (this._allowAlert(`copydefer:${act.tokenAddress}`, 15 * 60_000)) {
+      this.logAction('SIGNAL', `Copy-trade $${sanitizeName(act.tokenSymbol)} reporté — ${why}`, { symbol: act.tokenSymbol });
+    }
+  }
+
   async _copyTrade(walletLabel, act) {
     const addr = act.tokenAddress;
     const sym  = sanitizeName(act.tokenSymbol);
     if (!addr || !this.data.autonomy.enabled) return;
+    if (gmgn.rateStatus().banned) return this._deferCopy(walletLabel, act, 'GMGN en pause');
 
     // Due diligence : paire + gates durs anti-rug
-    const pair = await this._fetchPair(addr);
+    let pair;
+    try { pair = await this._fetchPair(addr); }
+    catch (err) { if (err.code === 'GMGN_RATE_LIMITED') return this._deferCopy(walletLabel, act, 'GMGN en pause'); throw err; }
     if (!pair) {
       this.logAction('SIGNAL', `Copy-trade $${sym} abandonné — token introuvable sur GMGN`, { symbol: sym });
       return;
@@ -2238,14 +2272,24 @@ class PersonalAgent {
       return;
     }
 
-    // Analyse ARIA complète
+    // Sécurité on-chain OBLIGATOIRE : sans elle, aucun garde-fou anti-rug → on n'achète pas
     const sec = await gmgn.getTokenSecurity(addr);
+    if (!sec) return this._deferCopy(walletLabel, act, 'sécurité GMGN indisponible, pas d\'achat sans contrôle anti-rug');
+    if (sec.honeypot || !sec.renouncedMint) {
+      const why = sec.honeypot ? 'honeypot détecté' : 'mint authority non abandonnée';
+      this.logAction('SIGNAL', `Copy-trade $${sym} refusé — ${why}`, { symbol: sym });
+      await this.sendMessage(`🔭 Je ne copie PAS l'achat de ${walletLabel} sur $${sym} : ${why}.`);
+      return;
+    }
+
+    // Analyse ARIA complète
     const g   = pair._gmgn || {};
-    const security = sec ? {
+    const security = {
       mintAuthority:      sec.renouncedMint   ? null : 'active',
       freezeAuthority:    sec.renouncedFreeze ? null : 'active',
+      honeypot:           !!sec.honeypot,
       top10HolderPercent: (sec.top10 || 0) * 100,
-    } : null;
+    };
     const debate = await this.analyzeToken(pair, security, null, { holder: g.holderCount || null }, null);
     const d = debate.decision;
 

@@ -112,6 +112,7 @@ function _exec(args, timeout = CLI_TIMEOUT_MS) {
         if (err) {
           const e = new Error(`gmgn-cli: ${String(stderr || err.message).trim().slice(0, 600)}`);
           e.code = err.code;
+          e.stderr = String(stderr || ''); // texte complet pour détecter un 429 et son heure de levée
           return reject(e);
         }
         resolve(stdout);
@@ -133,7 +134,9 @@ function _exec(args, timeout = CLI_TIMEOUT_MS) {
 const PLANS = { free: { rate: 5, cap: 5 }, plus: { rate: 20, cap: 20 }, pro: { rate: 50, cap: 50 } };
 const PLAN_NAME = (process.env.GMGN_PLAN || 'free').toLowerCase();
 const PLAN = PLANS[PLAN_NAME] || PLANS.free;
-const RATE_SAFETY   = 0.6;   // on n'utilise que 60 % du débit annoncé
+const RATE_SAFETY   = 0.6;   // on n'utilise que 60 % du débit ET de la capacité annoncés
+// Capacité client : 60 % de celle du forfait, mais au moins le poids max d'une route (3)
+const CAP           = Math.max(3, PLAN.cap * RATE_SAFETY);
 const MAX_IN_FLIGHT = 2;     // requêtes simultanées max
 const MAX_QUEUE_WAIT_MS = 60_000;
 const BAN_MARGIN_MS = 3_000; // ne jamais réessayer pile à l'heure de levée
@@ -197,7 +200,8 @@ function _parseResetMs(msg) {
 }
 
 function _isRateLimitError(msg) {
-  return /\b429\b|RATE_LIMIT/.test(msg) && !/ERROR_RATE_LIMIT_BLOCKED/.test(msg);
+  // Strictement lié à la ligne d'erreur du CLI : un « 429 » dans une adresse ou un montant ne compte pas
+  return /failed: HTTP 429\b|error=RATE_LIMIT_(EXCEEDED|BANNED)\b|code=429\b/.test(msg);
 }
 
 function _enterBan(msg) {
@@ -206,10 +210,13 @@ function _enterBan(msg) {
   const wasBanned = Date.now() < _rl.bannedUntil;
   _rl.bannedUntil = until;
   _rl.banReason   = /BANNED/.test(msg) ? 'ban' : 'limite';
-  _rl.factor      = Math.max(0.25, _rl.factor * 0.5); // ralentit pour la suite
-  _rl.lastViolation = Date.now();
-  _rl.level       = PLAN.cap;                          // considère le seau plein
-  _rl.stats.rateLimited++;
+  if (!wasBanned) {
+    // Une seule réduction par pause (plusieurs requêtes en vol peuvent toutes revenir en 429)
+    _rl.factor = Math.max(0.25, _rl.factor * 0.5);
+    _rl.stats.rateLimited++;
+  }
+  _rl.lastViolation = until;                           // les « 5 min propres » comptent après la levée
+  _rl.level       = CAP;                               // considère le seau plein
   console.warn(`[GMGN] ⏸ Limite de requêtes atteinte (${_rl.banReason}) — pause jusqu'à ${new Date(until).toLocaleTimeString('fr-FR')}, débit réduit à ${Math.round(_rl.factor * 100)}%`);
   _rejectQueue();
   if (!wasBanned) {
@@ -238,8 +245,8 @@ function _pump() {
   while (_rl.queue.length > 0 && _rl.inFlight < MAX_IN_FLIGHT) {
     _leak();
     const job = _rl.queue[0];
-    if (_rl.level + job.weight > PLAN.cap) {
-      const waitMs = Math.ceil(((_rl.level + job.weight - PLAN.cap) / _currentRate()) * 1000) + 25;
+    if (_rl.level + job.weight > CAP) {
+      const waitMs = Math.ceil(((_rl.level + job.weight - CAP) / _currentRate()) * 1000) + 25;
       _rl.timer = setTimeout(_pump, waitMs);
       return;
     }
@@ -275,8 +282,9 @@ function _cli(args) {
           }
           resolve(json);
         } catch (err) {
-          if (_isRateLimitError(String(err.message))) {
-            _enterBan(String(err.message));
+          const full = `${err.stderr || ''}\n${err.message || ''}`;
+          if (_isRateLimitError(full)) {
+            _enterBan(full);
             reject(new RateLimitedError(_rl.bannedUntil));
           } else {
             reject(err);
@@ -425,7 +433,8 @@ function normalizeRow(row, interval = '1h') {
 
 /** Cherche une paire dans le cache trending par adresse (sans appel CLI) */
 function findTrendingRow(address) {
-  for (const { rows } of _trendingCaches.values()) {
+  for (const { ts, rows } of _trendingCaches.values()) {
+    if (Date.now() - ts > 2 * TRENDING_TTL_MS) continue; // classement figé (pause GMGN, source coupée)
     const hit = rows.find(p => p.baseToken?.address === address);
     if (hit) return hit;
   }
