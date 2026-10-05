@@ -27,6 +27,7 @@ const { agentBus } = require('./agents');
 const gmgn          = require('./gmgn');
 
 const PUBLIC_DIR   = path.join(__dirname, 'public');
+const WSOL_MINT    = 'So11111111111111111111111111111111111111112';
 const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
 
 class Dashboard {
@@ -341,8 +342,8 @@ class Dashboard {
     // Prix live pour les positions ouvertes + tokens wallet (Jupiter Price API)
     const posMints    = positions.map(p => p.tokenMint);
     const tokenMints  = walletTokens.map(t => t.mint);
-    const allMints    = [...new Set([...posMints, ...tokenMints])];
-    const prices      = allMints.length > 0 ? await this._fetchPrices(allMints) : {};
+    const allMints    = [...new Set([...posMints, ...tokenMints, WSOL_MINT])];
+    const prices      = await this._fetchPrices(allMints);
 
     const enrichedPositions = positions.map(p => {
       const currentPrice = prices[p.tokenMint] ?? null;
@@ -404,6 +405,7 @@ class Dashboard {
       updatedAt:       Date.now(),
       walletBalance:   walletBalance !== null ? parseFloat(walletBalance.toFixed(6)) : null,
       walletAddress:   this.trader.walletAddress || null,
+      solPriceUsd:     prices[WSOL_MINT] ?? null,
       walletTokens:    enrichedWalletTokens,
       recentAnalyses:  state.recentAnalyses,
       stats: {

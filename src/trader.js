@@ -412,7 +412,7 @@ class Trader {
     // sinon une vente partielle affiche une fausse perte)
     const costBasis = pos ? pos.solSpent * (pct / 100) : null;
     const pnlSol    = costBasis != null ? solReceived - costBasis : null;
-    const trade = { action: 'SELL', tokenMint, pct, txId, timestamp: Date.now(), pnlSol, exitReason };
+    const trade = { action: 'SELL', tokenMint, symbol: pos?.symbol || null, pct, txId, timestamp: Date.now(), pnlSol, exitReason };
     this.history.push(trade);
 
     if (pct === 100) {
@@ -471,7 +471,7 @@ class Trader {
         pos.closeTimestamp = Date.now();
         this.positions.delete(tokenMint);
         this.history.push({
-          action: 'SELL', tokenMint, pct: 100, txId: null,
+          action: 'SELL', tokenMint, symbol: pos.symbol || null, pct: 100, txId: null,
           timestamp: Date.now(), pnlSol: null,
           exitReason: 'EXTERNAL_SELL', external: true,
         });

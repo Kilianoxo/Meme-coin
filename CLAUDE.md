@@ -105,12 +105,21 @@ Chaque trade via chat est journalisé dans agent_journal.json.
 /agent [message] — Parler avec ARIA
 
 ## Dashboard (port 3000)
-- Onglet Dashboard : balance wallet, tokens SPL, positions, PnL cumulé (bot + manuel), historique avec raison de sortie, analyses récentes
-- Onglet ARIA : personnalité, panneau Autonomie (toggles + plafonds), chat, watchlists, journal d'activité live
-- Onglet Paper Trading : simulation complète avec config indépendante
-- Skin moderne : palette indigo/nuit, gradients, pills, glassmorphism (bloc SKIN MODERNE en fin de <style>)
-- Header : chip d'état ARIA (off / autonome / trading réel)
-- SSE /api/events : aria_proactive, aria_journal, messages agents
+Design "fintech" violet : fond dégradé (couche `body::before` fixe), héros en verre, cartes blanches,
+icônes SVG en sprite (`<symbol id="i-…">` + robot ARIA `#robot`), police Plus Jakarta Sans.
+4 onglets (nav en pilule en desktop, barre fixe en bas < 760px) :
+- Accueil : solde wallet en USD (prix SOL via `solPriceUsd` de /api/data), PnL du jour, actions rapides,
+  tuiles PnL/win rate/positions/semaine, carte ARIA, positions (jauge SL→TP), derniers trades,
+  performance cumulée, semaine, tokens du wallet, analyses récentes
+- ARIA : profil (humeur, jauges, traits), chat avec suggestions rapides, watchlists, journal live
+- Paper : portefeuille simulé, graphiques, positions (vente), ajout manuel, historique
+- Réglages : profils rapides (Prudent/Équilibré/Agressif), interrupteurs (analyses IA, autonomie,
+  trading réel, copy-trading), curseurs de seuils, tailles/exposition, paramètres paper, reset.
+  Sauvegarde AUTOMATIQUE (attribut `data-save="autonomy|paper"` + debounce 450 ms)
+- Fenêtre "Analyser un token" (POST /api/debate) avec verdict + métriques GMGN
+- Chart.js via CDN jsdelivr (repli cdnjs) — si indisponible, le reste du dashboard fonctionne
+- SSE /api/events : aria_proactive (toast si hors onglet ARIA), aria_journal
+- Mobile : pas de backdrop-filter sur la topbar (sinon la nav fixed se positionne par rapport à elle)
 
 ## Variables d'environnement (.env)
 TELEGRAM_TOKEN, TELEGRAM_ADMIN_ID, ANTHROPIC_API_KEY (obligatoires)
