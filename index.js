@@ -1,9 +1,13 @@
 require('dotenv').config();
 
-const Trader    = require('./src/trader');
-const Scanner   = require('./src/scanner');
-const Bot       = require('./src/bot');
-const Dashboard = require('./src/dashboard');
+const Trader        = require('./src/trader');
+const Scanner       = require('./src/scanner');
+const Bot           = require('./src/bot');
+const Dashboard     = require('./src/dashboard');
+const Watchdog      = require('./src/watchdog');
+const PaperTrader   = require('./src/paperTrader');
+const personalAgent = require('./src/personalAgent');
+const logger        = require('./src/logger');
 
 // Vérifications de base au démarrage
 const required = ['TELEGRAM_TOKEN', 'TELEGRAM_ADMIN_ID', 'ANTHROPIC_API_KEY'];
@@ -15,6 +19,7 @@ if (missing.length > 0) {
 }
 
 async function main() {
+  logger.startup();
   console.log('🚀 Démarrage Meme Coin Bot...');
 
   const trader = new Trader();
@@ -31,11 +36,29 @@ async function main() {
   }
 
   const scanner = new Scanner();
-  const bot = new Bot(trader, scanner);
+  const bot     = new Bot(trader, scanner);
+  // Plusieurs stratégies paper en parallèle sur les mêmes analyses (comparatif)
+  const papers  = PaperTrader.STRATEGIES.map(s => ({ id: s.id, label: s.label, trader: new PaperTrader(s) }));
 
   bot.start();
   scanner.start();
-  new Dashboard(trader).start();
+  new Dashboard(trader, papers).start();
+
+  scanner.on('debate', (debate) => {
+    for (const p of papers) {
+      p.trader.onDebateResult(debate).catch((err) =>
+        console.error(`[Paper:${p.id}] Erreur onDebateResult:`, err.message)
+      );
+    }
+  });
+
+  const watchdog = new Watchdog(scanner, (msg) => bot._send(msg, { parse_mode: 'HTML' }));
+  watchdog.start();
+
+  // ARIA — donne accès au trader pour la surveillance autonome puis démarre le heartbeat
+  personalAgent.setTrader(trader);
+  personalAgent.setPaperTraders(papers);
+  personalAgent.startHeartbeat();
 
   console.log('✅ Bot opérationnel.');
 }

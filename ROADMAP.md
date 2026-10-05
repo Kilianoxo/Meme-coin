@@ -9,7 +9,6 @@
 | 3 | Birdeye API — holders, wallets, données avancées | Critique | ✅ Done |
 | 4 | GeckoTerminal API — données marché | Important | ✅ Done |
 | 5 | Scraper Pump.fun — nouveaux tokens | Critique | ✅ Done |
-| 6 | Scraper Photon — volume et momentum | Important | ❌ À faire |
 
 ## PHASE 2 — Analyse & Sécurité
 

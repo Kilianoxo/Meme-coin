@@ -9,17 +9,18 @@
  *   /scan       — Lancer un scan manuel
  *   /positions  — Positions ouvertes
  *   /history    — 10 derniers trades
- *   /auto       — Activer/désactiver l'auto-trade
+ *   /session    — Session de trading (capital alloué, mode, plafonds)
  *   /analyse <adresse>          — Analyse complète d'un token
  *   /buy <adresse> <sol>        — Achat manuel
  *   /sell <adresse> [pct]       — Vente manuelle (défaut 100%)
  */
 
 const { Telegraf, Markup } = require('telegraf');
-const dex = require('./dexscreener');
-const { runDebate } = require('./agents');
-const { formatSecurity } = require('./birdeye');
-const rugcheck = require('./rugcheck');
+const gmgn           = require('./gmgn');
+const personalAgent  = require('./personalAgent');
+const tokenHistory  = require('./tokenHistory');
+const state         = require('./state');
+const logger        = require('./logger');
 
 class Bot {
   constructor(trader, scanner) {
@@ -27,13 +28,36 @@ class Bot {
     this.trader = trader;
     this.scanner = scanner;
     this.adminId = parseInt(process.env.TELEGRAM_ADMIN_ID, 10);
-    this.autoTrade = false;
     this.maxPositionSol = parseFloat(process.env.MAX_POSITION_SOL || '0.1');
+
+    // Guard anti-doublon : adresses de tokens dont l'achat est en cours
+    this._buyInFlight = new Set();
+
+    // Compteurs pour le résumé horaire
+    this._hourlyAnalyzed = 0;
+    this._hourlyRejected = 0;
 
     this._setupMiddleware();
     this._setupCommands();
     this._setupCallbacks();
     this._listenToScanner();
+    this._startHourlySummary();
+
+    // Donne à ARIA le moyen de pinguer Telegram pour les alertes haute priorité
+    personalAgent.setNotifyCallback((msg) => this._send(msg, { parse_mode: 'HTML' }));
+
+    // GMGN a limité le bot : une alerte au début de la pause (max 1 / 10 min)
+    gmgn.onRateLimit((st) => {
+      if (Date.now() - (this._lastRateAlert || 0) < 10 * 60_000) return;
+      this._lastRateAlert = Date.now();
+      const hh = new Date(st.until).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      this._send(
+        `⏸ <b>GMGN a limité le bot</b> (trop de requêtes) — pause jusqu'à ${hh}.\n` +
+        `Scan et analyses suspendus, reprise automatique à vitesse réduite (${st.speedPct}%). ` +
+        `Les stop-loss continuent de fonctionner (prix Jupiter).`,
+        { parse_mode: 'HTML' }
+      );
+    });
   }
 
   // ─── Middleware ────────────────────────────────────────────────────────────
@@ -57,6 +81,37 @@ class Bot {
   }
 
   /** Échappe les caractères spéciaux HTML dans du contenu dynamique */
+  /** Résumé de la session de trading (ou mode d'emploi si aucune) */
+  async _replySession(ctx, prefix = '') {
+    let balance = null;
+    try { if (this.trader.isReady()) balance = await this.trader.getSolBalance(); } catch { /* best effort */ }
+    const st = personalAgent.sessionState({ walletBalance: balance });
+    const head = prefix ? prefix + '\n\n' : '';
+    if (!st.active) {
+      const modes = st.modes.map(m => `${m.emoji} ${m.label}`).join(' · ');
+      return ctx.reply(
+        head + `⏸ <b>Aucune session en cours</b> — ARIA n'achète rien seule.\n` +
+        (balance != null ? `Wallet : ${balance.toFixed(4)} SOL\n` : '') +
+        `Mode préparé : ${st.modes.find(m => m.id === st.mode)?.label || st.mode} (${modes})\n\n` +
+        `Lancer : <code>/session start 1.5 equilibre 3 0.2</code>\n` +
+        `(capital SOL · mode · positions max · mise max par trade — les deux derniers sont optionnels)\n` +
+        `Le reste du wallet reste dans le pocket sécurisé.`,
+        { parse_mode: 'HTML' }
+      );
+    }
+    const dur = Math.round((Date.now() - st.startedAt) / 60_000);
+    return ctx.reply(
+      head + `▶️ <b>Session ${this._esc(st.modeLabel)}</b> depuis ${dur >= 60 ? Math.floor(dur / 60) + 'h' + String(dur % 60).padStart(2, '0') : dur + ' min'}\n` +
+      `Capital : ${st.capitalSol} SOL · disponible ${st.availableSol} · investi ${st.investedSol}\n` +
+      `PnL : ${st.pnlSol >= 0 ? '+' : ''}${st.pnlSol} SOL (${st.pnlPct >= 0 ? '+' : ''}${st.pnlPct}%) · ${st.closedTrades} trades, ${st.wins} gagnants\n` +
+      `Positions : ${st.openPositions}/${st.maxOpenPositions} · mise max ${st.maxSolPerTrade} SOL\n` +
+      (st.pocketSol != null ? `🔒 Pocket sécurisé : ${st.pocketSol} SOL\n` : '') +
+      `Arrêt auto si la session perd ${Math.abs(st.stopLossSol)} SOL.\n\n` +
+      `<code>/session positions 4</code> · <code>/session mise 0.25</code> · <code>/session mode chill</code> · <code>/session stop</code>`,
+      { parse_mode: 'HTML' }
+    );
+  }
+
   _esc(text) {
     return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
@@ -65,151 +120,82 @@ class Bot {
     const sym = this._esc(pair.baseToken?.symbol || '???');
     const name = this._esc(pair.baseToken?.name || '');
     const price = parseFloat(pair.priceUsd || 0);
-    const ch24 = pair.priceChange?.h24 || 0;
-    const vol24 = pair.volume?.h24 || 0;
+    const ch1 = pair.priceChange?.h1 || 0;
+    const vol = pair.volume?.h24 || 0;
     const liq = pair.liquidity?.usd || 0;
     const mc = pair.marketCap || pair.fdv || 0;
-    const arrow = ch24 >= 0 ? '🟢' : '🔴';
-    const pairUrl = pair.url || `https://dexscreener.com/solana/${pair.pairAddress}`;
+    const arrow = ch1 >= 0 ? '🟢' : '🔴';
+    const addr = pair.baseToken?.address || '';
 
     return (
       `<b>${sym}</b> (${name})\n` +
       `💰 Prix: $${price < 0.0001 ? price.toExponential(4) : price.toFixed(6)}\n` +
-      `${arrow} 24h: ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(2)}%\n` +
-      `📊 Volume 24h: $${this._fmt(vol24)}\n` +
+      `${arrow} 1h: ${ch1 >= 0 ? '+' : ''}${ch1.toFixed(2)}%\n` +
+      `📊 Volume: $${this._fmt(vol)}\n` +
       `💧 Liquidité: $${this._fmt(liq)}\n` +
       `📈 Market Cap: $${this._fmt(mc)}\n` +
-      `🔗 DEX: ${this._esc(pair.dexId)}\n` +
-      `📍 <code>${this._esc(pair.baseToken?.address || '')}</code>\n` +
-      `<a href="${pairUrl}">Voir sur DexScreener</a>`
+      `📍 <code>${this._esc(addr)}</code>\n` +
+      `<a href="${gmgn.tokenUrl(addr)}">Voir sur GMGN</a>`
     );
   }
 
+  /** Formate un résultat d'analyse ARIA — données 100% GMGN */
   _formatDebate(debate) {
-    const { bull, bear, momentum, whale, decision, token } = debate;
-    const sym      = this._esc(token.baseToken?.symbol || '???');
-    const name     = this._esc(token.baseToken?.name || '');
-    const price    = parseFloat(token.priceUsd || 0);
-    const ch24     = token.priceChange?.h24 || 0;
-    const ch1      = token.priceChange?.h1  || 0;
-    const pairUrl  = token.url || `https://dexscreener.com/solana/${token.pairAddress}`;
-    const decEmoji = { BUY: '🟢', SKIP: '🔴', WAIT: '🟡' }[decision.decision] || '⚪';
+    const { decision, token } = debate;
+    const sym     = this._esc(token.baseToken?.symbol || '???');
+    const name    = this._esc(token.baseToken?.name   || '');
+    const price   = parseFloat(token.priceUsd || 0);
+    const ch1     = token.priceChange?.h1 || 0;
+    const ch5m    = token.priceChange?.m5 || 0;
+    const addr    = token.baseToken?.address || '';
+    const liq     = token.liquidity?.usd  || 0;
+    const vol     = token.volume?.h24     || 0;
+    const decEmoji = { BUY: '🟢', SKIP: '🔴', WATCH: '🟡' }[decision.decision] || '⚪';
 
-    // ─── Header ────────────────────────────────────────────────────────────
-    const priceStr  = price < 0.0001 ? price.toExponential(2) : price.toFixed(6);
-    const ch24Arrow = ch24 >= 0 ? '🟢' : '🔴';
-    const ch1Arrow  = ch1  >= 0 ? '▲'  : '▼';
-
-    let msg = `━━━━━━━━━━━━━━━━━━━\n`;
-    if (debate.isGraduated) msg += `🎓 <b>TOKEN GRADUÉ — vient de quitter Pump.fun</b>\n`;
-    msg += `🪙 <b>$${sym}</b> — ${name}\n`;
-    msg += `💰 $${priceStr}  ${ch24Arrow} ${ch24 >= 0 ? '+' : ''}${ch24.toFixed(1)}% 24h`;
-    if (ch1 !== 0) msg += `  ${ch1Arrow} ${Math.abs(ch1).toFixed(1)}% 1h`;
-    msg += `\n<a href="${pairUrl}">📊 DexScreener</a>\n`;
+    let msg = `🤖 <b>ARIA</b> — <b>$${sym}</b>${name ? ` — ${name}` : ''}\n`;
+    msg += `💲 $${price < 0.001 ? price.toExponential(2) : price.toFixed(6)}`;
+    msg += `  ${ch1 >= 0 ? '▲' : '▼'} ${Math.abs(ch1).toFixed(1)}% 1h`;
+    if (ch5m !== 0) msg += `  ${ch5m >= 0 ? '▲' : '▼'} ${Math.abs(ch5m).toFixed(1)}% 5m`;
+    const mc = token.marketCap || token.fdv || 0;
+    msg += `\n🏦 MC: $${this._fmt(mc)}  |  💧 Liq: $${this._fmt(liq)}  |  📊 Vol: $${this._fmt(vol)}\n`;
+    msg += `<a href="${gmgn.tokenUrl(addr)}">📊 Voir sur GMGN</a>\n`;
     msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    // ─── Verdict + Score (en premier) ──────────────────────────────────────
     const scoreStr = decision.score != null ? `  —  <b>${decision.score}/100</b>` : '';
     msg += `${decEmoji} <b>${decision.decision}</b>${scoreStr}  —  confiance ${decision.confidence}/10\n`;
     if (decision.reasoning) msg += `<i>${this._esc(decision.reasoning)}</i>\n`;
 
-    // ─── Agent Momentum ────────────────────────────────────────────────────
-    if (momentum) {
-      const trendEmoji = { ACCELERATING: '🚀', STABLE: '➡️', FADING: '📉', REVERSAL: '🔄' }[momentum.trend] || '❓';
-      const volEmoji   = { GROWING: '📈', STABLE: '➡️', DECLINING: '📉' }[momentum.volumeSignal] || '';
-      msg += `\n⚡ <b>Momentum</b> ${momentum.score}/10  |  ${trendEmoji} ${this._esc(momentum.trend)}  |  ${volEmoji} Vol\n`;
-      (momentum.signals || []).slice(0, 2).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
-      if (momentum.warning) msg += `  ⚠️ ${this._esc(momentum.warning)}\n`;
+    // Badge récidiviste
+    const rec = token._recurring;
+    if (rec?.isRecurring) {
+      const dayStr  = rec.daysSinceLast < 1 ? "aujourd'hui" : `il y a ${rec.daysSinceLast}j`;
+      const peakStr = rec.avgPeakPct != null ? `  |  📈 peak moy: <b>+${rec.avgPeakPct}%</b>` : '';
+      msg += `\n🔄 <b>RÉCIDIVISTE</b> — vu <b>${rec.sightings}x</b>  |  ${dayStr}${peakStr}\n`;
     }
 
-    // ─── Agent Bull ────────────────────────────────────────────────────────
-    msg += `\n🐂 <b>Bull</b> ${bull.score}/10`;
-    if (bull.narrative) msg += `  |  💬 ${this._esc(bull.narrative)}`;
-    msg += '\n';
-    (bull.arguments || []).slice(0, 2).forEach((a) => (msg += `  → ${this._esc(a)}\n`));
-
-    // ─── Agent Bear ────────────────────────────────────────────────────────
-    msg += `\n🐻 <b>Bear</b> ${bear.riskScore}/10  |  ${this._esc(bear.verdict)}\n`;
-    (bear.redFlags || []).slice(0, 2).forEach((f) => (msg += `  ⚠️ ${this._esc(f)}\n`));
-
-    // ─── Agent Whale ───────────────────────────────────────────────────────
-    if (whale) {
-      const concEmoji = { LOW: '✅', MEDIUM: '🟡', HIGH: '🟠', CRITICAL: '🔴' }[whale.concentrationRisk] || '❓';
-      const distEmoji = { ACCUMULATING: '📥', NEUTRAL: '➡️', DISTRIBUTING: '📤' }[whale.distributionSignal] || '❓';
-      const hlthEmoji = { HEALTHY: '✅', MODERATE: '🟡', THIN: '🟠', CRITICAL: '🔴' }[whale.holderHealth] || '❓';
-      msg += `\n🐋 <b>Whale</b> ${whale.score}/10  |  ${concEmoji} ${this._esc(whale.concentrationRisk)}  |  ${distEmoji} ${this._esc(whale.distributionSignal)}  |  ${hlthEmoji} ${this._esc(whale.holderHealth)}\n`;
-      (whale.signals || []).slice(0, 1).forEach((s) => (msg += `  → ${this._esc(s)}\n`));
-      if (whale.warning) msg += `  ⚠️ ${this._esc(whale.warning)}\n`;
-    }
-
-    // ─── Sécurité (condensée sur 2 lignes max) ─────────────────────────────
-    const sec    = formatSecurity(debate.security, debate.overview);
-    const rug    = rugcheck.formatReport(debate.rugReport);
-    const hasLp  = debate.lpLock != null;
-
-    if (sec || hasLp || rug) {
+    // Bloc GMGN : smart money, KOL, snipers, buy ratio, verdict momentum
+    const g = token._gmgn;
+    if (g) {
+      msg += `\n🧠 <b>GMGN</b>: ${g.smartDegen} smart money + ${g.renowned} KOL`;
+      if (g.sniper > 0) msg += `  |  🎯 ${g.sniper} snipers`;
+      msg += `  |  🛒 buy ratio ${(g.buyRatio * 100).toFixed(0)}%\n`;
+      msg += `🔒 Mint: ${g.renouncedMint ? '✅ abandonnée' : '🔴 ACTIVE'}  |  Freeze: ${g.renouncedFreeze ? '✅' : '🔴'}`;
+      msg += `  |  Top10: ${(g.top10 * 100).toFixed(0)}%`;
+      if (g.holderCount) msg += `  |  👥 ${g.holderCount.toLocaleString('fr-FR')}`;
+      msg += `\n📦 Bundlers: ${(g.bundler * 100).toFixed(0)}%  |  Dev: ${(g.devHold * 100).toFixed(1)}%  |  Rug ratio: ${(g.rugRatio * 100).toFixed(0)}%\n`;
+      if (g.verdict) msg += `  ↳ momentum: <b>${g.verdict.verdict.toUpperCase()}</b> (${this._esc(g.verdict.crowd)}) — ${this._esc(g.verdict.thesis)}\n`;
+    } else if (debate.security) {
+      // Fallback si le token ne vient pas du trending (sécurité dérivée)
+      const s = debate.security;
+      msg += `\n🔒 Mint: ${s.mintAuthority ? '🔴 ACTIVE' : '✅ abandonnée'}  |  Freeze: ${s.freezeAuthority ? '🔴' : '✅'}`;
+      if (s.top10HolderPercent != null) msg += `  |  Top10: ${s.top10HolderPercent.toFixed(0)}%`;
+      if (debate.overview?.holder) msg += `  |  👥 ${debate.overview.holder.toLocaleString('fr-FR')}`;
       msg += '\n';
-
-      // Ligne 1 : Mint + Freeze + Holders (sans top10/creator — déjà dans Whale)
-      if (sec) {
-        msg += `🔒 Mint: ${sec.mint}  |  Freeze: ${sec.freeze}`;
-        if (sec.holders) {
-          const hNum = parseInt(sec.holders.replace(/\s/g, ''), 10);
-          msg += `  |  ${hNum < 200 ? '⚠️' : '👥'} ${sec.holders} holders`;
-        }
-        msg += '\n';
-      }
-
-      // Ligne 2 : LP lock + RugCheck
-      const secLine2 = [];
-      if (hasLp) {
-        const pct    = debate.lpLock.lpLockedPct;
-        const usd    = debate.lpLock.lpLockedUSD;
-        const usdStr = usd >= 1000 ? `$${(usd / 1000).toFixed(1)}K` : `$${usd.toFixed(0)}`;
-        secLine2.push(`${pct >= 80 ? '🔐' : pct >= 50 ? '⚠️' : '🔓'} LP: ${pct.toFixed(0)}% (${usdStr})`);
-      }
-      if (rug) {
-        secLine2.push(rug.rugged ? `🔴 <b>RUGPULL DÉTECTÉ</b>` : `${rug.scoreEmoji} RC: ${rug.score}/1000`);
-      }
-      if (secLine2.length > 0) {
-        if (!sec) msg += '🔒 ';
-        msg += secLine2.join('  |  ') + '\n';
-      }
-
-      // Ligne 3 : Risques RugCheck détaillés (si présents)
-      if (rug?.dangers?.length > 0) msg += `  🔴 ${rug.dangers.map((d) => this._esc(d)).join(', ')}\n`;
-      if (rug?.warns?.length  > 0) msg += `  ⚠️ ${rug.warns.map((w) => this._esc(w)).join(', ')}\n`;
     }
 
-    // ─── SL/TP (uniquement si BUY) ────────────────────────────────────────
     if (decision.decision === 'BUY') {
       msg += `\n💸 Taille: ${decision.suggestedAmountPct}%  |  🛑 SL: -${decision.stopLossPct}%  |  🎯 TP: +${decision.takeProfitPct}%`;
     }
-
-    return msg;
-  }
-
-  /** Alerte légère pour un nouveau token sur la bonding curve Pump.fun */
-  _formatPumpNew(token) {
-    const sym = this._esc(token.symbol || '???');
-    const name = this._esc(token.name || '');
-    const mcSol = token.marketCapSol ? `~${parseFloat(token.marketCapSol).toFixed(1)} SOL` : '?';
-    const initialBuy = token.initialBuy ? `${parseFloat(token.initialBuy).toFixed(2)} SOL` : null;
-    const pumpUrl = `https://pump.fun/coin/${token.mint}`;
-
-    const links = [];
-    if (token.twitter) links.push(`<a href="${token.twitter}">𝕏</a>`);
-    if (token.telegram) links.push(`<a href="${token.telegram}">TG</a>`);
-    if (token.website) links.push(`<a href="${token.website}">🌐</a>`);
-
-    let msg = `🆕 <b>$${sym}</b> — ${name}\n`;
-    msg += `👶 Bonding curve Pump.fun\n`;
-    msg += `💰 Market cap: ${mcSol}`;
-    if (initialBuy) msg += `  |  🛒 Initial buy: ${initialBuy}`;
-    msg += `\n`;
-    if (links.length > 0) msg += `${links.join('  |  ')}\n`;
-    msg += `📍 <code>${this._esc(token.mint)}</code>\n`;
-    msg += `<a href="${pumpUrl}">🔗 Voir sur Pump.fun</a>`;
 
     return msg;
   }
@@ -221,23 +207,27 @@ class Bot {
 
     bot.command('start', async (ctx) => {
       await ctx.reply(
-        `👋 Bonjour\\! Bienvenue sur *Meme Coin Bot*\\!\n\n` +
-        `🤖 *Meme Coin Bot* — Actif\\!\n\n` +
-        `*Commandes disponibles:*\n` +
+        `👋 Bonjour! Bienvenue sur <b>Meme Coin Bot</b>!\n\n` +
+        `🤖 <b>Meme Coin Bot</b> — Actif!\n\n` +
+        `<b>Commandes disponibles:</b>\n` +
         `/status — État du bot\n` +
         `/balance — Balance SOL\n` +
         `/pnl — Résumé PnL global\n` +
         `/scan — Scanner maintenant\n` +
         `/positions — Positions ouvertes\n` +
         `/history — Historique des trades\n` +
-        `/auto — Toggle auto\\-trade\n` +
+        `/session — Lancer / suivre / arrêter une session de trading\n` +
         `/settings — Voir les paramètres\n` +
-        `/set \\<clé\\> \\<valeur\\> — Modifier un paramètre\n` +
-        `/analyse \\<adresse\\> — Analyser un token\n` +
-        `/buy \\<adresse\\> \\<sol\\> — Achat manuel\n` +
-        `/sell \\<adresse\\> \\[%\\] — Vente manuelle\n\n` +
+        `/set &lt;clé&gt; &lt;valeur&gt; — Modifier un paramètre\n` +
+        `/debat &lt;adresse&gt; — Suggérer un token → les agents débattent\n` +
+        `/analyse &lt;adresse&gt; — Analyser un token\n` +
+        `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel\n` +
+        `/sell &lt;adresse&gt; [%] — Vente manuelle\n` +
+        `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position externe\n` +
+        `/recurring — Tokens récidivistes (boostés plusieurs fois)\n` +
+        `/agent [message] — Parler avec ARIA (ton agent IA personnel, Solana)\n\n` +
         `/help — Aide détaillée de toutes les commandes`,
-        { parse_mode: 'MarkdownV2' }
+        { parse_mode: 'HTML' }
       );
     });
 
@@ -252,13 +242,17 @@ class Bot {
         `/balance — Balance SOL du wallet\n\n` +
 
         `<b>Trading</b>\n` +
-        `/auto — Activer/désactiver le trading automatique\n` +
+        `/session — Session de trading : capital alloué, mode, positions, mise max (le reste du wallet reste au pocket sécurisé)\n` +
         `/scan — Lancer un scan manuel toutes sources\n` +
+        `/recurring — Tokens récidivistes (boostés plusieurs fois)\n` +
+        `/debat &lt;adresse&gt; — Suggérer un token au débat IA\n` +
+        `  → Tu proposes un CA, Bull / Bear / Momentum / Whale débattent\n` +
         `/analyse &lt;adresse&gt; — Analyse complète d'un token\n` +
         `  → Débat IA (Bull / Bear / Risk Manager)\n` +
         `  → Sécurité on-chain (mint, freeze, holders)\n` +
         `/buy &lt;adresse&gt; &lt;sol&gt; — Achat manuel en SOL\n` +
-        `/sell &lt;adresse&gt; [%] — Vente manuelle (défaut: 100%)\n\n` +
+        `/sell &lt;adresse&gt; [%] — Vente manuelle (défaut: 100%)\n` +
+        `/addposition &lt;adresse&gt; &lt;sol&gt; — Importer une position achetée hors du bot\n\n` +
 
         `<b>Suivi</b>\n` +
         `/positions — Positions ouvertes + PnL non réalisé\n` +
@@ -279,35 +273,36 @@ class Bot {
     bot.command('status', async (ctx) => {
       const stats = this.scanner.getStats();
       const positions = this.trader.getPositions();
+      const auto = personalAgent.getAutonomy();
       let balance = 'Wallet non chargé';
       if (this.trader.isReady()) {
         balance = `${(await this.trader.getSolBalance()).toFixed(4)} SOL`;
       }
       await ctx.reply(
-        `📊 *Statut*\n\n` +
+        `📊 <b>Statut</b>\n\n` +
         `📡 Scanner: ${stats.isRunning ? '✅ Actif' : '❌ Arrêté'}\n` +
-        `🔄 Scans DexScreener: ${stats.scanCount}\n` +
+        `🔄 Scans: ${stats.scanCount}\n` +
         `👁 Tokens vus: ${stats.seenTokens}\n` +
-        `\n🐸 *Pump.fun* (PumpPortal WS)\n` +
-        `   ${stats.pumpFunConnected ? '✅ Connecté' : '❌ Déconnecté'}\n` +
-        `   Nouveaux tokens: ${stats.pumpNewTokens || 0}\n` +
-        `   Graduations: ${stats.pumpMigrations || 0}\n` +
-        `\n🤖 Auto\\-trade: ${this.autoTrade ? '✅ Activé' : '❌ Désactivé'}\n` +
-        `💼 Positions: ${positions.length}\n` +
+        `📈 Source: GMGN trending (smart money + KOL)\n` +
+        `\n🤖 ARIA autonomie: ${auto.enabled ? '✅ Active' : '❌ Off'}\n` +
+        `💸 Trading réel: ${auto.liveTrading ? '✅ Activé' : '❌ Désactivé (signaux + confirmation)'}\n` +
+        `🎚 Seuil BUY auto: ${auto.minScore}/100  |  Max: ${auto.maxSolPerTrade} SOL/trade, ${auto.maxOpenPositions} positions\n` +
+        `⛔ Stop journalier: -${auto.maxDailyLossSol} SOL\n` +
+        `\n💼 Positions: ${positions.length}\n` +
         `💰 Balance: ${balance}`,
-        { parse_mode: 'MarkdownV2' }
+        { parse_mode: 'HTML' }
       );
     });
 
     bot.command('balance', async (ctx) => {
       if (!this.trader.isReady()) {
-        return ctx.reply('❌ Wallet non configuré (WALLET\\_PRIVATE\\_KEY dans .env)', { parse_mode: 'MarkdownV2' });
+        return ctx.reply('❌ Wallet non configuré (WALLET_PRIVATE_KEY dans .env)', { parse_mode: 'HTML' });
       }
       const balance = await this.trader.getSolBalance();
       const addr = this.trader.walletAddress;
       await ctx.reply(
-        `💰 *Balance*\n\n${balance.toFixed(6)} SOL\n\`${addr}\``,
-        { parse_mode: 'Markdown' }
+        `💰 <b>Balance</b>\n\n${balance.toFixed(6)} SOL\n<code>${addr}</code>`,
+        { parse_mode: 'HTML' }
       );
     });
 
@@ -322,9 +317,9 @@ class Bot {
       const positions = this.trader.getPositions();
       if (positions.length === 0) return ctx.reply('📭 Aucune position ouverte.');
 
-      let msg = `📊 *Positions ouvertes (${positions.length})*\n\n`;
+      let msg = `📊 <b>Positions ouvertes (${positions.length})</b>\n\n`;
       for (const p of positions) {
-        const shortMint = `\`${p.tokenMint.slice(0, 12)}...\``;
+        const shortMint = `<code>${p.tokenMint.slice(0, 12)}...</code>`;
         const age = Math.floor((Date.now() - p.entryTimestamp) / 60_000);
         msg += `• ${shortMint} — ${p.solSpent} SOL\n`;
 
@@ -334,31 +329,34 @@ class Bot {
             const pnlPct = ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100;
             const arrow = pnlPct >= 0 ? '🟢' : '🔴';
             msg += `  ${arrow} PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%\n`;
+            if (p.tokenSupply && p.entryMcapUsd) {
+              msg += `  🏦 MC: $${this._fmt(p.entryMcapUsd)} → $${this._fmt(Math.round(p.tokenSupply * currentPrice))}\n`;
+            }
           }
           msg += `  🛑 SL: -${p.stopLossPct}%  |  🎯 TP: +${p.takeProfitPct}%\n`;
         }
 
-        msg += `  ⏱ ${age}min  |  [Tx](https://solscan.io/tx/${p.buyTxId})\n\n`;
+        msg += `  ⏱ ${age}min  |  <a href="https://solscan.io/tx/${p.buyTxId}">Tx</a>\n\n`;
       }
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML', disable_web_page_preview: true });
     });
 
     bot.command('history', async (ctx) => {
       const trades = this.trader.getHistory(10);
       if (trades.length === 0) return ctx.reply('📭 Aucun trade effectué.');
 
-      let msg = `📜 *Derniers trades*\n\n`;
+      let msg = `📜 <b>Derniers trades</b>\n\n`;
       for (const t of trades) {
         const emoji = t.action === 'BUY' ? '🟢' : '🔴';
         const date = new Date(t.entryTimestamp || t.timestamp).toLocaleString('fr-FR');
         msg += `${emoji} ${t.action} — ${date}\n`;
-        msg += `\`${t.tokenMint.slice(0, 16)}...\`\n`;
+        msg += `<code>${t.tokenMint.slice(0, 16)}...</code>\n`;
         if (t.buyTxId || t.txId) {
-          msg += `[Tx](https://solscan.io/tx/${t.buyTxId || t.txId})\n`;
+          msg += `<a href="https://solscan.io/tx/${t.buyTxId || t.txId}">Tx</a>\n`;
         }
         msg += '\n';
       }
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML', disable_web_page_preview: true });
     });
 
     bot.command('pnl', async (ctx) => {
@@ -380,21 +378,21 @@ class Bot {
         const pnlPct = ((currentPrice - p.entryPriceUsd) / p.entryPriceUsd) * 100;
         const pnlSol = p.solSpent * (pnlPct / 100);
         const arrow = pnlPct >= 0 ? '🟢' : '🔴';
-        const shortMint = `\`${p.tokenMint.slice(0, 12)}...\``;
+        const shortMint = `<code>${p.tokenMint.slice(0, 12)}...</code>`;
         unrealizedLines += `${arrow} ${shortMint}: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% (${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} SOL)\n`;
         hasUnrealized = true;
       }
 
-      let msg = `📊 *PnL Global*\n\n`;
-      msg += `✅ *Réalisé:* ${realizedSol >= 0 ? '+' : ''}${realizedSol.toFixed(4)} SOL`;
+      let msg = `📊 <b>PnL Global</b>\n\n`;
+      msg += `✅ <b>Réalisé:</b> ${realizedSol >= 0 ? '+' : ''}${realizedSol.toFixed(4)} SOL`;
       msg += ` (${sellTrades.length} trades clôturés)\n\n`;
       if (hasUnrealized) {
-        msg += `📈 *Non réalisé (positions ouvertes):*\n${unrealizedLines}`;
+        msg += `📈 <b>Non réalisé (positions ouvertes):</b>\n${unrealizedLines}`;
       } else {
         msg += `📭 Aucune position ouverte avec prix d'entrée.`;
       }
 
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.command('settings', async (ctx) => {
@@ -403,16 +401,16 @@ class Bot {
       const maxSol = this.maxPositionSol;
 
       const msg =
-        `⚙️ *Paramètres actuels*\n\n` +
-        `💰 Max position: \`${maxSol} SOL\`\n` +
-        `🛑 Stop Loss par défaut: \`${sl}%\`\n` +
-        `🎯 Take Profit par défaut: \`${tp}%\`\n\n` +
+        `⚙️ <b>Paramètres actuels</b>\n\n` +
+        `💰 Max position: <code>${maxSol} SOL</code>\n` +
+        `🛑 Stop Loss par défaut: <code>${sl}%</code>\n` +
+        `🎯 Take Profit par défaut: <code>${tp}%</code>\n\n` +
         `Pour modifier, utilise:\n` +
-        `/set maxsol <valeur> — ex: /set maxsol 0.05\n` +
-        `/set sl <valeur> — ex: /set sl 15\n` +
-        `/set tp <valeur> — ex: /set tp 80`;
+        `/set maxsol &lt;valeur&gt; — ex: /set maxsol 0.05\n` +
+        `/set sl &lt;valeur&gt; — ex: /set sl 15\n` +
+        `/set tp &lt;valeur&gt; — ex: /set tp 80`;
 
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.command('set', async (ctx) => {
@@ -427,64 +425,160 @@ class Bot {
       switch (key.toLowerCase()) {
         case 'maxsol':
           this.maxPositionSol = val;
-          await ctx.reply(`✅ Max position mis à jour: *${val} SOL*`, { parse_mode: 'Markdown' });
+          if (personalAgent.sessionState().active) {
+            try { personalAgent.updateSession({ maxSolPerTrade: val }); }
+            catch (err) { return ctx.reply(`❌ ${err.message}`); }
+          } else {
+            personalAgent.setAutonomy({ maxSolPerTrade: val }); // sera repris au lancement de la session
+          }
+          await ctx.reply(`✅ Mise max par trade : <b>${val} SOL</b>`, { parse_mode: 'HTML' });
           break;
         case 'sl':
           process.env.DEFAULT_STOP_LOSS_PCT = String(val);
-          await ctx.reply(`✅ Stop Loss par défaut mis à jour: *${val}%*`, { parse_mode: 'Markdown' });
+          await ctx.reply(`✅ Stop Loss par défaut mis à jour: <b>${val}%</b>`, { parse_mode: 'HTML' });
           break;
         case 'tp':
           process.env.DEFAULT_TAKE_PROFIT_PCT = String(val);
-          await ctx.reply(`✅ Take Profit par défaut mis à jour: *${val}%*`, { parse_mode: 'Markdown' });
+          await ctx.reply(`✅ Take Profit par défaut mis à jour: <b>${val}%</b>`, { parse_mode: 'HTML' });
           break;
         default:
           await ctx.reply('❌ Clé inconnue. Utilise: maxsol, sl, ou tp');
       }
     });
 
-    bot.command('auto', async (ctx) => {
-      this.autoTrade = !this.autoTrade;
-      await ctx.reply(
-        this.autoTrade
-          ? `🤖 Auto-trade *ACTIVÉ*\n⚠️ Le bot va exécuter les BUY automatiquement.`
-          : `🤖 Auto-trade *DÉSACTIVÉ*\nLes trades devront être confirmés manuellement.`,
-        { parse_mode: 'Markdown' }
-      );
+    // Le trading réel passe désormais par une session (capital alloué + pocket sécurisé)
+    bot.command('auto', async (ctx) => this._replySession(ctx));
+
+    // ─── /session — capital alloué au bot, le reste du wallet reste au pocket ──
+    bot.command('session', async (ctx) => {
+      const [, sub, ...rest] = ctx.message.text.trim().split(/\s+/);
+      const MODE_ALIASES = { chill: 'chill', prudent: 'chill', equilibre: 'balanced', 'équilibré': 'balanced', balanced: 'balanced', agressif: 'aggressive', aggressive: 'aggressive' };
+      try {
+        switch ((sub || '').toLowerCase()) {
+          case '':
+            return this._replySession(ctx);
+          case 'start': {
+            const capitalSol = parseFloat(rest[0]);
+            if (!(capitalSol > 0)) return ctx.reply('Usage : /session start <capital SOL> [chill|equilibre|agressif] [positions] [mise max]\nEx : /session start 1.5 equilibre 3 0.2');
+            const mode = MODE_ALIASES[(rest[1] || '').toLowerCase()] || personalAgent.sessionState().mode;
+            const st = await personalAgent.startSession({
+              capitalSol, mode,
+              maxOpenPositions: rest[2] != null ? parseFloat(rest[2]) : undefined,
+              maxSolPerTrade:   rest[3] != null ? parseFloat(rest[3]) : undefined,
+            });
+            this.maxPositionSol = st.maxSolPerTrade;
+            return; // ARIA envoie déjà la notification de lancement
+          }
+          case 'stop':
+            await personalAgent.stopSession('arrêt manuel (Telegram)');
+            return;
+          case 'positions':
+            personalAgent.updateSession({ maxOpenPositions: parseFloat(rest[0]) });
+            return this._replySession(ctx, '✅ Positions simultanées mises à jour.');
+          case 'mise': case 'maxsol': {
+            const st = personalAgent.updateSession({ maxSolPerTrade: parseFloat(rest[0]) });
+            this.maxPositionSol = st.maxSolPerTrade;
+            return this._replySession(ctx, '✅ Mise max par trade mise à jour.');
+          }
+          case 'mode': {
+            const mode = MODE_ALIASES[(rest[0] || '').toLowerCase()];
+            if (!mode) return ctx.reply('Modes : chill, equilibre, agressif');
+            personalAgent.setTradingMode(mode);
+            return this._replySession(ctx, '✅ Mode appliqué.');
+          }
+          default:
+            return ctx.reply('Usage : /session | /session start <capital> [mode] [positions] [mise] | /session stop | /session positions <n> | /session mise <sol> | /session mode <chill|equilibre|agressif>');
+        }
+      } catch (err) {
+        return ctx.reply(`❌ ${err.message}`);
+      }
     });
 
-    bot.command('analyse', async (ctx) => {
+    // ─── /agent — Chat Telegram avec ARIA ────────────────────────────────────
+    bot.command('agent', async (ctx) => {
+      const parts = ctx.message.text.trim().split(/\s+(.+)/s);
+      const msg   = parts[1]?.trim();
+
+      if (!msg) {
+        const s = personalAgent.getState();
+        const a = s.autonomy;
+        const moodEmoji = { focused: '🎯', excited: '🚀', cautious: '🛡️', concerned: '😟', satisfied: '😊' }[s.mood] || '🤖';
+        return ctx.reply(
+          `🤖 <b>${s.name}</b> ${moodEmoji}\n` +
+          `Humeur: ${s.moodLabel}  |  Style: ${s.tradingStyle}\n` +
+          `Confiance: ${s.confidence}/10  |  Risque: ${s.riskTolerance}/10\n\n` +
+          `⚡ Autonomie: ${a.enabled ? '✅' : '❌'}  |  Session: ${a.liveTrading ? '✅ en cours' : '❌'} (/session)\n` +
+          `🎚 Seuil BUY: ${a.minScore}/100  |  Max ${a.maxSolPerTrade} SOL/trade` +
+          `${s.lessons.length > 0 ? `\n\n📚 <i>${this._esc(s.lessons[s.lessons.length-1])}</i>` : ''}\n\n` +
+          `Pour parler avec moi: <code>/agent bonjour ARIA!</code>`,
+          { parse_mode: 'HTML' }
+        );
+      }
+
+      await ctx.reply('⏳');
+      try {
+        let balance = null, positions = null;
+        if (this.trader.isReady()) {
+          balance    = await this.trader.getSolBalance();
+          positions  = this.trader.getPositions().length;
+        }
+        const reply = await personalAgent.chat(msg, { balance, positions });
+        await ctx.reply(`🤖 <b>ARIA</b>\n${this._esc(reply)}`, { parse_mode: 'HTML' });
+      } catch (err) {
+        await ctx.reply(`❌ ${err.message}`);
+      }
+    });
+
+    // Redirecte /analyse et /debat vers ARIA (single agent) + gardé runDebate en fallback
+    // Handler partagé pour /analyse et /debat
+    const analyseHandler = async (ctx) => {
       const parts = ctx.message.text.trim().split(/\s+/);
-      if (parts.length < 2) return ctx.reply('Usage: /analyse <adresse_token>');
+      const isDebat = parts[0] === '/debat';
+      if (parts.length < 2) {
+        return ctx.reply(`Usage: ${isDebat ? '/debat' : '/analyse'} <adresse_token>`);
+      }
 
       const tokenAddress = parts[1];
-      const msg = await ctx.reply('🔍 Récupération des données...');
+      if (isDebat) {
+        await ctx.reply('🤖 Suggestion reçue — les agents vont débattre sur ce token…');
+      } else {
+        await ctx.reply('🔍 Récupération des données...');
+      }
 
       try {
-        const pairs = await dex.getTokenPairs('solana', tokenAddress);
-        if (!pairs || pairs.length === 0) {
-          return ctx.reply('❌ Token introuvable sur DexScreener.');
+        if (!(await gmgn.isAvailable())) {
+          return ctx.reply('❌ GMGN non configuré (gmgn-cli + GMGN_API_KEY requis).');
         }
-        const pair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+        const pair = await personalAgent._fetchPair(tokenAddress);
+        if (!pair) {
+          return ctx.reply('❌ Token introuvable sur GMGN.');
+        }
 
         await ctx.reply(this._formatToken(pair), { parse_mode: 'HTML', disable_web_page_preview: true });
-        await ctx.reply('🤖 Débat IA en cours...');
+        await ctx.reply('🤖 Analyse ARIA en cours…');
 
-        const birdeye = require('./birdeye');
         const addr = pair.baseToken?.address;
-        const [{ security, overview }, rugReport, lpLock] = await Promise.all([
-          birdeye.getTokenData(addr),
-          rugcheck.getTokenReport(addr),
-          rugcheck.getLpLockData(addr),
-        ]);
-        const debate = await runDebate(pair, security, rugReport, overview, lpLock);
+        const sec  = await gmgn.getTokenSecurity(addr);
+        const g    = pair._gmgn || {};
+        const security = sec ? {
+          mintAuthority:      sec.renouncedMint   ? null : 'active',
+          freezeAuthority:    sec.renouncedFreeze ? null : 'active',
+          top10HolderPercent: (sec.top10 || 0) * 100,
+        } : null;
+        const overview = { holder: g.holderCount || null };
+        const debate = await personalAgent.analyzeToken(pair, security, null, overview, null);
         await ctx.reply(this._formatDebate(debate), { parse_mode: 'HTML' });
 
         if (debate.decision.decision === 'BUY') {
-          const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
+          const a          = personalAgent.getAutonomy();
+          const confFactor = Math.max(0.3, Math.min(1, (debate.decision.confidence || 5) / 10));
+          const solAmt     = parseFloat((a.maxSolPerTrade * confFactor).toFixed(4));
+          const sl     = debate.decision.stopLossPct  || 20;
+          const tp     = debate.decision.takeProfitPct || 50;
           await ctx.reply(
-            '💡 Action:',
+            '💡 Action :',
             Markup.inlineKeyboard([
-              Markup.button.callback(`✅ Acheter (${solAmt.toFixed(3)} SOL)`, `buy:${tokenAddress}:${solAmt.toFixed(4)}`),
+              Markup.button.callback(`✅ Acheter (${solAmt.toFixed(3)} SOL)`, `buy:${tokenAddress}:${solAmt.toFixed(4)}:${sl}:${tp}`),
               Markup.button.callback('❌ Passer', 'skip'),
             ])
           );
@@ -492,7 +586,10 @@ class Bot {
       } catch (err) {
         await ctx.reply(`❌ Erreur: ${err.message}`);
       }
-    });
+    };
+
+    bot.command('analyse', analyseHandler);
+    bot.command('debat',   analyseHandler);
 
     bot.command('buy', async (ctx) => {
       const parts = ctx.message.text.trim().split(/\s+/);
@@ -503,17 +600,77 @@ class Bot {
       if (isNaN(solAmount) || solAmount <= 0) return ctx.reply('❌ Montant invalide.');
 
       if (!this.trader.isReady()) return ctx.reply('❌ Wallet non configuré.');
+      if (this._buyInFlight.has(tokenAddress)) return ctx.reply('⏳ Achat déjà en cours pour ce token.');
 
+      this._buyInFlight.add(tokenAddress);
       await ctx.reply(`⏳ Achat de ${solAmount} SOL...`);
       try {
         const { txId } = await this.trader.buy(tokenAddress, solAmount);
         await ctx.reply(
-          `✅ *Achat réussi!*\n[Voir la tx](https://solscan.io/tx/${txId})`,
-          { parse_mode: 'Markdown' }
+          `✅ <b>Achat réussi!</b>\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true }
+        );
+      } catch (err) {
+        await ctx.reply(`❌ ${err.message}`);
+      } finally {
+        this._buyInFlight.delete(tokenAddress);
+      }
+    });
+
+    bot.command('addposition', async (ctx) => {
+      const parts = ctx.message.text.trim().split(/\s+/);
+      if (parts.length < 3) return ctx.reply('Usage: /addposition <adresse_token> <sol_dépensé>\nEx: /addposition ABC123... 0.5');
+
+      const [, tokenAddress, solStr] = parts;
+      const solSpent = parseFloat(solStr);
+      if (isNaN(solSpent) || solSpent <= 0) return ctx.reply('❌ Montant SOL invalide.');
+
+      if (!this.trader.isReady()) return ctx.reply('❌ Wallet non configuré.');
+
+      await ctx.reply('⏳ Import de la position...');
+      try {
+        const { position } = await this.trader.importPosition(tokenAddress, solSpent);
+        const entryStr = position.entryMcapUsd
+          ? `MC $${this._fmt(position.entryMcapUsd)}`
+          : (position.entryPriceUsd ? `$${position.entryPriceUsd.toFixed(6)}` : 'indisponible');
+        await ctx.reply(
+          `✅ <b>Position importée!</b>\n` +
+          `📍 <code>${this._esc(tokenAddress)}</code>\n` +
+          `💰 SOL dépensé: ${solSpent}\n` +
+          `🏦 Entrée: ${entryStr}\n` +
+          `🛑 SL: -${position.stopLossPct}%  |  🎯 TP: +${position.takeProfitPct}%`,
+          { parse_mode: 'HTML' }
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
       }
+    });
+
+    bot.command('recurring', async (ctx) => {
+      const top = tokenHistory.getTopRecurring(10);
+      const stats = tokenHistory.getStats();
+
+      if (top.length === 0) {
+        return ctx.reply(
+          `🔄 <b>Tokens récidivistes</b>\n\n` +
+          `📭 Aucun récidiviste détecté pour l'instant.\n\n` +
+          `<i>Le bot surveille les tokens qui réapparaissent régulièrement sous le même ticker/nom (souvent avec une nouvelle adresse). Reviens après quelques cycles de scan.</i>`,
+          { parse_mode: 'HTML' }
+        );
+      }
+
+      let msg = `🔄 <b>Top tokens récidivistes</b>  <code>(${stats.total} suivis, ${stats.recurring} récidivistes)</code>\n\n`;
+      for (const t of top) {
+        const dayStr  = t.daysSinceLast < 1 ? "vu aujourd'hui" : `vu il y a ${t.daysSinceLast}j`;
+        const addrNb  = t.addresses > 1 ? ` · ${t.addresses} adresses distinctes` : '';
+        const peakStr = t.avgPeakPct != null ? `\n  📈 Peak moyen: <b>+${t.avgPeakPct}%</b>  (${t.totalCycles} cycle(s) clôturé(s))` : '';
+        msg += `<b>$${this._esc(t.symbol)}</b>${t.name ? ` — ${this._esc(t.name)}` : ''}\n`;
+        msg += `  🔁 <b>${t.sightings}x</b> boosté${addrNb}  ·  ${dayStr}${peakStr}\n`;
+        if (t.lastAddress) msg += `  <code>${this._esc(t.lastAddress)}</code>\n`;
+        msg += '\n';
+      }
+
+      await ctx.reply(msg.trim(), { parse_mode: 'HTML' });
     });
 
     bot.command('sell', async (ctx) => {
@@ -529,8 +686,8 @@ class Bot {
       try {
         const { txId } = await this.trader.sell(tokenAddress, pct);
         await ctx.reply(
-          `✅ *Vente réussie!*\n[Voir la tx](https://solscan.io/tx/${txId})`,
-          { parse_mode: 'Markdown' }
+          `✅ <b>Vente réussie!</b>\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true }
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
@@ -552,14 +709,20 @@ class Bot {
       if (!this.trader.isReady()) {
         return ctx.reply('❌ Wallet non configuré.');
       }
+      if (this._buyInFlight.has(tokenAddress)) {
+        return ctx.reply('⏳ Achat déjà en cours pour ce token.');
+      }
+      this._buyInFlight.add(tokenAddress);
       try {
         const { txId } = await this.trader.buy(tokenAddress, solAmount, { stopLossPct, takeProfitPct });
         await ctx.reply(
-          `✅ *Achat réussi!* (${solAmount} SOL)\n🛑 SL: -${stopLossPct}%  |  🎯 TP: +${takeProfitPct}%\n[Voir la tx](https://solscan.io/tx/${txId})`,
-          { parse_mode: 'Markdown' }
+          `✅ <b>Achat réussi!</b> (${solAmount} SOL)\n🛑 SL: -${stopLossPct}%  |  🎯 TP: +${takeProfitPct}%\n<a href="https://solscan.io/tx/${txId}">Voir la tx</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true }
         );
       } catch (err) {
         await ctx.reply(`❌ ${err.message}`);
+      } finally {
+        this._buyInFlight.delete(tokenAddress);
       }
     });
 
@@ -572,65 +735,127 @@ class Bot {
   // ─── Événements du scanner ────────────────────────────────────────────────
 
   _listenToScanner() {
-    // Nouveaux tokens sur la bonding curve (seulement si liens sociaux présents)
-    this.scanner.on('pumpNew', async (token) => {
-      const hasSocials = token.twitter || token.telegram || token.website;
-      if (!hasSocials) return; // Filtre les tokens sans présence sociale
-
-      try {
-        await this._send(this._formatPumpNew(token), {
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-        });
-      } catch (err) {
-        console.error('[Bot] Erreur alerte pumpNew:', err.message);
-      }
-    });
-
     this.scanner.on('debate', async (debate) => {
+      if (!debate?.decision) return;
       try {
-        await this._send(this._formatDebate(debate), { parse_mode: 'HTML' });
+        this._hourlyAnalyzed++;
 
-        if (debate.decision.decision === 'BUY') {
-          const solAmt = this.maxPositionSol * (debate.decision.suggestedAmountPct || 3) / 100;
+        // Log fichier
+        logger.debate(
+          debate.token?.baseToken?.symbol || '???',
+          debate.token?.baseToken?.address || '',
+          debate.decision?.score ?? null,
+          debate.decision?.decision || 'SKIP'
+        );
 
-          if (this.autoTrade && this.trader.isReady()) {
-            try {
-              const { txId } = await this.trader.buy(
-                debate.token.baseToken?.address,
-                solAmt,
-                {
-                  stopLossPct: debate.decision.stopLossPct,
-                  takeProfitPct: debate.decision.takeProfitPct,
-                }
-              );
-              await this._send(
-                `🤖 *AUTO-TRADE EXÉCUTÉ*\nAchat: ${solAmt} SOL\n[Voir la tx](https://solscan.io/tx/${txId})`,
-                { parse_mode: 'Markdown' }
-              );
-            } catch (err) {
-              await this._send(`❌ Auto-trade échoué: ${err.message}`);
-            }
-          } else {
-            const sl = debate.decision.stopLossPct || 20;
-            const tp = debate.decision.takeProfitPct || 50;
-            await this.bot.telegram.sendMessage(
-              this.adminId,
-              '💡 Confirmer l\'achat?',
-              Markup.inlineKeyboard([
-                Markup.button.callback(
-                  `✅ Acheter (${solAmt.toFixed(3)} SOL)`,
-                  `buy:${debate.token.baseToken?.address}:${solAmt.toFixed(4)}:${sl}:${tp}`
-                ),
-                Markup.button.callback('❌ Passer', 'skip'),
-              ])
-            );
-          }
+        // Enregistre dans l'historique du dashboard
+        state.pushAnalysis({
+          symbol:    debate.token?.baseToken?.symbol || '???',
+          mint:      debate.token?.baseToken?.address || '',
+          score:     debate.decision?.score ?? null,
+          quant:     debate.decision?.quantScore ?? null,
+          llm:       debate.decision?.llmScore ?? null,
+          early:     debate.token?._source === 'gmgn-early',
+          decision:  debate.decision?.decision || 'SKIP',
+          timestamp: Date.now(),
+        });
+
+        // Journal + historique de scores + watchlist auto d'ARIA (AVANT maybeAutoTrade
+        // — l'historique de scores alimente la détection de rupture)
+        await personalAgent.onAnalysis(debate).catch(() => {});
+
+        const addr  = debate.token?.baseToken?.address;
+        const score = debate.decision.score ?? 0;
+
+        // Scores moyens (30-60) → re-scan toutes les 5 min pour détecter
+        // les ruptures de pattern (score qui bondit de 35 → 60)
+        if (addr && score >= 30 && score < 60) {
+          this.scanner.markSeenTtl(addr, 5 * 60 * 1000);
         }
+
+        // Tentative d'exécution autonome — seuils adaptatifs + signaux forts
+        // (point d'entrée unique → pas de double achat)
+        const auto = await personalAgent.maybeAutoTrade(debate);
+
+        // Rien d'actionnable (pas un BUY et pas de signal fort) → silence Telegram
+        if (debate.decision.decision !== 'BUY' && !auto.strongSignal) {
+          this._hourlyRejected++;
+          return;
+        }
+
+        // Envoi de l'analyse complète (+ raisons du signal fort)
+        let msg = this._formatDebate(debate);
+        if (auto.strongSignal && auto.reasons.length > 0) {
+          msg += `\n\n⚡ <b>Signal fort</b> : ${auto.reasons.map(r => this._esc(r)).join('  |  ')}`;
+        }
+        await this._send(msg, { parse_mode: 'HTML' });
+
+        if (auto.executed) {
+          // Exécution directe — notification seule, aucune confirmation requise
+          await this._send(
+            `🤖 <b>ARIA — ACHAT EXÉCUTÉ</b>\n` +
+            `${auto.solAmt} SOL  |  🛑 SL: -${auto.sl}%  |  🎯 TP: +${auto.tp}% (partiel)\n` +
+            `<a href="https://solscan.io/tx/${auto.txId}">Voir la tx</a>`,
+            { parse_mode: 'HTML', disable_web_page_preview: true }
+          );
+          return;
+        }
+
+        const a = personalAgent.getAutonomy();
+        if (a.liveTrading) {
+          // Trading réel actif mais non exécuté → note d'info, pas de boutons
+          if (auto.reason && !auto.reason.startsWith('aucun signal')) {
+            await this._send(`ℹ️ <i>Pas d'achat auto : ${this._esc(auto.reason)}</i>`, { parse_mode: 'HTML' });
+          }
+          return;
+        }
+
+        // Trading réel OFF → boutons (seul moyen d'agir dans ce mode)
+        const solAmt = personalAgent._positionSize(debate.decision.confidence);
+        const { sl, tp } = personalAgent._dynamicSlTp(debate.decision, debate.token?._gmgn, debate.token?.marketCap || 0);
+        await this.bot.telegram.sendMessage(
+          this.adminId,
+          `💡 Pas de session en cours — confirmer l'achat ? (/session start pour qu'ARIA achète seule)`,
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              Markup.button.callback(
+                `✅ Acheter (${solAmt.toFixed(3)} SOL)`,
+                `buy:${addr}:${solAmt.toFixed(4)}:${sl}:${tp}`
+              ),
+              Markup.button.callback('❌ Passer', 'skip'),
+            ]),
+          }
+        );
       } catch (err) {
         console.error('[Bot] Erreur alerte débat:', err.message);
       }
     });
+  }
+
+  _startHourlySummary() {
+    setInterval(async () => {
+      const analyzed = this._hourlyAnalyzed;
+      const rejected = this._hourlyRejected;
+      const validated = analyzed - rejected;
+
+      this._hourlyAnalyzed = 0;
+      this._hourlyRejected = 0;
+
+      if (analyzed === 0) return; // Rien à signaler
+
+      try {
+        await this._send(
+          `📊 <b>Résumé horaire</b>\n\n` +
+          `🔍 Tokens analysés: <b>${analyzed}</b>\n` +
+          `✅ Validés (BUY): <b>${validated}</b>\n` +
+          `❌ Refusés: <b>${rejected}</b>`,
+          { parse_mode: 'HTML' }
+        );
+      } catch (err) {
+        console.error('[Bot] Erreur résumé horaire:', err.message);
+      }
+    }, 60 * 60 * 1000); // toutes les heures
   }
 
   async _send(text, options = {}) {
