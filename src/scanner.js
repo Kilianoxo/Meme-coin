@@ -37,17 +37,8 @@ const FILTERS = {
 };
 
 class Scanner extends EventEmitter {
-  /**
-   * @param {Object}   [opts]
-   * @param {string}   [opts.chain='sol']  — chaîne GMGN : sol | robinhood | eth | bsc | base
-   * @param {string}   [opts.label]        — préfixe de logs (défaut: Scanner / Scanner:chain)
-   * @param {Function} [opts.analyzer]     — analyseur IA custom (défaut: ARIA)
-   */
-  constructor(opts = {}) {
+  constructor() {
     super();
-    this.chain     = opts.chain || 'sol';
-    this.label     = opts.label || (this.chain === 'sol' ? 'Scanner' : `Scanner:${this.chain}`);
-    this._analyzer = opts.analyzer || null; // null → personalAgent.analyzeToken
     // Map<address, expiryTimestamp> — TTL 4h, permet de rescanner des tokens
     // plus âgés qui gagnent du momentum après notre premier passage.
     this.seenAddresses = new Map();
@@ -90,22 +81,22 @@ class Scanner extends EventEmitter {
     const marketCap = pair.marketCap || pair.fdv || 0;
 
     if (liquidity < FILTERS.minLiquidityUsd) {
-      console.log(`[${this.label}] ⛔ ${symbol} liq trop faible: $${liquidity.toFixed(0)} < $${FILTERS.minLiquidityUsd}`);
+      console.log(`[Scanner] ⛔ ${symbol} liq trop faible: $${liquidity.toFixed(0)} < $${FILTERS.minLiquidityUsd}`);
       return false;
     }
     if (volume < FILTERS.minVolumeUsd) {
-      console.log(`[${this.label}] ⛔ ${symbol} volume trop faible: $${volume.toFixed(0)} < $${FILTERS.minVolumeUsd}`);
+      console.log(`[Scanner] ⛔ ${symbol} volume trop faible: $${volume.toFixed(0)} < $${FILTERS.minVolumeUsd}`);
       return false;
     }
     if (marketCap < FILTERS.minMarketCapUsd) {
-      console.log(`[${this.label}] ⛔ ${symbol} mcap trop faible: $${marketCap.toFixed(0)} < $${FILTERS.minMarketCapUsd}`);
+      console.log(`[Scanner] ⛔ ${symbol} mcap trop faible: $${marketCap.toFixed(0)} < $${FILTERS.minMarketCapUsd}`);
       return false;
     }
 
     if (pair.pairCreatedAt) {
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000;
       if (ageHours < FILTERS.minAgeHours) {
-        console.log(`[${this.label}] ⛔ ${symbol} trop récent: ${ageHours.toFixed(1)}h < ${FILTERS.minAgeHours}h`);
+        console.log(`[Scanner] ⛔ ${symbol} trop récent: ${ageHours.toFixed(1)}h < ${FILTERS.minAgeHours}h`);
         return false;
       }
     }
@@ -139,11 +130,11 @@ class Scanner extends EventEmitter {
   /** Un cycle de scan complet — source unique : GMGN trending */
   async scan() {
     this.scanCount++;
-    console.log(`[${this.label}] Scan #${this.scanCount} (${new Date().toLocaleTimeString('fr-FR')})`);
+    console.log(`[Scanner] Scan #${this.scanCount} (${new Date().toLocaleTimeString('fr-FR')})`);
 
     if (!(await gmgn.isAvailable())) {
       if (!this._gmgnWarned || this.scanCount % 20 === 0) {
-        console.warn(`[${this.label}] ⚠️ GMGN non configuré (gmgn-cli + GMGN_API_KEY requis) — scanner en attente.`);
+        console.warn(`[Scanner] ⚠️ GMGN non configuré (gmgn-cli + GMGN_API_KEY requis) — scanner en attente.`);
         this._gmgnWarned = true;
       }
       return;
@@ -151,9 +142,9 @@ class Scanner extends EventEmitter {
 
     let rows = [];
     try {
-      rows = await gmgn.getTrending(this.chain);
+      rows = await gmgn.getTrending();
     } catch (err) {
-      console.error(`[${this.label}] Erreur GMGN trending (${this.chain}):`, err.message);
+      console.error(`[Scanner] Erreur GMGN trending:`, err.message);
       return;
     }
 
@@ -163,9 +154,9 @@ class Scanner extends EventEmitter {
       if (!addr || this._isSeen(addr)) continue;
 
       // Gates durs GMGN (honeypot, mint, taxes, bundlers, dev, top10, consensus)
-      const gate = gmgn.hardGates(pair._gmgn, this.chain);
+      const gate = gmgn.hardGates(pair._gmgn);
       if (!gate.ok) {
-        console.log(`[${this.label}] ⛔ ${pair.baseToken.symbol} — ${gate.reason}`);
+        console.log(`[Scanner] ⛔ ${pair.baseToken.symbol} — ${gate.reason}`);
         this._markSeen(addr);
         continue;
       }
@@ -180,7 +171,7 @@ class Scanner extends EventEmitter {
     candidates.sort((a, b) => this._relevanceScore(b) - this._relevanceScore(a));
     const toAnalyze = candidates.slice(0, MAX_CANDIDATES_PER_SCAN);
 
-    console.log(`[${this.label}] ${candidates.length} candidat(s) GMGN — top ${toAnalyze.length} en débat IA`);
+    console.log(`[Scanner] ${candidates.length} candidat(s) GMGN — top ${toAnalyze.length} en débat IA`);
 
     for (const token of toAnalyze) {
       // Émet immédiatement le candidat (pour l'alerte Telegram brute)
@@ -188,7 +179,7 @@ class Scanner extends EventEmitter {
 
       // Lance l'analyse IA en arrière-plan
       this._analyzeToken(token)
-        .catch((err) => console.error(`[${this.label}] Erreur analyse:`, err.message));
+        .catch((err) => console.error(`[Scanner] Erreur analyse:`, err.message));
     }
   }
 
@@ -202,7 +193,7 @@ class Scanner extends EventEmitter {
 
     // Toggle dashboard : analyses IA suspendues → aucun crédit API consommé
     if (!state.agentsEnabled) {
-      console.log(`[${this.label}] ⏸️ ${symbol} non analysé — analyses IA désactivées (dashboard)`);
+      console.log(`[Scanner] ⏸️ ${symbol} non analysé — analyses IA désactivées (dashboard)`);
       return;
     }
 
@@ -217,7 +208,7 @@ class Scanner extends EventEmitter {
     };
     const overview = { holder: g.holderCount || null };
 
-    console.log(`[${this.label}] ✅ ${symbol} passe les gates GMGN — ${g.smartDegen ?? 0} smart money, ${g.renowned ?? 0} KOL`);
+    console.log(`[Scanner] ✅ ${symbol} passe les gates GMGN — ${g.smartDegen ?? 0} smart money, ${g.renowned ?? 0} KOL`);
 
     // Enregistre le passage des filtres et vérifie si token récidiviste
     const recurringInfo = tokenHistory.recordSighting(
@@ -233,19 +224,18 @@ class Scanner extends EventEmitter {
         ? "aujourd'hui"
         : `il y a ${recurringInfo.daysSinceLast}j`;
       const peakStr = recurringInfo.avgPeakPct != null ? ` | peak moy: +${recurringInfo.avgPeakPct}%` : '';
-      console.log(`[${this.label}] 🔄 RÉCIDIVISTE $${symbol} — vu ${recurringInfo.sightings}x (${dayStr})${peakStr}`);
+      console.log(`[Scanner] 🔄 RÉCIDIVISTE $${symbol} — vu ${recurringInfo.sightings}x (${dayStr})${peakStr}`);
     }
 
-    // Analyse IA (ARIA par défaut, Agios pour la chaîne Robinhood)
-    const analyze = this._analyzer || ((...a) => personalAgent.analyzeToken(...a));
-    const debate  = await analyze(token, security, null, overview, null);
+    // ARIA — analyse avec les données GMGN (rugReport/lpLock plus utilisés)
+    const debate = await personalAgent.analyzeToken(token, security, null, overview, null);
     if (debate) this.emit('debate', debate);
   }
 
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log(`[${this.label}] Démarré — source GMGN | filtres: liq>${FILTERS.minLiquidityUsd}$, vol>${FILTERS.minVolumeUsd}$, mcap>${FILTERS.minMarketCapUsd}$, âge min ${FILTERS.minAgeHours}h`);
+    console.log(`[Scanner] Démarré — source GMGN | filtres: liq>${FILTERS.minLiquidityUsd}$, vol>${FILTERS.minVolumeUsd}$, mcap>${FILTERS.minMarketCapUsd}$, âge min ${FILTERS.minAgeHours}h`);
     this.scan();
     this._interval = setInterval(() => this.scan(), SCAN_INTERVAL_MS);
   }
@@ -254,7 +244,7 @@ class Scanner extends EventEmitter {
     if (!this.isRunning) return;
     clearInterval(this._interval);
     this.isRunning = false;
-    console.log(`[${this.label}] Arrêté.`);
+    console.log(`[Scanner] Arrêté.`);
   }
 
   getStats() {

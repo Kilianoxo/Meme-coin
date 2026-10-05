@@ -33,8 +33,6 @@ class Dashboard {
   constructor(trader, paperTrader, opts = {}) {
     this.trader      = trader;
     this.paperTrader = paperTrader;
-    this.agios       = opts.agios      || null;
-    this.agiosPaper  = opts.agiosPaper || null;
     this.port       = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
     this.server     = http.createServer((req, res) => this._handle(req, res));
 
@@ -47,9 +45,8 @@ class Dashboard {
     agentBus.on('message', (msg) => this._onAgentMessage(msg));
     agentBus.on('system',  (msg) => this._onSystemMessage(msg));
 
-    // ARIA + Agios → push SSE en temps réel vers le dashboard
+    // ARIA → push SSE en temps réel vers le dashboard
     personalAgent.setSSECallback((entry) => this._broadcastSSE(entry));
-    if (this.agios) this.agios.setSSECallback((entry) => this._broadcastSSE(entry));
   }
 
   start() {
@@ -192,34 +189,6 @@ class Dashboard {
 
     if (pathname === '/api/agent/journal' && req.method === 'GET') {
       this._jsonOk(res, { journal: personalAgent.getJournal(80) });
-      return;
-    }
-
-    // ── Agios (Robinhood Chain) ─────────────────────────────────────────────
-
-    if (pathname === '/api/agios' && req.method === 'GET') {
-      this._apiAgios(res);
-      return;
-    }
-
-    if (pathname === '/api/agios/chat' && req.method === 'POST') {
-      this._apiAgiosChat(req, res);
-      return;
-    }
-
-    if (pathname === '/api/agios/equities/live' && req.method === 'POST') {
-      this._apiAgiosEquitiesLive(req, res);
-      return;
-    }
-
-    if (pathname === '/api/agios/equities/connect' && req.method === 'POST') {
-      this._apiAgiosConnect(res);
-      return;
-    }
-
-    const confirmMatch = pathname.match(/^\/api\/agios\/equities\/confirm\/([^/]+)\/(yes|no)$/);
-    if (confirmMatch && req.method === 'POST') {
-      this._apiAgiosConfirm(res, confirmMatch[1], confirmMatch[2] === 'yes');
       return;
     }
 
@@ -741,72 +710,6 @@ class Dashboard {
       else if (action === 'remove' && type === 'wallet')
         { personalAgent.removeWatchWallet(address); ok = true; }
       this._jsonOk(res, { ok, watchlist: personalAgent.getState().watchlist });
-    });
-  }
-
-  // ─── API Agios (Robinhood Chain) ──────────────────────────────────────────
-
-  async _apiAgios(res) {
-    if (!this.agios) {
-      this._jsonOk(res, { error: 'Agios non initialisé' });
-      return;
-    }
-    const paper = this.agiosPaper ? this.agiosPaper.getStats() : null;
-    const equities = await this.agios.getEquitiesState().catch(() => ({ connected: false, liveTrading: false }));
-    this._jsonOk(res, {
-      state:        { ...this.agios.getState(), equities },
-      conversation: this.agios.getConversation(30),
-      journal:      this.agios.getJournal(60),
-      pendingConfirmations: this.agios.getPendingConfirmations(),
-      paper,
-    });
-  }
-
-  _apiAgiosConnect(res) {
-    if (!this.agios) { this._jsonOk(res, { ok: false, error: 'Agios non initialisé' }); return; }
-    // Répond tout de suite — la connexion (avec attente du navigateur) tourne en tâche de fond,
-    // le lien d'autorisation et le résultat arrivent par SSE (aria_journal type agios_journal + agios_auth_url)
-    this._jsonOk(res, { ok: true, note: "Connexion démarrée — le lien d'autorisation va arriver via le journal/Telegram." });
-    this.agios.connectEquities((url) => {
-      this._broadcastSSE({ type: 'agios_auth_url', url, timestamp: Date.now() });
-    }).catch((err) => console.error('[Dashboard] Erreur connexion Robinhood:', err.message));
-  }
-
-  _apiAgiosEquitiesLive(req, res) {
-    if (!this.agios) { this._jsonOk(res, { ok: false, error: 'Agios non initialisé' }); return; }
-    this._readBody(req, async ({ enabled }) => {
-      this.agios.setEquitiesLiveTrading(!!enabled);
-      const equities = await this.agios.getEquitiesState().catch(() => ({ connected: false, liveTrading: false }));
-      this._jsonOk(res, { ok: true, equities });
-    });
-  }
-
-  async _apiAgiosConfirm(res, id, approve) {
-    if (!this.agios) { this._jsonOk(res, { ok: false, error: 'Agios non initialisé' }); return; }
-    try {
-      const result = await this.agios.confirmAction(id, approve);
-      this._jsonOk(res, result);
-    } catch (err) {
-      this._jsonOk(res, { ok: false, error: err.message });
-    }
-  }
-
-  _apiAgiosChat(req, res) {
-    if (!this.agios) {
-      this._jsonOk(res, { ok: false, error: 'Agios non initialisé' });
-      return;
-    }
-    this._readBody(req, async ({ message }) => {
-      if (!message || typeof message !== 'string' || !message.trim()) {
-        this._jsonOk(res, { ok: false, error: 'Message vide' });
-        return;
-      }
-      try {
-        const reply = await this.agios.chat(message.trim());
-        this._jsonOk(res, { ok: true, reply });
-      } catch (err) {
-        this._jsonOk(res, { ok: false, error: err.message });
-      }
     });
   }
 
