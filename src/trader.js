@@ -99,6 +99,11 @@ class Trader {
     this.wallet = null;
     this.positions = new Map(); // tokenAddress → position
     this.history = [];
+    // Achats envoyés mais pas encore enregistrés (mint → { solAmount, entry, ts, … }) :
+    // si la confirmation échoue ou si le process redémarre en plein swap, la position
+    // retrouvée dans le wallet est rattachée à son achat (et à sa session) au lieu d'être
+    // importée comme un achat manuel hors budget.
+    this.pendingBuys = {};
     this._monitorTimer = null;
     this._load();
   }
@@ -109,8 +114,9 @@ class Trader {
     try {
       if (!fs.existsSync(PERSIST_FILE)) return;
       const raw = fs.readFileSync(PERSIST_FILE, 'utf8');
-      const { positions, history } = JSON.parse(raw);
+      const { positions, history, pendingBuys } = JSON.parse(raw);
       if (Array.isArray(history)) this.history = history;
+      if (pendingBuys && typeof pendingBuys === 'object') this.pendingBuys = pendingBuys;
       if (Array.isArray(positions)) {
         for (const p of positions) this.positions.set(p.tokenMint, p);
       }
@@ -126,6 +132,7 @@ class Trader {
       const data = {
         positions: Array.from(this.positions.values()),
         history: this.history,
+        pendingBuys: this.pendingBuys,
       };
       fs.writeFileSync(PERSIST_FILE, JSON.stringify(data, null, 2));
     } catch (err) {
@@ -240,13 +247,99 @@ class Trader {
       maxRetries: 3,
     });
 
-    // 3. Attend la confirmation
-    await this.connection.confirmTransaction(
-      { signature: txId, blockhash, lastValidBlockHeight },
-      'confirmed'
-    );
+    // 3. Attend la confirmation. Une erreur ici (RPC saturé, délai perçu comme expiré)
+    // ne veut pas dire que le swap a échoué : on interroge le statut réel avant de conclure.
+    try {
+      await this.connection.confirmTransaction(
+        { signature: txId, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+    } catch (err) {
+      if (!(await this._landed(txId))) throw err;
+      console.warn(`[Trader] Confirmation en erreur (${err.message}) mais tx ${txId} bien exécutée`);
+    }
 
     return txId;
+  }
+
+  /** true si la transaction est exécutée sans erreur (quelques essais espacés) */
+  async _landed(txId, tries = 4) {
+    for (let i = 0; i < tries; i++) {
+      try {
+        const { value } = await this.connection.getSignatureStatuses([txId], { searchTransactionHistory: true });
+        const st = value?.[0];
+        if (st) {
+          if (st.err) return false;
+          if (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized') return true;
+        }
+      } catch { /* RPC KO : on réessaie */ }
+      if (i < tries - 1) await new Promise(r => setTimeout(r, 2_000 * (i + 1)));
+    }
+    return false;
+  }
+
+  /**
+   * Variation RÉELLE du solde SOL du wallet causée par une transaction (frais réseau,
+   * frais de priorité, rent du compte de token et slippage compris), en SOL.
+   * Négative pour un achat, positive pour une vente. null si la tx est introuvable.
+   */
+  async _txSolDelta(txId) {
+    for (let i = 0; i < 3; i++) {
+      try {
+        const tx = await this.connection.getTransaction(txId, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+        const pre = tx?.meta?.preBalances?.[0], post = tx?.meta?.postBalances?.[0];
+        if (typeof pre === 'number' && typeof post === 'number') return (post - pre) / LAMPORTS_PER_SOL;
+      } catch { /* réessai */ }
+      await new Promise(r => setTimeout(r, 1_500 * (i + 1)));
+    }
+    return null;
+  }
+
+  /**
+   * Coût / produit réel d'un swap : la variation de solde mesurée si elle est plausible,
+   * sinon le montant du devis (une variation aberrante viendrait d'un autre mouvement).
+   */
+  async _realSol(txId, expected, side) {
+    const delta = await this._txSolDelta(txId);
+    if (delta == null) return expected;
+    const v = side === 'buy' ? -delta : delta;
+    const plausible = side === 'buy'
+      ? v >= expected * 0.95 && v <= expected * 1.2 + 0.01
+      : v >= 0 && v <= expected * 1.1 + 0.001;
+    return plausible ? parseFloat(v.toFixed(9)) : expected;
+  }
+
+  /** Valeur estimée (SOL) d'une fraction d'une position, au dernier prix connu (0 si inconnu) */
+  _estimatedValueSol(pos, fraction) {
+    const cost = (pos.solSpent || 0) * fraction;
+    if (!pos.lastPriceUsd || !pos.entryPriceUsd) return 0;
+    return cost * (pos.lastPriceUsd / pos.entryPriceUsd);
+  }
+
+  /**
+   * Le wallet détient moins de tokens que la position suivie (vente partielle à la main
+   * sur GMGN) : on retire la part vendue du coût de la position et on l'enregistre comme
+   * vente externe, avec un PnL ESTIMÉ au dernier prix connu (les stats l'ignorent, le
+   * budget de session l'utilise). Sans cela, la prochaine vente du bot imputerait tout le
+   * coût au reste et afficherait une fausse perte.
+   */
+  _absorbExternalReduction(pos, balance) {
+    if (!pos?.outAmount || balance == null) return;
+    let tracked;
+    try { tracked = BigInt(pos.outAmount); } catch { return; }
+    if (tracked <= 0n || balance >= (tracked * 98n) / 100n) return;
+    const frac = 1 - Number((balance * 1_000_000n) / tracked) / 1_000_000;
+    const cost = (pos.solSpent || 0) * frac;
+    const est  = this._estimatedValueSol(pos, frac) - cost;
+    this.history.push({
+      action: 'SELL', tokenMint: pos.tokenMint, symbol: pos.symbol || null, positionId: pos.positionId || null,
+      entrySignals: pos.entry?.signals || null, pct: Math.round(frac * 100), txId: null, timestamp: Date.now(),
+      pnlSol: null, estPnlSol: parseFloat(est.toFixed(9)), costSol: parseFloat(cost.toFixed(9)),
+      exitReason: 'EXTERNAL_SELL', external: true, partial: true,
+    });
+    pos.solSpent  = parseFloat(((pos.solSpent || 0) - cost).toFixed(9));
+    pos.outAmount = balance.toString();
+    console.log(`[Trader] 🔀 ${pos.symbol || pos.tokenMint.slice(0, 8)} : ${Math.round(frac * 100)}% vendus hors du bot — coût de la position réduit`);
   }
 
   // ─── Trading ──────────────────────────────────────────────────────────────
@@ -367,8 +460,19 @@ class Trader {
       takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
       symbol = null,
       entry = { signals: ['manuel'] }, // pourquoi on achète — sert aux stats par signal
+      guard = null, // () => string|null : appelé juste avant le swap, un message annule l'achat
     } = opts;
     if (!this.wallet) throw new Error('Wallet non chargé');
+
+    // Une position existe déjà sur ce token : on la renforce (coût cumulé, prix moyen) si
+    // elle appartient au même budget, sinon on refuse — l'écraser ferait disparaître son
+    // coût de la comptabilité (budget de session regonflé, faux PnL à la vente).
+    const existing = this.positions.get(tokenMint);
+    if (existing && (existing.entry?.sessionId || null) !== (entry?.sessionId || null)) {
+      throw new Error(existing.entry?.sessionId
+        ? 'Position déjà ouverte sur ce token par une session — vends-la ou attends sa clôture'
+        : 'Position déjà ouverte sur ce token hors session — la session ne peut pas la renforcer');
+    }
 
     const balance = await this.getSolBalance();
     const needed = solAmount + 0.01; // 0.01 SOL pour les frais
@@ -383,10 +487,49 @@ class Trader {
     let entryPriceUsd = await this.getCurrentPrice(tokenMint);
 
     const quote = await this.getQuote(WSOL, tokenMint, lamports, slippageBps);
-    const txId = await this.executeSwap(quote);
+    const veto = guard ? guard() : null;
+    if (veto) throw new Error(veto);
+    this.pendingBuys[tokenMint] = { solAmount, entry, symbol, stopLossPct, takeProfitPct, ts: Date.now() };
+    this._save();
+    let txId;
+    try {
+      txId = await this.executeSwap(quote);
+    } catch (err) {
+      // Échec certain (tx rejetée ou jamais exécutée) : plus rien en attente.
+      // L'entrée est gardée si l'envoi a pu partir sans réponse — syncWallet tranchera.
+      if (!/timeout|expired|block height|fetch failed|ECONN|socket/i.test(err.message)) {
+        delete this.pendingBuys[tokenMint];
+        this._save();
+      }
+      throw err;
+    }
+    // Coût réel (frais, rent du compte de token, slippage compris)
+    const spent = await this._realSol(txId, solAmount, 'buy');
     // Sans prix avant l'achat (Jupiter muet, GMGN en pause), le stop-loss serait inactif :
     // on reconstitue le prix d'entrée à partir du swap réellement exécuté
     if (!entryPriceUsd) entryPriceUsd = await this._entryPriceFromQuote(tokenMint, solAmount, quote);
+    delete this.pendingBuys[tokenMint];
+
+    const current = this.positions.get(tokenMint);
+    if (current && (current.entry?.sessionId || null) === (entry?.sessionId || null)) {
+      // Renforcement : coût cumulé, quantité cumulée, prix d'entrée moyen pondéré
+      const oldTokens = current.outAmount ? BigInt(current.outAmount) : null;
+      if (current.entryPriceUsd && entryPriceUsd) {
+        current.entryPriceUsd = (current.solSpent + spent) / (current.solSpent / current.entryPriceUsd + spent / entryPriceUsd);
+        current.highPriceUsd  = Math.max(current.highPriceUsd || 0, current.entryPriceUsd);
+      }
+      current.solSpent  = parseFloat((current.solSpent + spent).toFixed(9));
+      current.outAmount = oldTokens != null ? (oldTokens + BigInt(quote.outAmount)).toString() : null;
+      this.history.push({
+        action: 'BUY_ADD', positionId: current.positionId, tokenMint, symbol: current.symbol,
+        entry: current.entry, solSpent: spent, buyTxId: txId, timestamp: Date.now(),
+      });
+      this._save();
+      console.log(`[Trader] ✅ Renforcement OK — tx: ${txId}`);
+      logger.buy(tokenMint, solAmount, txId, current.stopLossPct, current.takeProfitPct);
+      return { txId, quote, position: current, added: true };
+    }
+
     const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
 
     const position = {
@@ -394,7 +537,7 @@ class Trader {
       tokenMint,
       symbol,
       entry,
-      solSpent: solAmount,
+      solSpent: spent,
       buyTxId: txId,
       entryTimestamp: Date.now(),
       outAmount: quote.outAmount,
@@ -427,7 +570,10 @@ class Trader {
       stopLossPct  = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT  || '20'),
       takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
       symbol = null,
+      entry = { signals: ['import'] },
+      outAmount = null,
     } = opts;
+    if (this.positions.has(tokenMint)) throw new Error('Ce token est déjà suivi');
 
     const entryPriceUsd = await this.getCurrentPrice(tokenMint);
     const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
@@ -436,11 +582,11 @@ class Trader {
       positionId: `${tokenMint.slice(0, 6)}-${Date.now()}`,
       tokenMint,
       symbol,
-      entry: { signals: ['import'] },
+      entry,
       solSpent,
       buyTxId: null,
       entryTimestamp: Date.now(),
-      outAmount: null,
+      outAmount,
       entryPriceUsd,
       entryMcapUsd,
       tokenSupply,
@@ -471,6 +617,7 @@ class Trader {
 
     const balance = await this.getTokenBalance(tokenMint);
     if (balance === BigInt(0)) throw new Error('Balance token nulle');
+    this._absorbExternalReduction(this.positions.get(tokenMint), balance);
 
     const amount = (balance * BigInt(pct)) / BigInt(100);
     console.log(`[Trader] Vente: ${pct}% de ${tokenMint}`);
@@ -479,7 +626,8 @@ class Trader {
     const txId = await this.executeSwap(quote);
 
     const pos = this.positions.get(tokenMint);
-    const solReceived = parseFloat(quote.outAmount) / LAMPORTS_PER_SOL;
+    // Produit RÉEL (slippage et frais déduits), pas le montant promis par le devis
+    const solReceived = await this._realSol(txId, parseFloat(quote.outAmount) / LAMPORTS_PER_SOL, 'sell');
     // PnL comparé au coût de la fraction vendue (et pas au coût total —
     // sinon une vente partielle affiche une fausse perte)
     const costBasis = pos ? pos.solSpent * (pct / 100) : null;
@@ -509,6 +657,7 @@ class Trader {
     } else if (pos && costBasis != null) {
       // Vente partielle : réduit le coût restant de la position
       pos.solSpent = parseFloat((pos.solSpent - costBasis).toFixed(9));
+      if (pos.outAmount) { try { pos.outAmount = (BigInt(pos.outAmount) - amount).toString(); } catch { /* ancien format */ } }
     }
     this._save();
 
@@ -545,15 +694,23 @@ class Trader {
         pos.status         = 'closed';
         pos.closeTimestamp = Date.now();
         this.positions.delete(tokenMint);
+        // PnL réel inconnu (vente hors bot) : les stats l'ignorent (pnlSol null), mais le
+        // budget de session reçoit une ESTIMATION au dernier prix connu — perte totale si
+        // aucun prix — pour ne jamais recréditer le coût entier comme si rien n'était perdu
         this.history.push({
           action: 'SELL', tokenMint, symbol: pos.symbol || null, positionId: pos.positionId || null,
           entrySignals: pos.entry?.signals || null, pct: 100, txId: null,
           timestamp: Date.now(), pnlSol: null,
+          estPnlSol: parseFloat((this._estimatedValueSol(pos, 1) - (pos.solSpent || 0)).toFixed(9)),
+          costSol: pos.solSpent || 0,
           exitReason: 'EXTERNAL_SELL', external: true,
         });
         closed.push({ tokenMint, symbol: pos.symbol || tokenMint.slice(0, 6), solSpent: pos.solSpent });
         console.log(`[Trader] 🔀 Position ${pos.symbol || tokenMint.slice(0, 8)} clôturée — vendue hors du bot (balance on-chain nulle)`);
       } else {
+        const before = pos.solSpent;
+        this._absorbExternalReduction(pos, balance);
+        if (pos.solSpent !== before) closed.push({ tokenMint, symbol: pos.symbol || tokenMint.slice(0, 6), solSpent: before - pos.solSpent, partial: true });
         kept.push({ tokenMint, symbol: pos.symbol, onChain: balance.toString() });
       }
     }
@@ -578,6 +735,23 @@ class Trader {
 
     try {
       const tokens    = await this.getWalletTokens();
+      // Achats dont le swap est passé sans être enregistré (confirmation en erreur, redémarrage) :
+      // rattachés à leur achat d'origine (signaux, session) avec le coût envoyé
+      for (const [mint, pb] of Object.entries(this.pendingBuys)) {
+        const held = tokens.find(t => t.mint === mint);
+        if (held && !this.positions.has(mint)) {
+          const { position } = await this.importPosition(mint, pb.solAmount, {
+            symbol: pb.symbol, stopLossPct: pb.stopLossPct, takeProfitPct: pb.takeProfitPct,
+            entry: { ...(pb.entry || {}), recovered: true },
+          });
+          imported.push({ tokenMint: mint, symbol: position.symbol || mint.slice(0, 6), solSpent: pb.solAmount, recovered: true });
+          console.log(`[Trader] ♻️ Achat retrouvé dans le wallet et rattaché à son origine : ${position.symbol || mint.slice(0, 8)}`);
+          delete this.pendingBuys[mint];
+        } else if (!held && Date.now() - pb.ts > 10 * 60_000) {
+          delete this.pendingBuys[mint]; // jamais arrivé : le swap a échoué
+        }
+      }
+      this._save();
       const untracked = tokens
         .filter(t => !this.positions.has(t.mint) && !NON_TRADE_MINTS.has(t.mint))
         .slice(0, 10); // borne les appels prix
@@ -649,6 +823,7 @@ class Trader {
     for (const [tokenMint, pos] of [...this.positions]) {
       const currentPrice = live[tokenMint];
       if (!currentPrice) continue;
+      pos.lastPriceUsd = currentPrice; // sert à estimer une vente faite hors du bot
       if (!pos.entryPriceUsd) {
         // Position sans prix d'entrée (achat ou import pendant une panne de prix) :
         // on prend le premier prix connu comme référence pour activer SL/TP

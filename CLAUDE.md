@@ -45,7 +45,25 @@ Budget : disponible = capital + PnL réalisé de la session − SOL encore inves
 manuels), ramènent la mise au disponible et refusent si < 0.01 SOL. Stop-loss de session : arrêt auto quand
 les pertes RÉALISÉES atteignent `sessionStopPct` du capital (20/30/45 %), vérifié au heartbeat et avant chaque
 achat. Arrêter une session = plus d'achats, les positions ouvertes restent gérées (SL/TP).
-`setAutonomy({liveTrading:true})` est ignoré sans session. API : POST /api/session/{start,update,stop,mode},
+`liveTrading` = session active, TOUJOURS (forcé au chargement d'agent.json et dans setAutonomy) ; pendant une
+session, setAutonomy ne peut pas dépasser la mise/positions de la session (resynchronisées).
+Garde-fous d'argent réel (revue des sessions) :
+- TOUS les achats de session (scan, copy-trade, outil chat `acheter`) passent par une file unique
+  (`_withBuyLock`) + contrôles communs (`_sessionBuyCheck`) ; les montants en vol (`_inflightBuys`) et les
+  swaps envoyés non enregistrés (`trader.pendingBuys`, persistés) comptent comme investis. `trader.buy`
+  reçoit un `guard()` : achat annulé si la session s'arrête avant le swap. L'outil `acheter` refuse sans session.
+- `trader.buy` n'écrase JAMAIS une position : même budget → renforcement (coût cumulé, prix moyen, ligne
+  `BUY_ADD`), autre budget → refus. `importPosition` refuse un token déjà suivi.
+- Coûts/produits RÉELS : `_txSolDelta` (pre/postBalances de la tx : frais, priorité, rent ATA, slippage) →
+  solSpent et pnlSol. Confirmation en erreur → `_landed()` vérifie le statut avant de conclure à l'échec ;
+  un achat retrouvé dans le wallet est rattaché à son `pendingBuys` (signaux + sessionId) par syncWallet.
+- Ventes hors bot : `pnlSol` reste null (stats), mais `estPnlSol` (dernier prix connu `pos.lastPriceUsd`,
+  perte totale sans prix) alimente budget, stop-loss et coupe-circuit de session. Vente PARTIELLE à la main
+  détectée (`_absorbExternalReduction`, via `outAmount`) → coût réduit, pas de fausse perte.
+- Coupe-circuit du jour et risk adaptatif : ventes de la session en cours seulement (`_sessionSells`).
+- Session arrêtée : ses positions gardent sorties d'urgence et ventes ARIA (`pos.entry.sessionId`) ;
+  bilan d'arrêt = réalisé + latent ; l'historique (`sessionState().history`) est recalculé à chaque vente.
+- `sessionState().mode` = mode PRÉPARÉ quand aucune session ne tourne (`lastMode` = celui de la dernière). API : POST /api/session/{start,update,stop,mode},
 état live dans /api/data.session (PnL latent, pocketSol). Telegram : /session (start|stop|positions|mise|mode),
 /auto renvoie vers /session, /set maxsol met à jour la session en cours.
 

@@ -275,6 +275,8 @@ class PersonalAgent {
     this._trader  = null;  // référence trader pour heartbeat + contexte live
     this._hbTimer = null;  // setInterval heartbeat
     this._alertTimes  = new Map(); // clé → timestamp dernière alerte (anti-spam)
+    this._buyChain    = Promise.resolve(); // file unique des achats de session (_withBuyLock)
+    this._inflightBuys = new Map();       // mint → { sessionId, sol } : achats en cours de swap
     this._lastManaged = new Map(); // tokenMint → timestamp dernière gestion IA
     this._breakerAlertDate = null; // date de la dernière alerte circuit breaker
     this._scoreHistory = new Map(); // mint → {ts, score, prevTs, prevScore} — détection de rupture
@@ -306,7 +308,9 @@ class PersonalAgent {
         ...DEFAULTS,
         ...raw,
         personality:   { ...DEFAULTS.personality,   ...(raw.personality   || {}) },
-        autonomy:      { ...DEFAULTS.autonomy,      ...(raw.autonomy      || {}) },
+        // Le trading réel ne vit que dans une session : un ancien liveTrading:true sans
+        // session (avant les sessions) est remis à OFF au chargement
+        autonomy:      { ...DEFAULTS.autonomy, ...(raw.autonomy || {}), liveTrading: !!raw.session?.active },
         traderProfile: { ...DEFAULTS.traderProfile, ...(raw.traderProfile || {}) },
         watchlist:    { tokens: raw.watchlist?.tokens || [], wallets: raw.watchlist?.wallets || [] },
         conversation: raw.conversation || [],
@@ -374,8 +378,9 @@ class PersonalAgent {
   setAutonomy(patch = {}) {
     const a = this.data.autonomy;
     if (typeof patch.enabled     === 'boolean') a.enabled     = patch.enabled;
-    // Le trading réel suit la session : on ne peut pas l'allumer sans session lancée
-    if (typeof patch.liveTrading === 'boolean') a.liveTrading = patch.liveTrading && !!this.data.session?.active;
+    // Le trading réel suit UNIQUEMENT la session (start/stopSession) : ni allumable sans
+    // session, ni coupable en douce pendant une session (elle resterait « en cours » sans acheter)
+    a.liveTrading = !!this.data.session?.active;
     if (typeof patch.copyTrading === 'boolean') a.copyTrading = patch.copyTrading;
 
     const num = (v, lo, hi) => {
@@ -392,6 +397,19 @@ class PersonalAgent {
     const lc = num(patch.lowCapMaxMcap, 1000, 1e6);  if (lc  != null) a.lowCapMaxMcap    = Math.round(lc);
     const ag = num(patch.minTokenAgeHours, 0, 48);   if (ag  != null) a.minTokenAgeHours = ag;
     if (typeof patch.earlyScan === 'boolean') a.earlyScan = patch.earlyScan;
+
+    // Session en cours : positions max et mise max sont ceux de la session (un ancien
+    // onglet du dashboard ne doit pas contourner la mise réglée pour la session)
+    const s = this.data.session;
+    if (s?.active) {
+      try {
+        const { pos, sol } = this._validateSessionLimits(s.capitalSol, a.maxOpenPositions, a.maxSolPerTrade);
+        s.maxOpenPositions = pos;
+        s.maxSolPerTrade   = sol;
+      } catch { /* valeurs hors limites → on garde celles de la session */ }
+      a.maxOpenPositions = s.maxOpenPositions;
+      a.maxSolPerTrade   = s.maxSolPerTrade;
+    }
 
     this._save();
     this.logAction('CONFIG',
@@ -445,36 +463,66 @@ class PersonalAgent {
    * État chiffré de la session (et des précédentes).
    * @param {{ unrealizedByMint?: Object<string, number>, walletBalance?: number }} live
    */
+  /** PnL réalisé d'une session (ventes de ses positions ; ventes hors bot = estimation) */
+  _sessionBook(sessionId) {
+    const history = this._trader?.history || [];
+    const ids = new Set(history.filter(h => h.action === 'BUY' && h.entry?.sessionId === sessionId).map(h => h.positionId));
+    const sells = history.filter(h => h.action === 'SELL' && ids.has(h.positionId));
+    // Vente faite hors du bot : PnL réel inconnu → estimation au dernier prix connu
+    // (perte totale sans prix). Ne jamais recréditer le coût entier au budget.
+    const realized = sells.reduce((sum, h) => sum + (h.pnlSol ?? h.estPnlSol ?? 0), 0);
+    const open = [...(this._trader?.positions?.values?.() || [])].filter(p => p.entry?.sessionId === sessionId);
+    return { ids, sells, realized, open, history };
+  }
+
+  /** SOL en cours d'engagement pour une session : achats en vol + swaps envoyés non encore enregistrés */
+  _sessionInFlight(sessionId) {
+    let sol = 0, count = 0;
+    for (const r of this._inflightBuys.values()) if (r.sessionId === sessionId) { sol += r.sol; count++; }
+    for (const [mint, pb] of Object.entries(this._trader?.pendingBuys || {})) {
+      if (pb.entry?.sessionId === sessionId && !this._inflightBuys.has(mint) && !this._trader.positions?.has(mint)) { sol += pb.solAmount || 0; count++; }
+    }
+    return { sol, count };
+  }
+
   sessionState(live = {}) {
     const s = this.data.session;
-    const base = {
-      mode: this.data.tradingMode, modes: this.getModes(),
-      history: (this.data.sessionHistory || []).slice(0, 5),
-    };
+    const r4 = v => parseFloat(v.toFixed(4));
+    // Historique : le résultat d'une session close continue d'évoluer tant que ses
+    // positions restantes ne sont pas vendues → recalculé à la volée
+    const history = (this.data.sessionHistory || []).slice(0, 5).map(e => {
+      if (!this._trader) return e;
+      const b = this._sessionBook(e.id);
+      if (b.ids.size === 0) return e;
+      const closed = performance.closedPositionsFromHistory(b.history).filter(c => b.ids.has(c.key));
+      return {
+        ...e, pnlSol: r4(b.realized), pnlPct: e.capitalSol ? parseFloat(((b.realized / e.capitalSol) * 100).toFixed(2)) : 0,
+        closedTrades: closed.length, wins: closed.filter(c => c.pnlSol > 0).length, openPositions: b.open.length,
+      };
+    });
+    const base = { mode: this.data.tradingMode, modes: this.getModes(), history };
     if (!s) return { ...base, active: false };
 
-    const history = this._trader?.history || [];
-    const ids = new Set(history.filter(h => h.action === 'BUY' && h.entry?.sessionId === s.id).map(h => h.positionId));
-    const sells = history.filter(h => h.action === 'SELL' && ids.has(h.positionId) && h.pnlSol != null);
-    const realized = sells.reduce((sum, h) => sum + h.pnlSol, 0);
-    const open = [...(this._trader?.positions?.values?.() || [])].filter(p => p.entry?.sessionId === s.id);
-    const invested = open.reduce((sum, p) => sum + (p.solSpent || 0), 0);
+    const { ids, realized, open, history: trades } = this._sessionBook(s.id);
+    const inflight = s.active ? this._sessionInFlight(s.id) : { sol: 0, count: 0 };
+    const invested = open.reduce((sum, p) => sum + (p.solSpent || 0), 0) + inflight.sol;
     const unrealized = open.reduce((sum, p) => sum + (live.unrealizedByMint?.[p.tokenMint] || 0), 0);
     let available = s.capitalSol + realized - invested;
     // Le wallet peut contenir moins que prévu (retrait, frais) : on ne promet jamais plus
     if (live.walletBalance != null) available = Math.min(available, Math.max(0, live.walletBalance - FEE_RESERVE_SOL));
     available = Math.max(0, available);
     const pnl = realized + unrealized;
-    const closed = performance.closedPositionsFromHistory(history).filter(c => ids.has(c.key));
-    const r4 = v => parseFloat(v.toFixed(4));
+    const closed = performance.closedPositionsFromHistory(trades).filter(c => ids.has(c.key));
     return {
       ...base,
-      active: !!s.active, id: s.id, mode: s.mode, modeLabel: MODES[s.mode]?.label || s.mode,
+      // Session terminée : le mode affiché/proposé est celui PRÉPARÉ pour la prochaine
+      active: !!s.active, id: s.id, mode: s.active ? s.mode : this.data.tradingMode, lastMode: s.mode,
+      modeLabel: MODES[s.active ? s.mode : this.data.tradingMode]?.label || s.mode,
       capitalSol: s.capitalSol, maxOpenPositions: s.maxOpenPositions, maxSolPerTrade: s.maxSolPerTrade,
       startedAt: s.startedAt, stoppedAt: s.stoppedAt || null, endReason: s.endReason || null,
       availableSol: r4(available), investedSol: r4(invested), realizedSol: r4(realized),
       unrealizedSol: r4(unrealized), pnlSol: r4(pnl), pnlPct: s.capitalSol ? parseFloat(((pnl / s.capitalSol) * 100).toFixed(2)) : 0,
-      openPositions: open.length, closedTrades: closed.length, wins: closed.filter(c => c.pnlSol > 0).length,
+      openPositions: open.length + inflight.count, closedTrades: closed.length, wins: closed.filter(c => c.pnlSol > 0).length,
       pocketSol: live.walletBalance != null ? r4(Math.max(0, live.walletBalance - available)) : null,
       stopLossSol: r4(-s.capitalSol * (MODES[s.mode]?.sessionStopPct ?? 0.3)),
     };
@@ -490,7 +538,16 @@ class PersonalAgent {
   }
 
   /** Lance une session : capital alloué, mode, plafonds. Active le trading réel. */
-  async startSession({ capitalSol, mode = this.data.tradingMode, maxOpenPositions, maxSolPerTrade } = {}) {
+  async startSession(opts = {}) {
+    // Verrou : deux lancements rapprochés (double clic, dashboard + Telegram) passeraient
+    // tous les deux le contrôle avant l'await du solde, et la 1re session serait perdue
+    if (this._sessionStarting) throw new Error('Lancement de session déjà en cours');
+    this._sessionStarting = true;
+    try { return await this._startSession(opts); }
+    finally { this._sessionStarting = false; }
+  }
+
+  async _startSession({ capitalSol, mode = this.data.tradingMode, maxOpenPositions, maxSolPerTrade } = {}) {
     if (this.data.session?.active) throw new Error('Une session est déjà en cours — arrête-la avant d\'en lancer une autre');
     if (!this._trader?.isReady()) throw new Error('Wallet non chargé (WALLET_PRIVATE_KEY manquante) — impossible de trader en réel');
     if (!MODES[mode]) throw new Error(`Mode inconnu : ${mode}`);
@@ -556,23 +613,96 @@ class PersonalAgent {
   async stopSession(reason = 'arrêt manuel') {
     const s = this.data.session;
     if (!s?.active) throw new Error('Aucune session en cours');
-    const st = this.sessionState();
+    const st = this.sessionState({ unrealizedByMint: await this._unrealizedByMint().catch(() => ({})) });
+    if (!s.active) return this.sessionState(); // arrêtée pendant le calcul des prix
     s.active = false;
     s.stoppedAt = Date.now();
     s.endReason = reason;
     this.data.autonomy.liveTrading = false;
     this.data.sessionHistory = [{
       id: s.id, mode: s.mode, capitalSol: s.capitalSol, startedAt: s.startedAt, stoppedAt: s.stoppedAt,
-      endReason: reason, pnlSol: st.pnlSol, pnlPct: st.pnlPct, closedTrades: st.closedTrades, wins: st.wins,
+      endReason: reason, pnlSol: st.realizedSol, pnlPct: s.capitalSol ? parseFloat(((st.realizedSol / s.capitalSol) * 100).toFixed(2)) : 0,
+      unrealizedAtStopSol: st.unrealizedSol, closedTrades: st.closedTrades, wins: st.wins,
     }, ...(this.data.sessionHistory || [])].slice(0, 20);
     this._save();
-    this.logAction('PAUSE', `Session arrêtée (${reason}) — PnL ${st.pnlSol >= 0 ? '+' : ''}${st.pnlSol} SOL (${st.pnlPct}%), ${st.closedTrades} trades`);
+    const sgn = v => (v >= 0 ? '+' : '') + v;
+    this.logAction('PAUSE', `Session arrêtée (${reason}) — réalisé ${sgn(st.realizedSol)} SOL, latent ${sgn(st.unrealizedSol)} SOL, ${st.closedTrades} trades`);
     await this.sendMessage(
-      `⏹ Session arrêtée (${reason}). Résultat : ${st.pnlSol >= 0 ? '+' : ''}${st.pnlSol} SOL (${st.pnlPct >= 0 ? '+' : ''}${st.pnlPct} %) sur ${st.closedTrades} trades. ` +
-      (st.openPositions > 0 ? `Je continue de gérer les ${st.openPositions} positions encore ouvertes (stop-loss, take-profit) mais je n'achète plus rien.` : 'Plus aucun achat jusqu\'à la prochaine session.'),
+      `⏹ Session arrêtée (${reason}). Réalisé : ${sgn(st.realizedSol)} SOL sur ${st.closedTrades} trades.` +
+      (st.openPositions > 0
+        ? ` Latent sur les ${st.openPositions} positions encore ouvertes : ${sgn(st.unrealizedSol)} SOL (total provisoire ${sgn(st.pnlSol)} SOL, ${sgn(st.pnlPct)} %). ` +
+          `Je continue de les gérer (stop-loss, take-profit, sorties d'urgence) mais je n'achète plus rien ; le bilan de la session se met à jour à chaque vente.`
+        : ` Plus aucun achat jusqu'à la prochaine session.`),
       'high'
     );
     return this.sessionState();
+  }
+
+  /** PnL latent (SOL) des positions de la session active, aux prix live */
+  async _unrealizedByMint() {
+    const s = this.data.session;
+    const open = [...(this._trader?.positions?.values?.() || [])].filter(p => p.entry?.sessionId === s?.id && p.entryPriceUsd);
+    if (!open.length || !this._trader._pricesFor) return {};
+    const px = await this._trader._pricesFor(open.map(p => p.tokenMint));
+    const out = {};
+    for (const p of open) if (px[p.tokenMint]) out[p.tokenMint] = p.solSpent * (px[p.tokenMint] / p.entryPriceUsd - 1);
+    return out;
+  }
+
+  /**
+   * File unique pour TOUS les achats de session (scanner, copy-trade, chat) : chaque
+   * achat lit le budget APRÈS que le précédent a été enregistré. Sans elle, deux signaux
+   * à quelques secondes d'écart voyaient le même disponible et entamaient le pocket.
+   */
+  _withBuyLock(fn) {
+    const run = this._buyChain.then(fn, fn);
+    this._buyChain = run.catch(() => {});
+    return run;
+  }
+
+  /**
+   * Contrôles communs à tout achat pris sur une session (à appeler SOUS le verrou).
+   * @returns {Promise<{ error?: string, noSession?: boolean, sess?: object, st?: object }>}
+   */
+  async _sessionBuyCheck(addr, sym) {
+    const sess = this.data.session;
+    if (!sess?.active || !this.data.autonomy.liveTrading) {
+      return { noSession: true, error: 'aucune session de trading en cours (Réglages du dashboard ou /session start)' };
+    }
+    if (!this._trader?.isReady()) return { error: 'wallet non chargé' };
+    if (this._trader.positions.has(addr) || this._trader.pendingBuys?.[addr]) {
+      return { error: 'position déjà ouverte (ou achat en cours) sur ce token' };
+    }
+    if (await this._checkSessionStop()) return { error: 'session arrêtée (stop-loss de session atteint)' };
+    // Le solde réel borne aussi le disponible (frais déjà payés, retrait du wallet…)
+    let walletBalance = null;
+    try { walletBalance = await this._trader.getSolBalance(); } catch { /* RPC KO : budget de session seul */ }
+    // Seules les positions de LA session comptent (pas tes achats manuels GMGN)
+    const st = this.sessionState(walletBalance != null ? { walletBalance } : {});
+    if (st.openPositions >= sess.maxOpenPositions) {
+      this.logAction('SIGNAL', `Signal $${sym} non exécuté — ${sess.maxOpenPositions} positions de session déjà ouvertes`, { symbol: sym });
+      return { error: `max ${sess.maxOpenPositions} positions de session atteint` };
+    }
+    if (st.availableSol < MIN_TRADE_SOL) {
+      return { error: `budget de session épuisé (${st.availableSol} SOL disponibles, pocket sécurisé intouché)` };
+    }
+    if (this._circuitBroken()) return { error: 'circuit breaker — perte journalière de la session atteinte' };
+    return { sess, st };
+  }
+
+  /** Achat pris sur la session, sous le verrou, annulé si la session s'arrête avant le swap */
+  async _sessionBuy(sess, addr, solAmt, opts) {
+    this._inflightBuys.set(addr, { sessionId: sess.id, sol: solAmt });
+    try {
+      return await this._trader.buy(addr, solAmt, {
+        ...opts,
+        entry: { ...(opts.entry || {}), sessionId: sess.id },
+        guard: () => (this.data.session?.active && this.data.session.id === sess.id
+          ? null : 'achat annulé : la session a été arrêtée pendant la préparation du swap'),
+      });
+    } finally {
+      this._inflightBuys.delete(addr);
+    }
   }
 
   /** Stop-loss de session : arrêt automatique si les pertes réalisées dépassent le seuil du mode */
@@ -591,9 +721,21 @@ class PersonalAgent {
   _dailyRealizedPnl() {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    return (this._trader?.history || [])
-      .filter(h => h.action === 'SELL' && h.pnlSol != null && h.timestamp >= start.getTime())
-      .reduce((s, h) => s + h.pnlSol, 0);
+    return this._sessionSells(start.getTime()).reduce((s, h) => s + (h.pnlSol ?? h.estPnlSol ?? 0), 0);
+  }
+
+  /**
+   * Ventes qui comptent pour les coupe-circuits : celles de la session EN COURS depuis
+   * `since` (son plafond est calculé sur son capital — les pertes manuelles ou d'une
+   * session précédente ne doivent pas la bloquer). Sans session : toutes les ventes.
+   */
+  _sessionSells(since = 0) {
+    const s = this.data.session;
+    const all = (this._trader?.history || []).filter(h => h.action === 'SELL' && (h.pnlSol != null || h.estPnlSol != null));
+    if (!s?.active) return all.filter(h => h.timestamp >= since);
+    const { ids } = this._sessionBook(s.id);
+    const from = Math.max(since, s.startedAt || 0);
+    return all.filter(h => ids.has(h.positionId) && h.timestamp >= from);
   }
 
   /** true si la perte journalière dépasse le plafond → pause du trading réel */
@@ -772,15 +914,15 @@ class PersonalAgent {
    */
   _riskMultiplier() {
     const a     = this.data.autonomy;
-    const sells = (this._trader?.history || []).filter(h => h.action === 'SELL' && h.pnlSol != null);
+    const sells = this._sessionSells();
     let m = 1;
 
     const hourAgo = Date.now() - 3_600_000;
-    const hourPnl = sells.filter(h => h.timestamp >= hourAgo).reduce((s, h) => s + h.pnlSol, 0);
+    const hourPnl = sells.filter(h => h.timestamp >= hourAgo).reduce((s, h) => s + (h.pnlSol ?? h.estPnlSol ?? 0), 0);
     if (hourPnl <= -(a.maxDailyLossSol * 0.6)) m *= 0.5;
 
     const lastTwo = sells.slice(-2);
-    if (lastTwo.length === 2 && lastTwo.every(h => h.pnlSol < 0)) m *= 0.75;
+    if (lastTwo.length === 2 && lastTwo.every(h => (h.pnlSol ?? h.estPnlSol ?? 0) < 0)) m *= 0.75;
 
     if (this.data.stats.lossStreak >= 3) m *= 0.5;
 
@@ -791,8 +933,9 @@ class PersonalAgent {
    *  puis réduite par le risk management adaptatif si la forme récente est mauvaise. */
   _positionSize(confidence) {
     const a  = this.data.autonomy;
-    const lo = Math.min(a.minSolPerTrade ?? 0.05, a.maxSolPerTrade);
-    const hi = a.maxSolPerTrade;
+    const s  = this.data.session;
+    const hi = s?.active ? Math.min(a.maxSolPerTrade, s.maxSolPerTrade) : a.maxSolPerTrade;
+    const lo = Math.min(a.minSolPerTrade ?? 0.05, hi);
     const t  = Math.max(0, Math.min(1, ((confidence ?? 5) - 5) / 4)); // 5→0, 9+→1
     const base = lo + (hi - lo) * t;
     const m    = this._riskMultiplier();
@@ -863,31 +1006,13 @@ class PersonalAgent {
     const addr = debate.token?.baseToken?.address;
     const sym  = sanitizeName(debate.token?.baseToken?.symbol || addr?.slice(0, 6) || '?');
 
-    const sess = this.data.session;
-    if (!sess?.active || !a.liveTrading) {
+    if (!this.data.session?.active || !a.liveTrading) {
       return { executed: false, noSession: true, reason: 'aucune session de trading en cours (Réglages du dashboard ou /session start)' };
     }
-    if (!this._trader?.isReady()) {
-      return { executed: false, reason: 'wallet non chargé' };
-    }
-    if (this._trader.positions.has(addr)) {
-      return { executed: false, reason: 'position déjà ouverte sur ce token' };
-    }
-    if (await this._checkSessionStop()) {
-      return { executed: false, reason: 'session arrêtée (stop-loss de session atteint)' };
-    }
-    // Seules les positions de LA session comptent (pas tes achats manuels GMGN)
-    const st = this.sessionState();
-    if (st.openPositions >= sess.maxOpenPositions) {
-      this.logAction('SIGNAL', `Signal $${sym} non exécuté — ${sess.maxOpenPositions} positions de session déjà ouvertes`, { symbol: sym });
-      return { executed: false, reason: `max ${sess.maxOpenPositions} positions de session atteint` };
-    }
-    if (st.availableSol < MIN_TRADE_SOL) {
-      return { executed: false, reason: `budget de session épuisé (${st.availableSol} SOL disponibles, pocket sécurisé intouché)` };
-    }
-    if (this._circuitBroken()) {
-      return { executed: false, reason: 'circuit breaker — perte journalière atteinte' };
-    }
+    return this._withBuyLock(async () => {
+    const chk = await this._sessionBuyCheck(addr, sym);
+    if (chk.error) return { executed: false, noSession: !!chk.noSession, reason: chk.error };
+    const { sess, st } = chk;
     // Anti re-trade : token déjà acheté dans les 6 dernières heures
     const recent = (this._trader.history || []).find(h =>
       h.tokenMint === addr && h.action === 'BUY' &&
@@ -903,11 +1028,11 @@ class PersonalAgent {
     const { sl, tp } = this._dynamicSlTp(d, debate.token?._gmgn, debate.token?.marketCap || 0);
 
     try {
-      const { txId } = await this._trader.buy(addr, solAmt, {
+      const { txId } = await this._sessionBuy(sess, addr, solAmt, {
         stopLossPct:   sl,
         takeProfitPct: tp,
         symbol:        debate.token?.baseToken?.symbol || null,
-        entry:         { ...this._entryInfo(debate, tags), sessionId: sess.id },
+        entry:         this._entryInfo(debate, tags),
       });
       this.logAction('BUY',
         `Achat auto $${sym} — ${solAmt} SOL [${reasons[0]}] SL -${sl}% TP +${tp}%`,
@@ -923,6 +1048,7 @@ class PersonalAgent {
       this.logAction('ERROR', `Achat auto $${sym} échoué : ${err.message}`, { symbol: sym });
       return { executed: false, reason: `erreur: ${err.message}`, error: true };
     }
+    });
   }
 
   // ─── Contexte live complet ─────────────────────────────────────────────────
@@ -1580,10 +1706,14 @@ class PersonalAgent {
           if (!this._trader?.isReady()) return { erreur: 'Wallet non chargé' };
           const { closed, kept, imported } = await this._trader.syncWallet();
           for (const c of closed) {
-            this.logAction('SELL', `Position $${sanitizeName(c.symbol)} clôturée — vendue hors du bot (balance on-chain nulle)`, { symbol: c.symbol, address: c.tokenMint });
+            this.logAction('SELL', c.partial
+              ? `Vente partielle hors du bot détectée sur $${sanitizeName(c.symbol)} — coût de la position réduit`
+              : `Position $${sanitizeName(c.symbol)} clôturée — vendue hors du bot (balance on-chain nulle)`, { symbol: c.symbol, address: c.tokenMint });
           }
           for (const i of imported) {
-            this.logAction('BUY', `Achat manuel GMGN importé : $${sanitizeName(i.symbol)} (~$${i.valueUsd})`, { symbol: i.symbol, address: i.tokenMint });
+            this.logAction('BUY', i.recovered
+              ? `Achat $${sanitizeName(i.symbol)} retrouvé dans le wallet — rattaché à son origine`
+              : `Achat manuel GMGN importé : $${sanitizeName(i.symbol)} (~$${i.valueUsd})`, { symbol: i.symbol, address: i.tokenMint });
           }
           const notes = [];
           if (closed.length > 0)   notes.push(`${closed.length} position(s) fantôme(s) nettoyée(s) (vendues à la main)`);
@@ -1601,23 +1731,27 @@ class PersonalAgent {
           const addr = String(input.address || '').trim();
           let   sol  = parseFloat(input.sol);
           if (!addr || isNaN(sol) || sol <= 0) return { erreur: 'Adresse ou montant invalide' };
-          const cap = this.data.autonomy.maxSolPerTrade;
-          let clamped = sol > cap;
-          if (clamped) sol = cap;
-          // Session en cours : l'achat est pris sur son budget, jamais sur le pocket sécurisé
-          const sess = this.data.session?.active ? this.data.session : null;
-          if (sess) {
-            const st = this.sessionState();
-            if (st.availableSol < MIN_TRADE_SOL) return { erreur: `Budget de session épuisé (${st.availableSol} SOL) — le pocket sécurisé n'est pas utilisable` };
-            if (sol > st.availableSol) { sol = parseFloat((Math.floor(st.availableSol * 1000) / 1000).toFixed(3)); clamped = true; }
-          }
           const sym = sanitizeName(input.symbol || addr.slice(0, 6));
-          const { txId } = await this._trader.buy(addr, sol, {
-            symbol: input.symbol || null,
-            entry: { signals: ['manuel'], ...(sess ? { sessionId: sess.id } : {}) },
+          // Un achat d'ARIA est TOUJOURS pris sur une session (jamais sur le pocket sécurisé),
+          // avec les mêmes garde-fous et le même verrou que les achats autonomes
+          return this._withBuyLock(async () => {
+            const chk = await this._sessionBuyCheck(addr, sym);
+            if (chk.error) {
+              return { erreur: chk.noSession
+                ? 'Aucune session de trading en cours : je n\'achète qu\'avec le capital d\'une session (Réglages du dashboard ou /session start). Le trader peut acheter lui-même avec /buy.'
+                : (/budget de session épuisé/.test(chk.error) ? `Budget de session épuisé (${chk.st?.availableSol ?? 0} SOL) — le pocket sécurisé n'est pas utilisable` : chk.error) };
+            }
+            const { sess, st } = chk;
+            let clamped = false;
+            if (sol > sess.maxSolPerTrade) { sol = sess.maxSolPerTrade; clamped = true; }
+            if (sol > st.availableSol) { sol = parseFloat((Math.floor(st.availableSol * 1000) / 1000).toFixed(3)); clamped = true; }
+            const { txId } = await this._sessionBuy(sess, addr, sol, {
+              symbol: input.symbol || null,
+              entry: { signals: ['manuel'] },
+            });
+            this.logAction('BUY', `Achat via chat $${sym} — ${sol} SOL`, { symbol: sym, address: addr, txId, solAmt: sol });
+            return { ok: true, txId, solInvestis: sol, ...(clamped ? { note: `montant plafonné à ${sol} SOL (mise max / budget de session)` } : {}) };
           });
-          this.logAction('BUY', `Achat via chat $${sym} — ${sol} SOL`, { symbol: sym, address: addr, txId, solAmt: sol });
-          return { ok: true, txId, solInvestis: sol, ...(clamped ? { note: `montant plafonné à ${sol} SOL (mise max / budget de session)` } : {}) };
         }
 
         case 'vendre': {
@@ -1938,10 +2072,19 @@ class PersonalAgent {
     try {
       const { closed, imported } = await this._trader.syncWallet();
       for (const c of closed) {
+        if (c.partial) {
+          this.logAction('SELL', `Vente partielle hors du bot détectée sur $${sanitizeName(c.symbol)} — coût de la position réduit`, { symbol: c.symbol, address: c.tokenMint });
+          continue;
+        }
         this.logAction('SELL', `Position $${sanitizeName(c.symbol)} clôturée auto — vendue hors du bot (GMGN manuel)`, { symbol: c.symbol, address: c.tokenMint });
         await this.sendMessage(`🔀 J'ai détecté que tu as vendu $${sanitizeName(c.symbol)} à la main — position nettoyée du tracking.`);
       }
       for (const i of imported) {
+        if (i.recovered) {
+          this.logAction('BUY', `Achat $${sanitizeName(i.symbol)} retrouvé dans le wallet (confirmation perdue) — rattaché à son origine`, { symbol: i.symbol, address: i.tokenMint });
+          await this.sendMessage(`♻️ Mon achat de $${sanitizeName(i.symbol)} était bien passé malgré une erreur de confirmation — je l'ai rattaché à sa session et je le gère.`);
+          continue;
+        }
         this.logAction('BUY', `Achat manuel GMGN détecté : $${sanitizeName(i.symbol)} (~$${i.valueUsd}) — auto-importé, je le gère (SL/TP/fuite)`, { symbol: i.symbol, address: i.tokenMint });
         await this.sendMessage(`📥 J'ai vu ton achat manuel de $${sanitizeName(i.symbol)} (~$${i.valueUsd}) — je le prends en gestion (SL/TP, trailing, monitoring de fuite).`);
       }
@@ -1982,7 +2125,9 @@ class PersonalAgent {
         this.logAction('ALERT', `Signal de fuite GMGN sur $${sym} (sévérité ${severity}) : ${sigText}`, { symbol: sym });
       }
 
-      if (this.data.autonomy.enabled && this.data.autonomy.liveTrading) {
+      // Sortie d'urgence : pendant une session, et TOUJOURS pour une position achetée par
+      // une session (même arrêtée — c'est le bot qui l'a ouverte, il doit pouvoir la sauver)
+      if (this.data.autonomy.enabled && (this.data.autonomy.liveTrading || pos.entry?.sessionId)) {
         // Après 3 échecs de vente, on ne réessaie plus qu'une fois toutes les 15 min
         if ((pos.escapeFailCount || 0) >= 3 && Date.now() - (pos.lastEscapeTryAt || 0) < 15 * 60_000) continue;
         pos.lastEscapeTryAt = Date.now();
@@ -2000,7 +2145,7 @@ class PersonalAgent {
           }
         }
       } else if (this._allowAlert(`escape:${pos.tokenMint}`, 15 * 60_000)) {
-        await this.sendMessage(`🚨 SIGNAL DE FUITE sur $${sym} : ${sigText}. Vends maintenant ou active /auto.`, 'high');
+        await this.sendMessage(`🚨 SIGNAL DE FUITE sur $${sym} : ${sigText}. Vends maintenant (/sell) — je ne vends seule que les positions ouvertes par une session ou pendant une session.`, 'high');
       }
     }
   }
@@ -2096,7 +2241,7 @@ class PersonalAgent {
         const why    = (json.reasoning || '').slice(0, 120);
 
         if (action === 'SELL' && conf >= 7) {
-          if (a.liveTrading) {
+          if (a.liveTrading || pos.entry?.sessionId) {
             try {
               const { txId } = await this._trader.sell(pos.tokenMint, 100, 300, 'ARIA_DECISION');
               this.logAction('SELL', `Vente auto $${sym} à ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% — ${why}`, { symbol: sym, txId });
@@ -2106,7 +2251,7 @@ class PersonalAgent {
             }
           } else if (this._allowAlert(`sellreco:${pos.tokenMint}`)) {
             this.logAction('ALERT', `Recommande de vendre $${sym} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%) — ${why}`, { symbol: sym });
-            await this.sendMessage(`⚠️ Je vendrais $${sym} maintenant (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%) : ${why}\nVends via /sell ou active le trading réel (/auto).`, 'high');
+            await this.sendMessage(`⚠️ Je vendrais $${sym} maintenant (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%) : ${why}\nVends via /sell (je ne vends seule que pendant une session ou ses positions).`, 'high');
           }
         } else if (action === 'TIGHTEN_SL' && typeof json.newStopLossPct === 'number') {
           const ns = Math.max(5, Math.min(50, json.newStopLossPct));

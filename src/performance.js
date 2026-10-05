@@ -40,8 +40,10 @@ function closedPositionsFromHistory(history = []) {
   const groups = new Map(); // clé → { buy, sells[] }
   const open = new Set();
 
+  const added = new Map();  // positionId → SOL ajoutés par renforcement
   for (const h of history) {
     if (h.action === 'BUY' && h.positionId) buys.set(h.positionId, h);
+    if (h.action === 'BUY_ADD' && h.positionId) added.set(h.positionId, (added.get(h.positionId) || 0) + (h.solSpent || 0));
   }
   for (const h of history) {
     if (h.action !== 'SELL') continue;
@@ -59,7 +61,7 @@ function closedPositionsFromHistory(history = []) {
     if (open.has(key) && !key.startsWith('legacy-')) continue;
     const last = sells[sells.length - 1];
     const pnlSol = sells.reduce((s, x) => s + x.pnlSol, 0);
-    const cost = buy?.solSpent ?? null;
+    const cost = buy?.solSpent != null ? buy.solSpent + (added.get(key) || 0) : null;
     out.push({
       key,
       symbol:    buy?.symbol || last.symbol || null,
