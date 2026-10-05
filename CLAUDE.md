@@ -9,11 +9,13 @@ Le propriétaire trade aussi manuellement sur GMGN — positions importables via
 ## Architecture
 - `index.js` — Point d'entrée, charge le wallet et démarre Bot + Scanner + Dashboard + Watchdog + ARIA
 - `src/bot.js` — Interface Telegram (commandes + callbacks + délégation autonomie ARIA)
-- `src/scanner.js` — Détecte les tokens (GMGN trending UNIQUEMENT — DexScreener/GeckoTerminal/Pump.fun supprimés)
+- `src/scanner.js` — Détecte les tokens (GMGN trending 1h + source « early » 5m triée par swaps si `autonomy.earlyScan`). Âge minimum live = `autonomy.minTokenAgeHours` (1h par défaut) ; sous 2h, exige ≥100 holders et ≥2 smart money/KOL
 - `src/gmgn.js` — Client GMGN via gmgn-cli (Solana) — SOURCE DE DONNÉES UNIQUE (trending, hot-searches, token info/prix, sécurité, smart money/KOL/snipers/bundlers, gates durs, verdict momentum, monitoring de fuite). REQUIS pour le scan/analyse ; sans clé le scanner attend
-- `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop, persistance disque
+- `src/trader.js` — Exécute les trades Jupiter (lite-api.jup.ag/swap/v1), gère SL/TP/trailing stop (surveillance toutes les POSITION_CHECK_SECONDS=10s, prix groupés, anti-chevauchement), persistance disque. Chaque position porte `positionId` + `entry` (signaux d'entrée, notes) ; les SELL recopient positionId/entrySignals
+- `src/prices.js` — Prix USD via Jupiter Price API **v3** (la v2 est dépréciée depuis le 30/09/2025) : appels groupés (50 mints), cache 3s, lit aussi l'ancien format v2
+- `src/performance.js` — Stats "ce qui marche" : regroupe les ventes par POSITION (paliers additionnés), résultats par signal d'entrée, par tranche de note finale / chiffres / IA
 - `src/personalAgent.js` — ARIA : analyse, chat agentique avec outils (tool use), autonomie (achat/vente auto), journal, apprentissage, heartbeat
-- `src/paperTrader.js` — Simulation sans risque (positions fictives, mêmes analyses)
+- `src/paperTrader.js` — Simulation sans risque — 3 STRATÉGIES en parallèle (`STRATEGIES` : main « Actuelle », strict « Sélective », runner « Laisse courir ») sur les mêmes analyses, fichiers data/paper_positions.json, paper_strict.json, paper_runner.json ; positions étiquetées comme le réel
 - `src/agents.js` — Ancien système multi-agents (suspendu — gardé pour agentBus/dashboard floor)
 - `src/agentMemory.js` — Mémoire des débats + poids dynamiques + suggestions
 - `src/tokenHistory.js` — Détection des tokens récidivistes (mêmes tickers, nouvelles adresses)
@@ -59,6 +61,19 @@ tracking LIVE des wallets suivis (~6 min — alerte proactive à chaque nouveau 
 lastActivityTs par wallet, pur code), gestion active des positions (~9 min, cooldown 20 min/position,
 décisions HOLD/SELL/TIGHTEN_SL), apprentissage (~30 min), rapport quotidien à 20h Paris.
 Tout est journalisé dans agent_journal.json + push SSE `aria_journal`.
+
+## Mesure et qualité de décision
+- Note HYBRIDE (personalAgent.analyzeToken) : `gmgn.quantScore()` (déterministe, 0-100 : consensus
+  smart/KOL 25, pression achat 20, momentum 20, liquidité 15, distribution 20 ; plafond 35 si verdict
+  reject). Sous QUANT_SKIP_BELOW (30) → SKIP sans appel LLM. Sinon note finale =
+  QUANT_WEIGHT (0.6) × chiffres + 0.4 × LLM ; la DÉCISION reste celle du LLM (veto), un BUY sous 55 → WATCH.
+  decision.quantScore / llmScore / quantParts conservés.
+- `classifySignals(debate)` (sync) étiquette : smart_money, rotation, rupture, micro_cap, early (+ live_flow
+  dans _strongSignal, copy_trade pour le copy-trading, score_seul sinon, manuel/import pour les achats humains).
+  `_entryInfo()` enregistre signaux + notes + snapshot GMGN + âge sur la position.
+- `personalAgent.performanceReport()` → réel + chaque stratégie paper ; injecté dans le prompt système
+  (« CE QUI MARCHE », signaux avec ≥3 positions) et l'outil stats_bot. API : /api/performance,
+  /api/data.performance, /api/paper/compare, /api/paper?id=<strategie>.
 
 ## ARIA — Outils du chat (tool use)
 Le chat d'ARIA (dashboard + /agent Telegram) est une boucle agentique (max 6 tours d'outils,
@@ -116,7 +131,11 @@ icônes SVG en sprite (`<symbol id="i-…">` + robot ARIA `#robot`), police Plus
 - Réglages : profils rapides (Prudent/Équilibré/Agressif), interrupteurs (analyses IA, autonomie,
   trading réel, copy-trading), curseurs de seuils, tailles/exposition, paramètres paper, reset.
   Sauvegarde AUTOMATIQUE (attribut `data-save="autonomy|paper"` + debounce 450 ms)
-- Fenêtre "Analyser un token" (POST /api/debate) avec verdict + métriques GMGN
+- Fenêtre "Analyser un token" (POST /api/debate) avec verdict, note chiffres / IA + métriques GMGN
+- Accueil : carte « Ce qui marche » (onglets Réel + chaque stratégie paper) — par signal, par note,
+  « qui prédit le mieux » (note chiffres vs note IA, positions notées ≥ 65)
+- Paper : sélecteur de stratégie + comparatif ; Réglages : section Détection (âge minimum, source early),
+  la section Paper édite la stratégie sélectionnée
 - Chart.js via CDN jsdelivr (repli cdnjs) — si indisponible, le reste du dashboard fonctionne
 - SSE /api/events : aria_proactive (toast si hors onglet ARIA), aria_journal
 - Mobile : pas de backdrop-filter sur la topbar (sinon la nav fixed se positionne par rapport à elle)
@@ -129,7 +148,10 @@ JUPITER_API_KEY (optionnel)
 GMGN_API_KEY (REQUIS pour le scan — npm i -g gmgn-cli ; aussi lu depuis ~/.config/gmgn/.env)
 GMGN_TRENDING_ARGS, GMGN_MIN_CONFLUENCE (optionnels — tuning source GMGN)
 MIN_LIQUIDITY_USD (défaut: 5000), MIN_VOLUME_24H_USD (défaut: 20000 — mesuré sur la fenêtre trending GMGN 1h), MIN_MARKET_CAP_USD (défaut: 30000)
-MIN_TOKEN_AGE_HOURS (défaut: 6), MAX_TOKEN_AGE_HOURS (défaut: 72)
+MIN_TOKEN_AGE_HOURS (défaut: 1 — valeur initiale, réglable ensuite dans le dashboard), MAX_TOKEN_AGE_HOURS (défaut: 72)
+POSITION_CHECK_SECONDS (défaut: 10) — fréquence de surveillance SL/TP (réel + paper)
+QUANT_WEIGHT (défaut: 0.6), QUANT_SKIP_BELOW (défaut: 30) — note hybride chiffres/IA
+JUPITER_PRICE_URL (défaut: https://lite-api.jup.ag/price/v3)
 MAX_POSITION_SOL (défaut: 0.1)
 DEFAULT_STOP_LOSS_PCT (défaut: 20), DEFAULT_TAKE_PROFIT_PCT (défaut: 50)
 DASHBOARD_PORT (défaut: 3000)
@@ -157,7 +179,5 @@ automatiquement sur crash. À réévaluer si un correctif amont sort un jour (`n
 claude/meme-coin-development-MhZiV
 
 ## À faire / idées futures
-- Copy-trade automatique des wallets suivis (le tracking live existe déjà)
 - Backtest sur données historiques (gmgn-cli market kline)
-- Prise de profit partielle automatique (vendre 50% au TP, laisser courir le reste)
 - Nettoyage : retirer agents.js quand le Trading Floor sera définitivement abandonné

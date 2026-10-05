@@ -140,32 +140,38 @@ const _clamp = (x, lo = 0, hi = 1) => x < lo ? lo : x > hi ? hi : x;
 
 // Filtres de base poussés côté serveur GMGN (économise bande passante + bruit).
 // Les mêmes seuils sont re-vérifiés localement par le scanner (_passesFilters).
-const DEFAULT_TRENDING_ARGS = [
-  'market', 'trending',
-  '--interval', '1h', '--order-by', 'volume', '--direction', 'desc',
-  '--limit', '100', '--filter', 'not_wash_trading',
-  '--min-liquidity',  process.env.MIN_LIQUIDITY_USD  || '5000',
-  '--min-marketcap',  process.env.MIN_MARKET_CAP_USD || '30000',
-];
+function _trendingArgs(interval) {
+  return [
+    'market', 'trending',
+    // 1h : tokens établis, triés par volume. 5m : tokens qui DÉMARRENT, triés
+    // par nombre de swaps (le volume 5m favorise les gros tokens déjà lancés)
+    '--interval', interval, '--order-by', interval === '5m' ? 'swaps' : 'volume', '--direction', 'desc',
+    '--limit', '100', '--filter', 'not_wash_trading',
+    '--min-liquidity',  process.env.MIN_LIQUIDITY_USD  || '5000',
+    '--min-marketcap',  process.env.MIN_MARKET_CAP_USD || '30000',
+  ];
+}
 
-let _trendingCache = { ts: 0, rows: [] };
+const _trendingCaches = new Map(); // interval → { ts, rows }
 
 /**
  * Récupère le trending GMGN, normalisé au format DexScreener (compatible scanner)
  * avec les champs riches GMGN attachés dans `_gmgn`.
+ * @param {'1h'|'5m'} interval
  * @returns {Promise<Object[]>} paires normalisées
  */
-async function getTrending() {
-  if (Date.now() - _trendingCache.ts < TRENDING_TTL_MS) return _trendingCache.rows;
+async function getTrending(interval = '1h') {
+  const cached = _trendingCaches.get(interval);
+  if (cached && Date.now() - cached.ts < TRENDING_TTL_MS) return cached.rows;
 
-  const custom = (process.env.GMGN_TRENDING_ARGS || '').trim();
-  const args   = custom ? custom.split(/\s+/) : DEFAULT_TRENDING_ARGS;
+  const custom = interval === '1h' ? (process.env.GMGN_TRENDING_ARGS || '').trim() : '';
+  const args   = custom ? custom.split(/\s+/) : _trendingArgs(interval);
   const resp   = await _cli(args);
   const data   = resp?.data ?? resp;
   const rows   = (data && typeof data === 'object' && (data.rank || data.tokens)) || [];
-  const pairs  = rows.map(normalizeRow).filter(Boolean);
+  const pairs  = rows.map(r => normalizeRow(r, interval)).filter(Boolean);
 
-  _trendingCache = { ts: Date.now(), rows: pairs };
+  _trendingCaches.set(interval, { ts: Date.now(), rows: pairs });
   return pairs;
 }
 
@@ -173,12 +179,14 @@ async function getTrending() {
  * Normalise une ligne trending gmgn-cli 1.3.9 vers le format DexScreener
  * utilisé dans tout le bot. Les extras GMGN vont dans `_gmgn` (ratios en décimal).
  */
-function normalizeRow(row) {
+function normalizeRow(row, interval = '1h') {
   if (!row || !row.address) return null;
 
   const buys  = Math.round(_f(row.buys));
   const sells = Math.round(_f(row.sells));
-  const vol   = _f(row.volume);      // avec --interval 1h : volume de la dernière heure
+  // `volume` couvre la fenêtre demandée : 1h tel quel, 5m extrapolé à l'heure
+  // (×12) pour rester comparable aux filtres de volume et au score de pertinence
+  const vol   = _f(row.volume) * (interval === '5m' ? 12 : 1);
   const mcap  = _f(row.market_cap);
   const ct    = _f(row.creation_timestamp) || _f(row.open_timestamp);
 
@@ -208,7 +216,7 @@ function normalizeRow(row) {
   gmgn.verdict = judge(gmgn); // verdict momentum déterministe pré-calculé
 
   return {
-    _source:  'gmgn-trending',
+    _source:  interval === '5m' ? 'gmgn-early' : 'gmgn-trending',
     _gmgn:    gmgn,
     chainId:  'solana',
     dexId:    'gmgn',
@@ -238,7 +246,11 @@ function normalizeRow(row) {
 
 /** Cherche une paire dans le cache trending par adresse (sans appel CLI) */
 function findTrendingRow(address) {
-  return _trendingCache.rows.find(p => p.baseToken?.address === address) || null;
+  for (const { rows } of _trendingCaches.values()) {
+    const hit = rows.find(p => p.baseToken?.address === address);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** URL de la page GMGN d'un token */
@@ -298,7 +310,7 @@ async function getHotSearches(limit = 20) {
     const data = resp?.data ?? resp;
     const rows = Array.isArray(data) ? data
                : (data && (data.rank || data.tokens || data.list)) || [];
-    const pairs = rows.map(normalizeRow).filter(Boolean)
+    const pairs = rows.map(r => normalizeRow(r)).filter(Boolean)
       .map(p => ({ ...p, _source: 'gmgn-hot' }));
     _hotCache = { ts: Date.now(), rows: pairs };
     return pairs;
@@ -641,6 +653,40 @@ function judge(g) {
   return { verdict, conviction: conv, crowd, thesis };
 }
 
+// ─── Score quantitatif déterministe (pré-score avant le LLM) ──────────────────
+
+/**
+ * Note 0-100 calculée uniquement à partir des données GMGN — stable et
+ * reproductible, contrairement à la note d'un LLM qui varie d'un appel à l'autre.
+ *   consensus smart money / KOL  0-25
+ *   pression acheteuse           0-20
+ *   momentum 5m / 1h             0-20
+ *   santé de la liquidité        0-15
+ *   distribution des holders     0-20  (bundlers, top 10, dev, rug ratio)
+ * Un verdict momentum "reject" plafonne la note à 35.
+ * @returns {{ score: number, parts: Object<string, number> }}
+ */
+function quantScore(g, pair = {}) {
+  const parts = {};
+  parts.consensus = Math.min(25, g.smartDegen * 1.2 + g.renowned * 4);
+  parts.pression  = _clamp((g.buyRatio - 0.42) / (0.75 - 0.42)) * 20;
+  parts.momentum  = Math.max(0, Math.min(20,
+    10 + Math.max(-6, Math.min(6, g.chg1h * 100 * 0.15)) + Math.max(-6, Math.min(6, g.chg5m * 100 * 0.6))));
+  const mcap = pair.marketCap || pair.fdv || 0;
+  const liq  = pair.liquidity?.usd || 0;
+  parts.liquidite = mcap > 0 ? _clamp((liq / mcap - 0.03) / (0.15 - 0.03)) * 15 : 7;
+  parts.holders = Math.max(0, 20
+    - g.bundler * 40
+    - Math.max(0, g.top10 - 0.20) * 50
+    - g.devHold * 60
+    - g.rugRatio * 20);
+
+  let score = Object.values(parts).reduce((a, b) => a + b, 0);
+  if (g.verdict?.verdict === 'reject') score = Math.min(score, 35);
+  for (const k of Object.keys(parts)) parts[k] = Math.round(parts[k]);
+  return { score: Math.round(Math.max(0, Math.min(100, score))), parts };
+}
+
 // ─── Token security (snapshot pour le monitoring de fuite) ───────────────────
 
 const _secCache = new Map(); // addr → { ts, snap }
@@ -715,6 +761,7 @@ module.exports = {
   normalizeRow,
   hardGates,
   judge,
+  quantScore,
   getTokenSecurity,
   assessEscape,
   // Wallets + smart money live

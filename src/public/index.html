@@ -195,7 +195,7 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   border-radius: var(--r-xl); box-shadow: var(--shadow-card);
   padding: 22px; min-width: 0;
 }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .card-title { font-size: 16.5px; font-weight: 800; letter-spacing: -.2px; display: flex; align-items: center; gap: 10px; }
 .card-sub { font-size: 12.5px; color: var(--ink-3); font-weight: 600; }
 .link { font-size: 13px; font-weight: 700; color: var(--accent); }
@@ -215,7 +215,8 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
 .ico-sq.amber { background: var(--warn-soft); color: var(--warn); }
 .ico-sq.blue  { background: #e7eeff; color: #3d6cf2; }
 
-.seg { display: inline-flex; padding: 4px; gap: 2px; background: var(--surface-2); border-radius: 999px; }
+.seg { display: inline-flex; padding: 4px; gap: 2px; background: var(--surface-2); border-radius: 999px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.seg button { flex-shrink: 0; }
 .seg button { padding: 6px 13px; border-radius: 999px; font-size: 12.5px; font-weight: 700; color: var(--ink-3); }
 .seg button.active { background: #fff; color: var(--accent); box-shadow: 0 2px 8px -2px rgba(40,20,90,.2); }
 
@@ -329,6 +330,40 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   background: conic-gradient(var(--c) calc(var(--p) * 1%), var(--surface-3) 0);
   display: grid; place-items: center; font-size: 10.5px; font-weight: 800; }
 .ring > span { width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2); display: grid; place-items: center; }
+
+/* ── Ce qui marche / comparatif ─────────────────────────────────────── */
+.sig-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) 92px; gap: 14px; align-items: center; padding: 12px 2px; border-bottom: 1px solid var(--line); }
+.sig-row:last-child { border-bottom: 0; }
+.sig-name { font-size: 14px; font-weight: 700; }
+.sig-n { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.wr { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.wr-bar { flex: 1; height: 8px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.wr-bar > span { display: block; height: 100%; border-radius: 99px; }
+.sig-pnl { text-align: right; font-size: 13.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.sub-title { font-size: 12px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; color: var(--ink-3); margin: 18px 0 10px; }
+.buckets { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.bucket { background: var(--surface-2); border-radius: 14px; padding: 10px 12px; }
+.bucket-l { font-size: 11.5px; font-weight: 700; color: var(--ink-3); }
+.bucket-v { font-size: 17px; font-weight: 800; margin-top: 2px; }
+.bucket-n { font-size: 11px; color: var(--ink-3); }
+.versus { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.versus .mini.best { background: var(--up-soft); }
+.strat { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.4fr) repeat(3, 84px); gap: 14px; align-items: center;
+  padding: 14px 12px; border-radius: 18px; cursor: pointer; transition: background .15s; }
+.strat + .strat { margin-top: 4px; }
+.strat:hover { background: var(--surface-2); }
+.strat.sel { background: var(--accent-soft); }
+.strat-name { font-weight: 800; font-size: 14.5px; display: flex; align-items: center; gap: 8px; }
+.strat-desc { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.strat-cfg { display: flex; flex-wrap: wrap; gap: 5px; }
+.strat-v { text-align: right; }
+.strat-v b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+.strat-v span { font-size: 11px; color: var(--ink-3); font-weight: 600; }
+.label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.label-row .section-label { margin-bottom: 10px; }
+.seg.dark { background: var(--glass); border: 1px solid var(--glass-line); }
+.seg.dark button { color: var(--on-dark-2); }
+.seg.dark button.active { background: #fff; color: var(--accent); }
 
 /* ── ARIA ───────────────────────────────────────────────────────────── */
 .profile { text-align: center; }
@@ -515,7 +550,13 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   .aria-grid > .stack:last-child { display: flex; }
   .chat-card { height: 72vh; }
   .mini-stats { grid-template-columns: repeat(2, 1fr); }
+  .sig-row { grid-template-columns: minmax(0, 1fr) 84px; }
+  .sig-row .wr { grid-column: 1 / -1; grid-row: 2; }
+  .strat { grid-template-columns: minmax(0, 1fr) repeat(2, 74px); }
+  .strat-cfg, .strat .strat-v.hide-sm { display: none; }
   .set-row.stacked .set-ctrl { padding-left: 0; }
+  .danger-zone .set-row { flex-wrap: wrap; }
+  .danger-zone .set-text { flex-basis: calc(100% - 52px); }
   .card { padding: 18px; border-radius: 24px; }
   .set-card { padding: 4px 18px; }
   .robot { width: 92px; height: 92px; }
@@ -696,6 +737,14 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
 
       <div class="card">
         <div class="card-head">
+          <div class="card-title"><span class="ico-sq green"><svg class="i"><use href="#i-target"/></svg></span>Ce qui marche</div>
+          <div class="seg" id="perfTabs"></div>
+        </div>
+        <div id="perfBody"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
           <div class="card-title"><span class="ico-sq green"><svg class="i"><use href="#i-trend"/></svg></span>Cette semaine</div>
         </div>
         <div class="chart-box sm"><canvas id="dailyChart"></canvas></div>
@@ -831,9 +880,25 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
 ════════════════════════════════════════════════════════════════════════ -->
 <section class="page" id="page-paper">
 
+  <div class="label-row" style="margin-bottom:14px">
+    <div>
+      <div class="page-title" style="font-size:26px">Stratégies <em style="font-size:30px">en parallèle</em></div>
+      <div class="page-sub">Les trois reçoivent les mêmes analyses — seules leurs règles diffèrent.</div>
+    </div>
+    <div class="seg dark" id="paperTabs"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:22px">
+    <div class="card-head">
+      <div class="card-title"><span class="ico-sq"><svg class="i"><use href="#i-layers"/></svg></span>Comparatif</div>
+      <span class="card-sub">clique pour afficher le détail</span>
+    </div>
+    <div id="stratList"></div>
+  </div>
+
   <div class="hero compact">
     <div>
-      <span class="badge-sim">🧪 Simulation — aucun SOL réel</span>
+      <span class="badge-sim">🧪 <span id="ppStratName">Simulation</span> — aucun SOL réel</span>
       <div class="balance-label" style="margin-top:18px">Portefeuille simulé</div>
       <div class="balance" id="ppPortfolio">—</div>
       <div class="hero-pills"><span class="pill-glass" id="ppPortfolioSub">— SOL de départ</span></div>
@@ -937,6 +1002,20 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
       </div>
     </div>
 
+    <div class="section-label">Détection des tokens</div>
+    <div class="card set-card">
+      <div class="set-row stacked">
+        <span class="ico-sq amber"><svg class="i"><use href="#i-clock"/></svg></span>
+        <div class="set-text"><div class="set-title">Âge minimum d'un token</div><div class="set-desc">Plus bas = on entre plus tôt dans les pumps, mais avec plus de risque. Sous 2 h, le token doit en plus avoir 100 holders et 2 wallets smart money / KOL.</div></div>
+        <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoMinAge" min="0" max="12" step="0.5" data-save="autonomy" data-suffix=" h"><output class="range-val" data-for="autoMinAge">—</output></div>
+      </div>
+      <div class="set-row">
+        <span class="ico-sq"><svg class="i"><use href="#i-scan"/></svg></span>
+        <div class="set-text"><div class="set-title">Source « early » (5 min)</div><div class="set-desc">Ajoute le classement GMGN des 5 dernières minutes pour repérer les tokens qui démarrent, avant qu'ils dominent le classement 1 h.</div></div>
+        <label class="switch"><input type="checkbox" id="autoEarly" data-save="autonomy"><span class="track"></span><span class="knob"></span></label>
+      </div>
+    </div>
+
     <div class="section-label">Seuils d'entrée</div>
     <div class="card set-card">
       <div class="set-row stacked">
@@ -980,7 +1059,10 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
       </div>
     </div>
 
-    <div class="section-label">Paper trading</div>
+    <div class="label-row" style="margin-top:26px">
+      <div class="section-label" style="margin-top:0">Paper trading</div>
+      <div class="seg dark" id="paperTabsSettings" style="margin-bottom:10px"></div>
+    </div>
     <div class="card set-card">
       <div class="set-row stacked">
         <span class="ico-sq amber"><svg class="i"><use href="#i-target"/></svg></span>
@@ -1064,6 +1146,8 @@ let lastHistory = [];
 let historyExpanded = false;
 let symbolByMint = {};
 let currentAutonomy = null;
+let paperId = 'main';
+let perfData = null, perfTab = 'real';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NAVIGATION
@@ -1265,6 +1349,49 @@ function render(d) {
   lastHistory = d.history || [];
   renderHistory();
   renderRecentAnalyses(d.recentAnalyses);
+  perfData = d.performance || null;
+  renderPerformance();
+}
+
+// ── Ce qui marche : résultats par signal / note, réel ou stratégie paper ──
+function renderPerformance() {
+  const tabs = document.getElementById('perfTabs');
+  const body = document.getElementById('perfBody');
+  if (!perfData) { body.innerHTML = ''; return; }
+  const sources = [{ id: 'real', label: 'Réel', data: perfData.real }, ...(perfData.paper || []).map(p => ({ id: p.id, label: p.label, data: p }))];
+  if (!sources.some(x => x.id === perfTab)) perfTab = 'real';
+  tabs.innerHTML = sources.map(x => `<button data-perf="${esc(x.id)}" class="${x.id === perfTab ? 'active' : ''}">${esc(x.label)}</button>`).join('');
+  tabs.querySelectorAll('button').forEach(b => b.onclick = () => { perfTab = b.dataset.perf; renderPerformance(); });
+
+  const d = sources.find(x => x.id === perfTab).data;
+  if (!d || !d.trades) {
+    body.innerHTML = emptyState('target', 'Chaque nouvelle position est étiquetée avec le signal qui l’a déclenchée.<br>Les résultats apparaîtront ici dès les premières positions fermées.');
+    return;
+  }
+  const wrColor = w => w == null ? 'var(--ink-3)' : w >= 55 ? 'var(--up)' : w >= 45 ? 'var(--warn)' : 'var(--down)';
+  const rows = d.bySignal.map(r => `
+    <div class="sig-row">
+      <div><div class="sig-name">${esc(r.label)}</div><div class="sig-n">${r.trades} position${r.trades > 1 ? 's' : ''}${r.avgPct != null ? ' · moy. ' + fPct(r.avgPct) : ''}</div></div>
+      <div class="wr"><div class="wr-bar"><span style="width:${r.winRate ?? 0}%;background:${wrColor(r.winRate)}"></span></div>${r.winRate ?? '—'}%</div>
+      <div class="sig-pnl ${tone(r.pnlSol)}">${fSol(r.pnlSol)}</div>
+    </div>`).join('');
+
+  const buckets = d.byScore.length ? `<div class="sub-title">Par note d'entrée</div><div class="buckets">${d.byScore.map(b => `
+    <div class="bucket"><div class="bucket-l">${esc(b.bucket)}</div><div class="bucket-v" style="color:${wrColor(b.winRate)}">${b.winRate}%</div><div class="bucket-n">${b.trades} pos. · ${fSol(b.pnlSol)}</div></div>`).join('')}</div>` : '';
+
+  // Chiffres vs IA : parmi les positions notées ≥ 65 par chacun, laquelle gagne le plus souvent ?
+  const high = (list) => {
+    const sel = (list || []).filter(b => ['65–74', '75–84', '≥ 85'].includes(b.bucket));
+    const n = sel.reduce((a, b) => a + b.trades, 0), w = sel.reduce((a, b) => a + b.wins, 0);
+    return n ? { n, wr: Math.round(w / n * 100) } : null;
+  };
+  const q = high(d.byQuant), l = high(d.byLlm);
+  const versus = q || l ? `<div class="sub-title">Qui prédit le mieux ? (note ≥ 65)</div><div class="versus">
+    <div class="mini ${q && (!l || q.wr > l.wr) ? 'best' : ''}"><div class="mini-v">${q ? q.wr + '%' : '—'}</div><div class="mini-l">Note des chiffres GMGN${q ? ' · ' + q.n + ' pos.' : ''}</div></div>
+    <div class="mini ${l && (!q || l.wr > q.wr) ? 'best' : ''}"><div class="mini-v">${l ? l.wr + '%' : '—'}</div><div class="mini-l">Note de l'IA${l ? ' · ' + l.n + ' pos.' : ''}</div></div>
+  </div>` : '';
+
+  body.innerHTML = `<div class="list">${rows}</div>${buckets}${versus}`;
 }
 
 function renderHero(d) {
@@ -1454,8 +1581,8 @@ function renderRecentAnalyses(list) {
     const dec = a.decision === 'BUY' ? '<span class="tag up">Achat</span>' : a.decision === 'WATCH' || a.decision === 'WAIT' ? '<span class="tag warn">Surveille</span>' : '<span class="tag down">Refusé</span>';
     return `<a class="an-card" href="${gmgnUrl(a.mint)}" target="_blank" rel="noopener" title="${esc(a.mint)}">
       <div class="an-top"><span class="an-sym">$${esc(a.symbol)}</span>${ring(a.score)}</div>
-      <div style="margin-top:8px">${dec}</div>
-      <div class="an-time">${esc(fAgo(a.timestamp))}</div>
+      <div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">${dec}${a.early ? '<span class="tag acc">early</span>' : ''}</div>
+      <div class="an-time">${a.quant != null ? `chiffres ${a.quant}${a.llm != null ? ' · IA ' + a.llm : ' · IA non lancée'}<br>` : ''}${esc(fAgo(a.timestamp))}</div>
     </a>`;
   }).join('');
 }
@@ -1645,6 +1772,8 @@ function renderAutonomy(a) {
   setVal('autoMaxSol', a.maxSolPerTrade);
   setVal('autoMaxPos', a.maxOpenPositions);
   setVal('autoMaxLoss', a.maxDailyLossSol);
+  setVal('autoMinAge', a.minTokenAgeHours ?? 1);
+  setVal('autoEarly', a.earlyScan !== false);
 
   const [label, cls] = a.enabled && a.liveTrading ? ['Trading réel', 'live'] : a.enabled ? ['Autonome', 'on'] : ['Désactivée', ''];
   for (const id of ['autoBadge', 'homeAriaStatus']) {
@@ -1683,6 +1812,7 @@ async function saveAutonomy() {
     minScore: num('autoMinScore'), flexScore: num('autoFlexScore'), minConfidence: num('autoMinConf'),
     minSolPerTrade: num('autoMinSol'), maxSolPerTrade: num('autoMaxSol'),
     maxOpenPositions: num('autoMaxPos'), maxDailyLossSol: num('autoMaxLoss'),
+    minTokenAgeHours: num('autoMinAge'), earlyScan: document.getElementById('autoEarly').checked,
   };
   setSaveState('saving');
   try {
@@ -1769,13 +1899,39 @@ document.querySelectorAll('[data-save]').forEach(el => el.addEventListener('chan
 // ═══════════════════════════════════════════════════════════════════════════
 async function fetchPaper() {
   try {
-    const r = await fetch('/api/paper');
+    const [r, c] = await Promise.all([fetch('/api/paper?id=' + encodeURIComponent(paperId)), fetch('/api/paper/compare')]);
     if (r.ok) renderPaper(await r.json());
+    if (c.ok) renderStrategies((await c.json()).strategies || []);
   } catch {}
+}
+
+function selectPaper(id) {
+  paperId = id;
+  fetchPaper();
+}
+
+function renderStrategies(list) {
+  const tabsHtml = list.map(x => `<button data-id="${esc(x.id)}" class="${x.id === paperId ? 'active' : ''}">${esc(x.label)}</button>`).join('');
+  for (const id of ['paperTabs', 'paperTabsSettings']) {
+    const el = document.getElementById(id);
+    el.innerHTML = tabsHtml;
+    el.querySelectorAll('button').forEach(b => b.onclick = () => selectPaper(b.dataset.id));
+  }
+  const played = list.filter(x => x.trades > 0);
+  const best = played.length ? played.reduce((a, b) => b.totalPnlPct > a.totalPnlPct ? b : a).id : null;
+  document.getElementById('stratList').innerHTML = list.map(x => `
+    <div class="strat ${x.id === paperId ? 'sel' : ''}" onclick="selectPaper('${esc(x.id)}')">
+      <div><div class="strat-name">${esc(x.label)}${x.id === best ? '<span class="tag up">en tête</span>' : ''}</div><div class="strat-desc">${esc(x.desc || '')}</div></div>
+      <div class="strat-cfg"><span class="tag">score ≥ ${x.config.minScore}</span><span class="tag down">SL −${x.config.slPct}%</span><span class="tag up">TP +${x.config.tpPct}%</span><span class="tag">trailing ${x.config.trailingActivation}/${x.config.trailingDistance}%</span></div>
+      <div class="strat-v"><b class="${tone(x.totalPnlPct)}">${fPct(x.totalPnlPct)}</b><span>portefeuille</span></div>
+      <div class="strat-v"><b>${x.winRate != null ? x.winRate + '%' : '—'}</b><span>win rate</span></div>
+      <div class="strat-v hide-sm"><b>${x.trades}</b><span>trades</span></div>
+    </div>`).join('');
 }
 
 function renderPaper(d) {
   const { stats, config, positions, history, timeline, dailyPnl } = d;
+  if (d.strategy) setText('ppStratName', 'Stratégie « ' + d.strategy.label + ' »');
   const [i, dec] = splitAmount(stats.portfolioValue, 4);
   document.getElementById('ppPortfolio').innerHTML = `${esc(i)}<span class="dec">${esc(dec)}</span><span class="unit">SOL</span>`;
   setText('ppPortfolioSub', config.startingBalance + ' SOL de départ');
@@ -1861,7 +2017,7 @@ async function savePaperConfig() {
   const num = id => parseFloat(document.getElementById(id).value);
   setSaveState('saving');
   try {
-    const r = await fetch('/api/paper/config', {
+    const r = await fetch('/api/paper/config?id=' + encodeURIComponent(paperId), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ minScore: num('cfgMinScore'), slPct: num('cfgSl'), tpPct: num('cfgTp'), maxPositionPct: num('cfgPosPct'), maxPositions: num('cfgMaxPos'), trailingActivation: num('cfgTrailAct'), trailingDistance: num('cfgTrailDist') }),
     });
@@ -1873,9 +2029,9 @@ async function savePaperConfig() {
 
 async function resetPaper() {
   const bal = parseFloat(document.getElementById('cfgResetBal').value) || 10;
-  if (!confirm(`Réinitialiser le portefeuille simulé à ${bal} SOL ?\nPositions et historique simulés seront effacés.`)) return;
+  if (!confirm(`Réinitialiser la stratégie paper sélectionnée à ${bal} SOL ?\nPositions et historique simulés seront effacés.`)) return;
   try {
-    await fetch('/api/paper/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ balance: bal }) });
+    await fetch('/api/paper/reset?id=' + encodeURIComponent(paperId), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ balance: bal }) });
     toast('Paper trading réinitialisé à ' + bal + ' SOL');
     fetchPaper();
   } catch { toast('Erreur réseau', 'err'); }
@@ -1883,7 +2039,7 @@ async function resetPaper() {
 
 async function paperSell(address, btn) {
   btn.disabled = true;
-  try { await fetch('/api/paper/sell/' + encodeURIComponent(address), { method: 'POST' }); toast('Position simulée vendue'); fetchPaper(); }
+  try { await fetch('/api/paper/sell/' + encodeURIComponent(address) + '?id=' + encodeURIComponent(paperId), { method: 'POST' }); toast('Position simulée vendue'); fetchPaper(); }
   catch { btn.disabled = false; toast('Erreur réseau', 'err'); }
 }
 
@@ -1897,7 +2053,7 @@ async function manualBuyPaper() {
   btn.disabled = true;
   msg.textContent = 'Récupération du prix…'; msg.className = 'form-msg muted';
   try {
-    const r = await fetch('/api/paper/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, amountSol }) });
+    const r = await fetch('/api/paper/buy?id=' + encodeURIComponent(paperId), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, amountSol }) });
     const d = await r.json();
     if (d.ok) {
       msg.textContent = 'Position ouverte' + (d.position.entryMcap ? ' à MC ' + fMcap(d.position.entryMcap) : '');
@@ -1963,6 +2119,7 @@ function verdictCard(debate, pair) {
       ${d.confidence != null ? `<span class="tag acc">confiance ${d.confidence}/10</span>` : ''}
       ${d.decision === 'BUY' && d.stopLossPct ? `<span class="tag down">SL −${d.stopLossPct}%</span><span class="tag up">TP +${d.takeProfitPct}%</span>` : ''}
     </div>
+    ${d.quantScore != null ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><span class="tag">chiffres GMGN ${d.quantScore}/100</span><span class="tag">${d.llmSkipped ? 'IA non lancée (pré-score trop bas)' : 'IA ' + d.llmScore + '/100'}</span></div>` : ''}
     ${d.reasoning ? `<div class="verdict-reason">${esc(d.reasoning)}</div>` : ''}
     ${pair._gmgn ? `<div class="kpis">
       ${kpi(g.smartDegen ?? '—', 'Smart money')}${kpi(g.renowned ?? '—', 'KOL')}${kpi(pct(g.buyRatio), 'Ratio achat')}

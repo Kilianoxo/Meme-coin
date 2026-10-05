@@ -35,19 +35,21 @@ async function main() {
     console.warn('[Main] ⚠️  WALLET_PRIVATE_KEY non défini — trading désactivé, alertes seules.');
   }
 
-  const scanner     = new Scanner();
-  const paperTrader = new PaperTrader();
-  const bot         = new Bot(trader, scanner);
+  const scanner = new Scanner();
+  const bot     = new Bot(trader, scanner);
+  // Plusieurs stratégies paper en parallèle sur les mêmes analyses (comparatif)
+  const papers  = PaperTrader.STRATEGIES.map(s => ({ id: s.id, label: s.label, trader: new PaperTrader(s) }));
 
   bot.start();
   scanner.start();
-  new Dashboard(trader, paperTrader).start();
+  new Dashboard(trader, papers).start();
 
-  // Branche les résultats de débat vers le paper trader
   scanner.on('debate', (debate) => {
-    paperTrader.onDebateResult(debate).catch((err) =>
-      console.error('[PaperTrader] Erreur onDebateResult:', err.message)
-    );
+    for (const p of papers) {
+      p.trader.onDebateResult(debate).catch((err) =>
+        console.error(`[Paper:${p.id}] Erreur onDebateResult:`, err.message)
+      );
+    }
   });
 
   const watchdog = new Watchdog(scanner, (msg) => bot._send(msg, { parse_mode: 'HTML' }));
@@ -55,6 +57,7 @@ async function main() {
 
   // ARIA — donne accès au trader pour la surveillance autonome puis démarre le heartbeat
   personalAgent.setTrader(trader);
+  personalAgent.setPaperTraders(papers);
   personalAgent.startHeartbeat();
 
   console.log('✅ Bot opérationnel.');

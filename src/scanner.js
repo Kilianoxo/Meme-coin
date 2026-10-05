@@ -33,8 +33,11 @@ const FILTERS = {
   minVolumeUsd:    parseFloat(process.env.MIN_VOLUME_24H_USD   || '20000'),
   minMarketCapUsd: parseFloat(process.env.MIN_MARKET_CAP_USD   || '30000'),
   maxAgeHours:     parseFloat(process.env.MAX_TOKEN_AGE_HOURS  || '72'),
-  minAgeHours:     parseFloat(process.env.MIN_TOKEN_AGE_HOURS  || '6'),
 };
+// Âge minimum : réglable en direct depuis le dashboard (autonomie ARIA), 1h par défaut.
+// Les tokens de moins de YOUNG_TOKEN_HOURS doivent en plus prouver un minimum de traction.
+const YOUNG_TOKEN_HOURS = 2;
+const minAgeHours = () => personalAgent.getAutonomy().minTokenAgeHours ?? 1;
 
 class Scanner extends EventEmitter {
   constructor() {
@@ -95,8 +98,14 @@ class Scanner extends EventEmitter {
 
     if (pair.pairCreatedAt) {
       const ageHours = (Date.now() - pair.pairCreatedAt) / 3_600_000;
-      if (ageHours < FILTERS.minAgeHours) {
-        console.log(`[Scanner] ⛔ ${symbol} trop récent: ${ageHours.toFixed(1)}h < ${FILTERS.minAgeHours}h`);
+      if (ageHours < minAgeHours()) {
+        console.log(`[Scanner] ⛔ ${symbol} trop récent: ${ageHours.toFixed(1)}h < ${minAgeHours()}h`);
+        return false;
+      }
+      // Garde-fou jeunes tokens : au moins 100 holders et 2 wallets smart money / KOL
+      const g = pair._gmgn;
+      if (ageHours < YOUNG_TOKEN_HOURS && g && (g.holderCount < 100 || g.confluence < 2)) {
+        console.log(`[Scanner] ⛔ ${symbol} jeune (${ageHours.toFixed(1)}h) sans traction: ${g.holderCount} holders, ${g.confluence} smart/KOL`);
         return false;
       }
     }
@@ -142,10 +151,17 @@ class Scanner extends EventEmitter {
 
     let rows = [];
     try {
-      rows = await gmgn.getTrending();
+      rows = await gmgn.getTrending('1h');
     } catch (err) {
       console.error(`[Scanner] Erreur GMGN trending:`, err.message);
       return;
+    }
+    // Source "early" : classement 5 min → repère les tokens qui démarrent avant
+    // qu'ils dominent le classement 1h (où on arrive souvent après le pump)
+    if (personalAgent.getAutonomy().earlyScan) {
+      const known = new Set(rows.map(r => r.baseToken?.address));
+      const early = await gmgn.getTrending('5m').catch(() => []);
+      rows = rows.concat(early.filter(r => !known.has(r.baseToken?.address)));
     }
 
     const candidates = [];
@@ -235,7 +251,7 @@ class Scanner extends EventEmitter {
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log(`[Scanner] Démarré — source GMGN | filtres: liq>${FILTERS.minLiquidityUsd}$, vol>${FILTERS.minVolumeUsd}$, mcap>${FILTERS.minMarketCapUsd}$, âge min ${FILTERS.minAgeHours}h`);
+    console.log(`[Scanner] Démarré — source GMGN${personalAgent.getAutonomy().earlyScan ? ' (1h + early 5m)' : ''} | filtres: liq>${FILTERS.minLiquidityUsd}$, vol>${FILTERS.minVolumeUsd}$, mcap>${FILTERS.minMarketCapUsd}$, âge min ${minAgeHours()}h`);
     this.scan();
     this._interval = setInterval(() => this.scan(), SCAN_INTERVAL_MS);
   }

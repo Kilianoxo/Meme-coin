@@ -15,7 +15,6 @@
  */
 
 const http  = require('http');
-const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 const url   = require('url');
@@ -25,15 +24,20 @@ const agentMemory   = require('./agentMemory');
 const personalAgent = require('./personalAgent');
 const { agentBus } = require('./agents');
 const gmgn          = require('./gmgn');
+const prices        = require('./prices');
 
 const PUBLIC_DIR   = path.join(__dirname, 'public');
 const WSOL_MINT    = 'So11111111111111111111111111111111111111112';
 const MAX_CHAT_LOG = 120; // messages conservés en mémoire vive
 
 class Dashboard {
-  constructor(trader, paperTrader, opts = {}) {
-    this.trader      = trader;
-    this.paperTrader = paperTrader;
+  /**
+   * @param {Trader} trader
+   * @param {Array<{id, label, trader: PaperTrader}>|PaperTrader} papers — stratégies paper comparées
+   */
+  constructor(trader, papers, opts = {}) {
+    this.trader = trader;
+    this.papers = Array.isArray(papers) ? papers : papers ? [{ id: 'main', label: 'Actuelle', trader: papers }] : [];
     this.port       = parseInt(process.env.DASHBOARD_PORT || '3000', 10);
     this.server     = http.createServer((req, res) => this._handle(req, res));
 
@@ -91,8 +95,9 @@ class Dashboard {
   // ─── Routing ──────────────────────────────────────────────────────────────
 
   _handle(req, res) {
-    const parsed   = url.parse(req.url);
+    const parsed   = url.parse(req.url, true);
     const pathname = parsed.pathname;
+    const paperId  = parsed.query?.id;
 
     // ── CORS preflight ───────────────────────────────────────────────────────
 
@@ -136,28 +141,38 @@ class Dashboard {
     }
 
     if (pathname === '/api/paper' && req.method === 'GET') {
-      this._apiPaper(res);
+      this._apiPaper(res, paperId);
+      return;
+    }
+
+    if (pathname === '/api/paper/compare' && req.method === 'GET') {
+      this._apiPaperCompare(res);
       return;
     }
 
     if (pathname === '/api/paper/reset' && req.method === 'POST') {
-      this._apiPaperReset(req, res);
+      this._apiPaperReset(req, res, paperId);
       return;
     }
 
     if (pathname === '/api/paper/config' && req.method === 'POST') {
-      this._apiPaperConfig(req, res);
+      this._apiPaperConfig(req, res, paperId);
       return;
     }
 
     const paperSellMatch = pathname.match(/^\/api\/paper\/sell\/([^/]+)$/);
     if (paperSellMatch && req.method === 'POST') {
-      this._apiPaperSell(res, paperSellMatch[1]);
+      this._apiPaperSell(res, decodeURIComponent(paperSellMatch[1]), paperId);
       return;
     }
 
     if (pathname === '/api/paper/buy' && req.method === 'POST') {
-      this._apiPaperBuy(req, res);
+      this._apiPaperBuy(req, res, paperId);
+      return;
+    }
+
+    if (pathname === '/api/performance' && req.method === 'GET') {
+      this._jsonOk(res, personalAgent.performanceReport());
       return;
     }
 
@@ -405,6 +420,7 @@ class Dashboard {
       updatedAt:       Date.now(),
       walletBalance:   walletBalance !== null ? parseFloat(walletBalance.toFixed(6)) : null,
       walletAddress:   this.trader.walletAddress || null,
+      performance:     personalAgent.performanceReport(),
       solPriceUsd:     prices[WSOL_MINT] ?? null,
       walletTokens:    enrichedWalletTokens,
       recentAnalyses:  state.recentAnalyses,
@@ -490,14 +506,7 @@ class Dashboard {
   // ─── Prix live Jupiter ────────────────────────────────────────────────────
 
   async _fetchPrices(mints) {
-    const out = {};
-    try {
-      const ids  = mints.join(',');
-      const data = await this._get(`https://lite-api.jup.ag/price/v2?ids=${ids}`);
-      for (const [mint, info] of Object.entries(data?.data ?? {})) {
-        if (info?.price) out[mint] = parseFloat(info.price);
-      }
-    } catch { /* silencieux */ }
+    const out = await prices.getPrices(mints);
 
     // Fallback GMGN (token info, caché 60s) pour les mints inconnus de Jupiter —
     // limité aux 5 premiers pour préserver le quota CLI
@@ -512,25 +521,21 @@ class Dashboard {
     return out;
   }
 
-  _get(targetUrl) {
-    return new Promise((resolve, reject) => {
-      https.get(targetUrl, { headers: { 'User-Agent': 'meme-coin-dashboard/1.0' } }, res => {
-        let raw = '';
-        res.on('data', c => (raw += c));
-        res.on('end', () => { try { resolve(JSON.parse(raw)); } catch (e) { reject(e); } });
-      }).on('error', reject);
-    });
-  }
-
   // ─── API Paper Trading ────────────────────────────────────────────────────
 
-  async _apiPaper(res) {
-    if (!this.paperTrader) {
+  /** Stratégie paper demandée (?id=), la principale par défaut */
+  _paper(id) {
+    return (this.papers.find(p => p.id === id) || this.papers[0])?.trader || null;
+  }
+
+  async _apiPaper(res, id) {
+    const paper = this._paper(id);
+    if (!paper) {
       this._jsonOk(res, { error: 'Paper trader non initialisé' });
       return;
     }
     try {
-      const data      = this.paperTrader.getStats();
+      const data      = paper.getStats();
       const addresses = data.positions.map(p => p.address);
       const prices    = addresses.length > 0 ? await this._fetchPrices(addresses) : {};
 
@@ -547,6 +552,8 @@ class Dashboard {
         return { ...p, currentPrice, pnlPct, pnlSol, currentMcap };
       });
 
+      data.strategy = { id: paper.id, label: paper.label, desc: paper.desc };
+      data.strategies = this.papers.map(p => ({ id: p.id, label: p.label }));
       this._jsonOk(res, data);
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -554,34 +561,50 @@ class Dashboard {
     }
   }
 
-  _apiPaperReset(req, res) {
-    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+  /** Comparatif des stratégies paper (mêmes analyses, règles différentes) */
+  _apiPaperCompare(res) {
+    const rows = this.papers.map(({ id, trader }) => {
+      const { stats, config } = trader.getStats();
+      return {
+        id, label: trader.label, desc: trader.desc,
+        portfolioValue: stats.portfolioValue, totalPnlPct: stats.totalPnlPct, realizedPnl: stats.realizedPnl,
+        winRate: stats.winRate, trades: stats.totalTrades, openPositions: stats.openPositions,
+        config: { minScore: config.minScore, slPct: config.slPct, tpPct: config.tpPct, trailingActivation: config.trailingActivation, trailingDistance: config.trailingDistance },
+      };
+    });
+    this._jsonOk(res, { strategies: rows });
+  }
+
+  _apiPaperReset(req, res, id) {
+    const paper = this._paper(id);
+    if (!paper) { this._jsonOk(res, { ok: false }); return; }
     this._readBody(req, (body) => {
-      const { balance } = body;
-      const ok = this.paperTrader.reset(balance ?? 10);
-      this._jsonOk(res, { ok, config: this.paperTrader.state.config });
+      const ok = paper.reset(body.balance ?? 10);
+      this._jsonOk(res, { ok, config: paper.state.config });
     });
   }
 
-  _apiPaperConfig(req, res) {
-    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
+  _apiPaperConfig(req, res, id) {
+    const paper = this._paper(id);
+    if (!paper) { this._jsonOk(res, { ok: false }); return; }
     this._readBody(req, (body) => {
-      const config = this.paperTrader.updateConfig(body);
+      const config = paper.updateConfig(body);
       this._jsonOk(res, { ok: true, config });
     });
   }
 
-  async _apiPaperSell(res, address) {
-    if (!this.paperTrader) { this._jsonOk(res, { ok: false }); return; }
-    await this.paperTrader.manualSell(address);
+  async _apiPaperSell(res, address, id) {
+    const paper = this._paper(id);
+    if (!paper) { this._jsonOk(res, { ok: false }); return; }
+    await paper.manualSell(address);
     this._jsonOk(res, { ok: true });
   }
 
-  _apiPaperBuy(req, res) {
-    if (!this.paperTrader) { this._jsonOk(res, { ok: false, error: 'Paper trader non initialisé' }); return; }
+  _apiPaperBuy(req, res, id) {
+    const paper = this._paper(id);
+    if (!paper) { this._jsonOk(res, { ok: false, error: 'Paper trader non initialisé' }); return; }
     this._readBody(req, async (body) => {
-      const { address, amountSol } = body;
-      const result = await this.paperTrader.manualBuy(address, amountSol);
+      const result = await paper.manualBuy(body.address, body.amountSol);
       this._jsonOk(res, result);
     });
   }

@@ -30,6 +30,12 @@ const gmgn        = require('./gmgn');
 const agentMemory = require('./agentMemory');
 const tokenHistory = require('./tokenHistory');
 const state       = require('./state');
+const performance = require('./performance');
+
+// Note hybride : part du score quantitatif (déterministe, GMGN) dans la note finale,
+// le reste vient du LLM. Sous QUANT_SKIP_BELOW, le LLM n'est même pas appelé.
+const QUANT_WEIGHT     = Math.max(0, Math.min(1, parseFloat(process.env.QUANT_WEIGHT || '0.6')));
+const QUANT_SKIP_BELOW = parseFloat(process.env.QUANT_SKIP_BELOW || '30');
 
 // ─── Anti prompt-injection (méthodo GMGN) ────────────────────────────────────
 // Les noms de tokens on-chain sont du texte non fiable : certains contiennent
@@ -209,6 +215,8 @@ const DEFAULTS = {
     maxDailyLossSol:  0.5,    // circuit breaker : pause du trading réel si dépassé
     lowCapMaxMcap:    50000,  // micro-cap prioritaire sous ce MC (fondamentaux OK)
     copyTrading:      true,   // réplique les achats des wallets suivis (après analyse + gates)
+    minTokenAgeHours: parseFloat(process.env.MIN_TOKEN_AGE_HOURS || '1'), // âge minimum d'un token pour être analysé
+    earlyScan:        true,   // 2e source : classement GMGN 5 min (tokens qui démarrent)
   },
   traderProfile: {
     style:        'rotation / quick flip sur meme coins GMGN',
@@ -240,6 +248,17 @@ class PersonalAgent {
   setNotifyCallback(fn) { this._notify  = fn; }
   setSSECallback(fn)    { this._pushSSE = fn; }
   setTrader(trader)     { this._trader  = trader; }
+  setPaperTraders(list) { this._papers  = list; } // [{ id, label, trader }]
+
+  /** Résultats par signal / tranche de note — réel + stratégies paper */
+  performanceReport() {
+    const real = performance.summary(performance.closedPositionsFromHistory(this._trader?.history || []));
+    const paper = (this._papers || []).map(p => ({
+      id: p.id, label: p.label,
+      ...performance.summary(performance.closedPositionsFromPaper(p.trader.state.history)),
+    }));
+    return { real, paper };
+  }
 
   get name() { return this.data.name; }
 
@@ -335,6 +354,8 @@ class PersonalAgent {
     const mp = num(patch.maxOpenPositions, 1, 10);   if (mp  != null) a.maxOpenPositions = Math.round(mp);
     const ml = num(patch.maxDailyLossSol, 0.01, 50); if (ml  != null) a.maxDailyLossSol  = ml;
     const lc = num(patch.lowCapMaxMcap, 1000, 1e6);  if (lc  != null) a.lowCapMaxMcap    = Math.round(lc);
+    const ag = num(patch.minTokenAgeHours, 0, 48);   if (ag  != null) a.minTokenAgeHours = ag;
+    if (typeof patch.earlyScan === 'boolean') a.earlyScan = patch.earlyScan;
 
     this._save();
     this.logAction('CONFIG',
@@ -430,62 +451,95 @@ class PersonalAgent {
   }
 
   /**
-   * SIGNAUX FORTS — seuil adaptatif (approuvé par le trader) :
-   * un token s'achète soit au seuil classique, soit dès flexScore (55) si un
-   * signal fort l'accompagne. Retourne { strong, reasons[] }.
+   * Caractéristiques de signal d'un token analysé (synchrone, sans appel API).
+   * Indépendant des seuils d'achat : sert à ÉTIQUETER chaque position (réelle
+   * ou paper) pour mesurer ensuite quels signaux gagnent vraiment.
+   * @returns {{ tags: string[], items: Array<{tag: string, reason: string}> }}
    */
-  async _strongSignal(debate) {
+  classifySignals(debate) {
     const a    = this.data.autonomy;
     const d    = debate?.decision;
     const g    = debate?.token?._gmgn;
     const addr = debate?.token?.baseToken?.address;
+    const items = [];
+    if (!d || !addr) return { tags: [], items };
+
+    if (g && g.buyRatio >= 0.70 && g.smartDegen >= 15) {
+      items.push({ tag: 'smart_money', reason: `smart money massif: ${g.smartDegen} wallets + buy ratio ${(g.buyRatio * 100).toFixed(0)}%` });
+    }
+    if (g && g.renowned >= 2 && g.smartDegen >= 10 && g.sniper >= 10) {
+      items.push({ tag: 'rotation', reason: `rotation coordonnée: ${g.renowned} KOL + ${g.smartDegen} smart + ${g.sniper} snipers` });
+    }
+    const rupture = this._isRupture(addr, d.score);
+    if (rupture) {
+      items.push({ tag: 'rupture', reason: `rupture: score ${rupture.from} → ${rupture.to} en ${rupture.mins} min` });
+    }
+    const mcap = debate.token?.marketCap || 0;
+    const liq  = debate.token?.liquidity?.usd || 0;
+    if (mcap > 0 && mcap <= (a.lowCapMaxMcap ?? 50000) && liq >= 5000) {
+      items.push({ tag: 'micro_cap', reason: `micro-cap $${Math.round(mcap / 1000)}K, liq $${Math.round(liq / 1000)}K, fondamentaux OK` });
+    }
+    const tags = items.map(i => i.tag);
+    if (debate.token?._source === 'gmgn-early') tags.push('early'); // contexte, pas un déclencheur
+    return { tags, items };
+  }
+
+  /** Données d'entrée enregistrées sur la position (pour les stats de performance) */
+  _entryInfo(debate, tags) {
+    const d = debate.decision || {};
+    const g = debate.token?._gmgn;
+    const created = debate.token?.pairCreatedAt;
+    return {
+      signals:    tags.length ? tags : ['score_seul'],
+      score:      d.score ?? null,
+      confidence: d.confidence ?? null,
+      quantScore: d.quantScore ?? null,
+      llmScore:   d.llmScore ?? null,
+      source:     debate.token?._source || null,
+      mcap:       debate.token?.marketCap || null,
+      ageHours:   created ? parseFloat(((Date.now() - created) / 3_600_000).toFixed(1)) : null,
+      gmgn: g ? { smart: g.smartDegen, kol: g.renowned, snipers: g.sniper, buyRatio: g.buyRatio, bundler: g.bundler, top10: g.top10, chg1h: g.chg1h, chg5m: g.chg5m } : null,
+    };
+  }
+
+  /**
+   * SIGNAUX FORTS — seuil adaptatif (approuvé par le trader) :
+   * un token s'achète soit au seuil classique, soit dès flexScore (55) si un
+   * signal fort l'accompagne. Retourne { strong, reasons[], tags[] }.
+   */
+  async _strongSignal(debate) {
+    const a    = this.data.autonomy;
+    const d    = debate?.decision;
+    const addr = debate?.token?.baseToken?.address;
     const reasons = [];
-    if (!d || !addr) return { strong: false, reasons };
-    if (!['BUY', 'WATCH'].includes(d.decision)) return { strong: false, reasons };
-    if ((d.confidence ?? 0) < 4) return { strong: false, reasons }; // plancher anti-bruit
+    if (!d || !addr) return { strong: false, reasons, tags: [] };
+    if (!['BUY', 'WATCH'].includes(d.decision)) return { strong: false, reasons, tags: [] };
+    if ((d.confidence ?? 0) < 4) return { strong: false, reasons, tags: [] }; // plancher anti-bruit
 
     const flex = a.flexScore ?? 55;
+    const { tags, items } = this.classifySignals(debate);
+
+    // Flux smart money LIVE (track, cache 60s) — seul signal qui demande un appel API
+    if (d.score >= flex) {
+      try {
+        const flow = await gmgn.getSmartMoneyForToken(addr);
+        if (flow && flow.buys >= 3 && flow.buys > flow.sells * 2) {
+          tags.push('live_flow');
+          items.push({ tag: 'live_flow', reason: `flux live: ${flow.buys} achats smart money vs ${flow.sells} ventes (${flow.wallets} wallets)` });
+        }
+      } catch { /* best effort */ }
+    }
 
     // 1. Seuil classique
     if (d.decision === 'BUY' && d.score >= a.minScore && d.confidence >= a.minConfidence) {
       reasons.push(`score ${d.score}/100 ≥ seuil ${a.minScore}`);
     }
-
-    if (d.score >= flex && g) {
-      // 2. Smart money massif + buy ratio > 70%
-      if (g.buyRatio >= 0.70 && g.smartDegen >= 15) {
-        reasons.push(`smart money massif: ${g.smartDegen} wallets + buy ratio ${(g.buyRatio * 100).toFixed(0)}%`);
-      }
-      // 3. Rotation coordonnée : KOL + smart money + snipers ensemble
-      if (g.renowned >= 2 && g.smartDegen >= 10 && g.sniper >= 10) {
-        reasons.push(`rotation coordonnée: ${g.renowned} KOL + ${g.smartDegen} smart + ${g.sniper} snipers`);
-      }
+    // 2. Signaux forts — suffisent dès flexScore (micro-cap saine dès 50)
+    for (const it of items) {
+      if (d.score >= (it.tag === 'micro_cap' ? 50 : flex)) reasons.push(it.reason);
     }
 
-    // 4. Flux smart money LIVE (track, cache 60s)
-    if (d.score >= flex) {
-      try {
-        const flow = await gmgn.getSmartMoneyForToken(addr);
-        if (flow && flow.buys >= 3 && flow.buys > flow.sells * 2) {
-          reasons.push(`flux live: ${flow.buys} achats smart money vs ${flow.sells} ventes (${flow.wallets} wallets)`);
-        }
-      } catch { /* best effort */ }
-    }
-
-    // 5. Rupture de pattern (score qui bondit)
-    const rupture = this._isRupture(addr, d.score);
-    if (rupture) {
-      reasons.push(`rupture: score ${rupture.from} → ${rupture.to} en ${rupture.mins} min`);
-    }
-
-    // 6. Micro-cap avec fondamentaux corrects (gates GMGN déjà passés)
-    const mcap = debate.token?.marketCap || 0;
-    const liq  = debate.token?.liquidity?.usd || 0;
-    if (d.score >= 50 && mcap > 0 && mcap <= (a.lowCapMaxMcap ?? 50000) && liq >= 5000) {
-      reasons.push(`micro-cap $${Math.round(mcap / 1000)}K, liq $${Math.round(liq / 1000)}K, fondamentaux OK`);
-    }
-
-    return { strong: reasons.length > 0, reasons };
+    return { strong: reasons.length > 0, reasons, tags };
   }
 
   /**
@@ -564,7 +618,7 @@ class PersonalAgent {
       return { executed: false, strongSignal: false, reasons: [], reason: 'non éligible' };
     }
 
-    const { strong, reasons } = await this._strongSignal(debate);
+    const { strong, reasons, tags } = await this._strongSignal(debate);
     if (!strong) {
       return { executed: false, strongSignal: false, reasons, reason: `aucun signal fort (score ${d.score}, conf ${d.confidence})` };
     }
@@ -572,7 +626,7 @@ class PersonalAgent {
     // Signal fort détecté → journal systématique
     this.logAction('SIGNAL', `Signal FORT $${sym} — ${reasons.join(' | ')}`, { symbol: sym, address: addr });
 
-    const exec = await this._execAutoBuy(debate, reasons);
+    const exec = await this._execAutoBuy(debate, reasons, { tags });
     return { ...exec, strongSignal: true, reasons };
   }
 
@@ -581,7 +635,7 @@ class PersonalAgent {
    * applique TOUS les garde-fous puis achète avec sizing par confiance
    * (× risk adaptatif) et SL/TP dynamiques.
    */
-  async _execAutoBuy(debate, reasons, { notifyPriority = 'normal' } = {}) {
+  async _execAutoBuy(debate, reasons, { notifyPriority = 'normal', tags = [] } = {}) {
     const a    = this.data.autonomy;
     const d    = debate.decision;
     const addr = debate.token?.baseToken?.address;
@@ -621,6 +675,7 @@ class PersonalAgent {
         stopLossPct:   sl,
         takeProfitPct: tp,
         symbol:        debate.token?.baseToken?.symbol || null,
+        entry:         this._entryInfo(debate, tags),
       });
       this.logAction('BUY',
         `Achat auto $${sym} — ${solAmt} SOL [${reasons[0]}] SL -${sl}% TP +${tp}%`,
@@ -644,6 +699,23 @@ class PersonalAgent {
    * Construit le contexte live à injecter dans le system prompt.
    * Toujours appelé avec les données les plus fraîches disponibles.
    */
+  /** Lignes courtes "signal → résultat" pour le prompt (signaux avec ≥ 3 positions) */
+  _perfLines() {
+    let report;
+    try { report = this.performanceReport(); } catch { return []; }
+    const fmt = (r) => `${r.label} : ${r.trades} pos., ${r.winRate}% gagnantes, ${r.pnlSol >= 0 ? '+' : ''}${r.pnlSol} SOL`;
+    const out = [];
+    const real = report.real.bySignal.filter(r => r.trades >= 3);
+    if (real.length) out.push('RÉEL — ' + real.map(fmt).join(' ; '));
+    for (const p of report.paper) {
+      const rows = p.bySignal.filter(r => r.trades >= 3);
+      if (rows.length) out.push(`PAPER ${p.label} — ` + rows.map(fmt).join(' ; '));
+    }
+    const buckets = report.real.byScore.filter(b => b.trades >= 3);
+    if (buckets.length) out.push('Par note (réel) — ' + buckets.map(b => `${b.bucket} : ${b.winRate}% (${b.trades})`).join(', '));
+    return out;
+  }
+
   _buildContext(extra = {}) {
     const history   = this._trader?.history || [];
     const sells     = history.filter(h => h.action === 'SELL' && h.pnlSol != null);
@@ -732,6 +804,15 @@ class PersonalAgent {
       lines.push(`À ne pas oublier : ${tp.notes.join(' / ')}`);
     }
     lines.push(`Adapte tes décisions à SON profil (aggressivité, targets, patience).`);
+    lines.push(``);
+
+    // ── Ce qui marche vraiment (mesuré sur les positions fermées) ──
+    const perf = this._perfLines();
+    if (perf.length > 0) {
+      lines.push(`=== CE QUI MARCHE (positions fermées, mesuré — pas une intuition) ===`);
+      for (const l of perf) lines.push(`  · ${l}`);
+      lines.push(`Appuie-toi dessus : méfie-toi des signaux à win rate faible, privilégie ceux qui gagnent.`);
+    }
     lines.push(``);
 
     // ── Portefeuille ──
@@ -990,6 +1071,24 @@ class PersonalAgent {
 
     // Données on-chain GMGN (smart money, KOL, bundlers…) si le token vient de cette source
     const g = token._gmgn;
+
+    // Pré-score quantitatif : stable et gratuit. Trop bas → pas besoin du LLM.
+    const quant = g ? gmgn.quantScore(g, token) : null;
+    if (quant && quant.score < QUANT_SKIP_BELOW) {
+      const weakest = Object.entries(quant.parts).sort((x, y) => x[1] - y[1]).slice(0, 2).map(([k, v]) => `${k} ${v}`).join(', ');
+      this.data.stats.tradesAnalyzed++;
+      this._save();
+      return this._buildDebate(token, security, rugReport, overview, lpLock, {
+        decision: 'SKIP', score: quant.score, confidence: 7,
+        reasoning: `Pré-score quantitatif ${quant.score}/100 trop faible (points faibles : ${weakest}) — analyse IA non lancée.`,
+        suggestedAmountPct: 0, stopLossPct: 20, takeProfitPct: 50,
+        quantScore: quant.score, quantParts: quant.parts, llmScore: null, llmSkipped: true,
+      });
+    }
+    const quantLine = quant
+      ? `PRÉ-SCORE QUANTITATIF (calculé sur les données GMGN, déterministe) : ${quant.score}/100 — consensus ${quant.parts.consensus}/25, pression acheteuse ${quant.parts.pression}/20, momentum ${quant.parts.momentum}/20, liquidité ${quant.parts.liquidite}/15, distribution ${quant.parts.holders}/20. ` +
+        `Ta note juge ce que ces chiffres ne voient pas (narratif, récidive, contexte de marché, cohérence d'ensemble). Ne le contredis fortement qu'avec une raison précise.`
+      : '';
     const gmgnLines = g ? [
       `GMGN on-chain: ${g.smartDegen} smart money + ${g.renowned} KOL achètent | ${g.sniper} snipers | buy ratio ${(g.buyRatio * 100).toFixed(0)}% | 5m ${g.chg5m >= 0 ? '+' : ''}${(g.chg5m * 100).toFixed(1)}%`,
       `GMGN risque: bundlers ${(g.bundler * 100).toFixed(0)}% | dev ${(g.devHold * 100).toFixed(0)}% | top10 ${(g.top10 * 100).toFixed(0)}% | taxes ${(g.buyTax * 100).toFixed(0)}%/${(g.sellTax * 100).toFixed(0)}% | rug ratio ${(g.rugRatio * 100).toFixed(0)}%`,
@@ -1037,6 +1136,7 @@ class PersonalAgent {
       pastLine,
       ...gmgnLines,
       smartFlowLine,
+      quantLine,
       ``,
       profLine,
       `Ton profil: risque ${pers.riskTolerance.toFixed(1)}/10, style ${pers.tradingStyle}${winRate != null ? `, win rate actuel ${winRate}%` : ''}.`,
@@ -1063,6 +1163,15 @@ class PersonalAgent {
         stopLossPct:        clamp(json.stopLossPct, 10, 50)   ?? 20,
         takeProfitPct:      clamp(json.takeProfitPct, 20, 200) ?? 50,
       };
+      decision.llmScore = decision.score;
+      if (quant) {
+        // Note finale = mélange chiffres / IA. La DÉCISION reste celle de l'IA (droit de veto),
+        // sauf un BUY dont la note finale tombe sous 55 → rétrogradé en WATCH.
+        decision.score      = Math.round(QUANT_WEIGHT * quant.score + (1 - QUANT_WEIGHT) * decision.llmScore);
+        decision.quantScore = quant.score;
+        decision.quantParts = quant.parts;
+        if (decision.decision === 'BUY' && decision.score < 55) decision.decision = 'WATCH';
+      }
       this.data.stats.tradesAnalyzed++;
       this._save();
       return this._buildDebate(token, security, rugReport, overview, lpLock, decision);
@@ -1435,6 +1544,7 @@ class PersonalAgent {
             piresTokens:     ranked.slice(-3).reverse().filter(t => t.pnlSol < 0),
             sortiesParRaison: parRaison,
             riskAdaptatif:  this._riskMultiplier() < 1 ? `actif — tailles ×${this._riskMultiplier()}` : 'inactif (forme OK)',
+            ceQuiMarche:    this._perfLines().join(' | ') || 'pas encore assez de positions fermées étiquetées',
           };
         }
 
@@ -1895,7 +2005,10 @@ class PersonalAgent {
     }
 
     const reasons = [`copy-trade: wallet ${walletLabel} vient d'acheter (mon analyse: ${d.decision} ${d.score}/100)`];
-    const exec = await this._execAutoBuy(debate, reasons, { notifyPriority: 'high' });
+    const exec = await this._execAutoBuy(debate, reasons, {
+      notifyPriority: 'high',
+      tags: ['copy_trade', ...this.classifySignals(debate).tags],
+    });
     if (!exec.executed && exec.reason && !exec.reason.startsWith('trading réel')) {
       this.logAction('SIGNAL', `Copy-trade $${sym} non exécuté — ${exec.reason}`, { symbol: sym });
     } else if (!exec.executed && exec.reason?.startsWith('trading réel')) {

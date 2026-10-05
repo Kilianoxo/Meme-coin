@@ -13,14 +13,39 @@ const fs           = require('fs');
 const path         = require('path');
 const gmgn         = require('./gmgn');
 
-const DATA_FILE = path.join(__dirname, '../data/paper_positions.json');
+const prices       = require('./prices');
+
+const MONITOR_MS = Math.max(3, parseFloat(process.env.POSITION_CHECK_SECONDS || '10')) * 1000;
+
+/**
+ * Stratégies comparées en parallèle : elles reçoivent EXACTEMENT les mêmes
+ * analyses, seules leurs règles d'entrée/sortie diffèrent → on voit laquelle
+ * gagne sur les mêmes tokens au lieu de deviner.
+ */
+const STRATEGIES = [
+  { id: 'main',   label: 'Actuelle',      desc: 'Tes réglages paper',                file: 'paper_positions.json', preset: {} },
+  { id: 'strict', label: 'Sélective',     desc: 'Score ≥ 72, stops serrés',          file: 'paper_strict.json',
+    preset: { minScore: 72, slPct: 12, tpPct: 60, trailingActivation: 20, trailingDistance: 8 } },
+  { id: 'runner', label: 'Laisse courir', desc: 'Stops larges, gros objectifs',      file: 'paper_runner.json',
+    preset: { minScore: 58, slPct: 25, tpPct: 150, trailingActivation: 40, trailingDistance: 18 } },
+];
 
 class PaperTrader extends EventEmitter {
-  constructor() {
+  /** @param {{ id?: string, label?: string, desc?: string, file?: string, preset?: Object }} [opts] */
+  constructor(opts = {}) {
     super();
-    this.state = this._loadState();
-    // Monitor toutes les 30s comme le vrai trader
-    this._monitorInterval = setInterval(() => this._monitorPositions(), 30_000);
+    this.id     = opts.id    || 'main';
+    this.label  = opts.label || 'Actuelle';
+    this.desc   = opts.desc  || '';
+    this.preset = opts.preset || {};
+    this.file   = path.join(__dirname, '../data', opts.file || 'paper_positions.json');
+    this.state  = this._loadState();
+    this._monitorInterval = setInterval(() => {
+      if (this._busy) return;
+      this._busy = true;
+      this._monitorPositions().catch(err => console.error(`[Paper:${this.id}] moniteur:`, err.message))
+        .finally(() => { this._busy = false; });
+    }, MONITOR_MS);
   }
 
   // ─── State & persistance ──────────────────────────────────────────────────
@@ -37,6 +62,7 @@ class PaperTrader extends EventEmitter {
         maxPositions:        5,   // Positions simultanées max
         trailingActivation: 20,   // % de gain pour activer le trailing stop
         trailingDistance:   10,   // % de recul depuis le plus haut pour déclencher
+        ...this.preset,
       },
       positions: {},  // { [address]: Position }
       history:   [],  // Position[] fermées, la plus récente en premier
@@ -45,32 +71,22 @@ class PaperTrader extends EventEmitter {
 
   _loadState() {
     try {
-      if (fs.existsSync(DATA_FILE)) {
-        return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      if (fs.existsSync(this.file)) {
+        return JSON.parse(fs.readFileSync(this.file, 'utf8'));
       }
     } catch {}
     return this._defaultState();
   }
 
   _save() {
-    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(this.state, null, 2));
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    fs.writeFileSync(this.file, JSON.stringify(this.state, null, 2));
   }
 
   // ─── Prix Jupiter (lecture seule, pas de swap) ────────────────────────────
 
   async _fetchPrice(address) {
-    try {
-      const res = await fetch(`https://lite-api.jup.ag/price/v2?ids=${address}`, {
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (!res.ok) return null;
-      const json  = await res.json();
-      const price = json?.data?.[address]?.price;
-      return price != null ? parseFloat(price) : null;
-    } catch {
-      return null;
-    }
+    return prices.getPrice(address);
   }
 
   /** Fallback GMGN (token info, caché 60s) si Jupiter ne connaît pas le token */
@@ -106,24 +122,24 @@ class PaperTrader extends EventEmitter {
 
     if (!address || score == null) return;
     if (score < this.state.config.minScore) {
-      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — score ${score} < minScore ${this.state.config.minScore}`);
+      console.log(`[Paper:${this.id}] ⏭️  $${symbol} ignoré — score ${score} < minScore ${this.state.config.minScore}`);
       return;
     }
     // Bear critique (≥8/10) = rug/pump-and-dump quasi-certain, inutile même en simulation
     if (bear?.riskScore >= 8) {
-      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — Bear critique (${bear.riskScore}/10)`);
+      console.log(`[Paper:${this.id}] ⏭️  $${symbol} ignoré — Bear critique (${bear.riskScore}/10)`);
       return;
     }
     if (this.state.positions[address]) return;       // déjà en portefeuille
     if (Object.keys(this.state.positions).length >= this.state.config.maxPositions) {
-      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — max positions atteint (${this.state.config.maxPositions})`);
+      console.log(`[Paper:${this.id}] ⏭️  $${symbol} ignoré — max positions atteint (${this.state.config.maxPositions})`);
       return;
     }
 
     const { config } = this.state;
     const amountSol = (config.currentBalance * config.maxPositionPct) / 100;
     if (amountSol < 0.001 || amountSol > config.currentBalance) {
-      console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — solde insuffisant (${config.currentBalance.toFixed(4)} ◎)`);
+      console.log(`[Paper:${this.id}] ⏭️  $${symbol} ignoré — solde insuffisant (${config.currentBalance.toFixed(4)} ◎)`);
       return;
     }
 
@@ -133,9 +149,9 @@ class PaperTrader extends EventEmitter {
       const dexPrice = token.priceUsd ? parseFloat(token.priceUsd) : null;
       if (dexPrice && dexPrice > 0) {
         price = dexPrice;
-        console.log(`[PaperTrader] ⚠️  $${symbol} — Jupiter sans prix, fallback prix GMGN @ ${dexPrice}`);
+        console.log(`[Paper:${this.id}] ⚠️  $${symbol} — Jupiter sans prix, fallback prix GMGN @ ${dexPrice}`);
       } else {
-        console.log(`[PaperTrader] ⏭️  $${symbol} ignoré — prix introuvable (Jupiter + GMGN)`);
+        console.log(`[Paper:${this.id}] ⏭️  $${symbol} ignoré — prix introuvable (Jupiter + GMGN)`);
         return;
       }
     }
@@ -148,8 +164,16 @@ class PaperTrader extends EventEmitter {
     const mcapRef  = token.marketCap || token.fdv || 0;
     const supply   = mcapRef > 0 && refPrice > 0 ? mcapRef / refPrice : null;
 
+    // Signaux d'entrée (mêmes étiquettes que le réel) → stats "ce qui marche"
+    let signals = ['score_seul'];
+    try {
+      const tags = require('./personalAgent').classifySignals(debate).tags;
+      if (tags.length) signals = tags;
+    } catch { /* best effort */ }
+
     config.currentBalance -= amountSol;
     this.state.positions[address] = {
+      entry: { signals, quantScore: decision.quantScore ?? null, llmScore: decision.llmScore ?? null, source: token._source || null },
       symbol,
       name:        token.baseToken?.name || '',
       address,
@@ -172,7 +196,7 @@ class PaperTrader extends EventEmitter {
     };
 
     this._save();
-    console.log(`[PaperTrader] 📝 BUY $${symbol} @ ${price.toExponential(3)} — ${amountSol.toFixed(3)} ◎ (score ${score})`);
+    console.log(`[Paper:${this.id}] 📝 BUY $${symbol} @ ${price.toExponential(3)} — ${amountSol.toFixed(3)} ◎ (score ${score})`);
     this.emit('buy', this.state.positions[address]);
   }
 
@@ -199,7 +223,7 @@ class PaperTrader extends EventEmitter {
     this._save();
 
     const icon = pnlSol > 0 ? '✅' : '❌';
-    console.log(`[PaperTrader] ${icon} SELL $${pos.symbol} — ${reason} — PnL: ${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} ◎ (${pnlPct.toFixed(1)}%)`);
+    console.log(`[Paper:${this.id}] ${icon} SELL $${pos.symbol} — ${reason} — PnL: ${pnlSol >= 0 ? '+' : ''}${pnlSol.toFixed(4)} ◎ (${pnlPct.toFixed(1)}%)`);
     this.emit('sell', record);
   }
 
@@ -256,6 +280,7 @@ class PaperTrader extends EventEmitter {
       slPct:       config.slPct,
       tpPct:       config.tpPct,
       score:       null,    // pas de débat IA — entrée manuelle
+      entry:       { signals: ['manuel'] },
       entryTime:   Date.now(),
       reason:      `Entrée manuelle via dashboard (prix: ${source})`,
       isGraduated: false,
@@ -263,7 +288,7 @@ class PaperTrader extends EventEmitter {
     };
 
     this._save();
-    console.log(`[PaperTrader] 📝 BUY MANUEL ${address.slice(0, 8)}… @ ${price.toExponential(3)} [${source}] — ${amount.toFixed(3)} ◎`);
+    console.log(`[Paper:${this.id}] 📝 BUY MANUEL ${address.slice(0, 8)}… @ ${price.toExponential(3)} [${source}] — ${amount.toFixed(3)} ◎`);
     this.emit('buy', this.state.positions[address]);
     return { ok: true, position: this.state.positions[address] };
   }
@@ -276,10 +301,12 @@ class PaperTrader extends EventEmitter {
   // ─── Surveillance SL / TP / Trailing ─────────────────────────────────────
 
   async _monitorPositions() {
+    const addrs = Object.keys(this.state.positions);
+    if (addrs.length === 0) return;
+    const live = await prices.getPrices(addrs);
     for (const [address, pos] of Object.entries(this.state.positions)) {
-      const fetched = await this._fetchPriceWithFallback(address);
-      if (!fetched) continue;
-      const price = fetched.price;
+      const price = live[address] ?? (await this._fetchPriceWithFallback(address))?.price;
+      if (!price) continue;
 
       // Met à jour le plus haut
       if (price > pos.highPrice) {
@@ -326,7 +353,7 @@ class PaperTrader extends EventEmitter {
     this.state.config.startingBalance = bal;
     this.state.config.currentBalance  = bal;
     this._save();
-    console.log(`[PaperTrader] 🔄 Reset — nouveau portefeuille: ${bal} ◎`);
+    console.log(`[Paper:${this.id}] 🔄 Reset — nouveau portefeuille: ${bal} ◎`);
     return true;
   }
 
@@ -410,3 +437,4 @@ class PaperTrader extends EventEmitter {
 }
 
 module.exports = PaperTrader;
+module.exports.STRATEGIES = STRATEGIES;

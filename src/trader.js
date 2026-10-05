@@ -18,6 +18,7 @@ const fs          = require('fs');
 const https       = require('https');
 const path        = require('path');
 const gmgn          = require('./gmgn');
+const prices        = require('./prices');
 const agentMemory   = require('./agentMemory');
 const tokenHistory  = require('./tokenHistory');
 const personalAgent = require('./personalAgent');
@@ -28,7 +29,6 @@ const PERSIST_FILE = path.join(__dirname, '..', 'data', 'positions.json');
 // Clé API Jupiter optionnelle — obtenir gratuitement sur https://station.jup.ag
 const JUPITER_API_KEY = process.env.JUPITER_API_KEY || null;
 const JUPITER_URL = 'https://lite-api.jup.ag/swap/v1';
-const JUPITER_PRICE_URL = 'https://lite-api.jup.ag/price/v2';
 
 /**
  * Requête HTTPS via le module natif Node.js (contourne undici/fetch).
@@ -80,7 +80,9 @@ const NON_TRADE_MINTS = new Set([
 ]);
 // Valeur minimum (USD) pour auto-importer un token acheté hors bot (filtre dust/airdrops)
 const AUTO_IMPORT_MIN_USD = parseFloat(process.env.AUTO_IMPORT_MIN_USD || '10');
-const MONITOR_INTERVAL_MS = 30_000; // vérifie les positions toutes les 30s
+// Fréquence de surveillance SL/TP — les meme coins bougent vite, un stop vérifié
+// toutes les 30s pouvait finir 15 points sous son seuil
+const MONITOR_INTERVAL_MS = Math.max(3, parseFloat(process.env.POSITION_CHECK_SECONDS || '10')) * 1000;
 // Sortie multi-étapes (% de la position INITIALE) :
 //   palier 1 (+TP%)   → vend TP_SELL_STAGE1 (30%)
 //   palier 2 (+2×TP%) → vend TP_SELL_STAGE2 (30%)
@@ -250,19 +252,22 @@ class Trader {
 
   // ─── Prix actuel ──────────────────────────────────────────────────────────
 
-  /**
-   * Prix actuel en USD via Jupiter Price API v2
-   * @param {string} mintAddress
-   * @returns {Promise<number|null>}
-   */
+  /** Prix actuel en USD (Jupiter Price v3, fallback GMGN si Jupiter ne connaît pas le token) */
   async getCurrentPrice(mintAddress) {
-    try {
-      const json = await httpsRequest(`${JUPITER_PRICE_URL}?ids=${mintAddress}`);
-      const price = json?.data?.[mintAddress]?.price;
-      return price ? parseFloat(price) : null;
-    } catch {
-      return null;
+    return (await this._pricesFor([mintAddress]))[mintAddress] ?? null;
+  }
+
+  /** Prix groupés : un seul appel Jupiter pour tous les mints, GMGN pour les manquants */
+  async _pricesFor(mints) {
+    const out = await prices.getPrices(mints);
+    const missing = mints.filter(m => out[m] == null).slice(0, 5);
+    if (missing.length > 0 && await gmgn.isAvailable()) {
+      for (const m of missing) {
+        const p = await gmgn.getTokenPrice(m).catch(() => null);
+        if (p) out[m] = p;
+      }
     }
+    return out;
   }
 
   /**
@@ -302,6 +307,7 @@ class Trader {
       stopLossPct = parseFloat(process.env.DEFAULT_STOP_LOSS_PCT || '20'),
       takeProfitPct = parseFloat(process.env.DEFAULT_TAKE_PROFIT_PCT || '50'),
       symbol = null,
+      entry = { signals: ['manuel'] }, // pourquoi on achète — sert aux stats par signal
     } = opts;
     if (!this.wallet) throw new Error('Wallet non chargé');
 
@@ -322,8 +328,10 @@ class Trader {
     const txId = await this.executeSwap(quote);
 
     const position = {
+      positionId: `${tokenMint.slice(0, 6)}-${Date.now()}`,
       tokenMint,
       symbol,
+      entry,
       solSpent: solAmount,
       buyTxId: txId,
       entryTimestamp: Date.now(),
@@ -363,8 +371,10 @@ class Trader {
     const { entryMcapUsd, tokenSupply } = await this._fetchEntryMcap(tokenMint, entryPriceUsd);
 
     const position = {
+      positionId: `${tokenMint.slice(0, 6)}-${Date.now()}`,
       tokenMint,
       symbol,
+      entry: { signals: ['import'] },
       solSpent,
       buyTxId: null,
       entryTimestamp: Date.now(),
@@ -412,7 +422,10 @@ class Trader {
     // sinon une vente partielle affiche une fausse perte)
     const costBasis = pos ? pos.solSpent * (pct / 100) : null;
     const pnlSol    = costBasis != null ? solReceived - costBasis : null;
-    const trade = { action: 'SELL', tokenMint, symbol: pos?.symbol || null, pct, txId, timestamp: Date.now(), pnlSol, exitReason };
+    const trade = {
+      action: 'SELL', tokenMint, symbol: pos?.symbol || null, positionId: pos?.positionId || null,
+      entrySignals: pos?.entry?.signals || null, pct, txId, timestamp: Date.now(), pnlSol, exitReason,
+    };
     this.history.push(trade);
 
     if (pct === 100) {
@@ -471,7 +484,8 @@ class Trader {
         pos.closeTimestamp = Date.now();
         this.positions.delete(tokenMint);
         this.history.push({
-          action: 'SELL', tokenMint, symbol: pos.symbol || null, pct: 100, txId: null,
+          action: 'SELL', tokenMint, symbol: pos.symbol || null, positionId: pos.positionId || null,
+          entrySignals: pos.entry?.signals || null, pct: 100, txId: null,
           timestamp: Date.now(), pnlSol: null,
           exitReason: 'EXTERNAL_SELL', external: true,
         });
@@ -551,11 +565,14 @@ class Trader {
     if (this._monitorTimer) return; // déjà actif
 
     this._monitorTimer = setInterval(async () => {
-      if (this.positions.size === 0) return;
-      await this._checkPositions(notify);
+      if (this.positions.size === 0 || this._monitorBusy) return;
+      this._monitorBusy = true; // une vente lente ne doit pas lancer un 2e passage en parallèle
+      try { await this._checkPositions(notify); }
+      catch (err) { console.error('[Trader] Erreur moniteur:', err.message); }
+      finally { this._monitorBusy = false; }
     }, MONITOR_INTERVAL_MS);
 
-    console.log('[Trader] Moniteur SL/TP démarré (intervalle: 30s)');
+    console.log(`[Trader] Moniteur SL/TP démarré (intervalle: ${MONITOR_INTERVAL_MS / 1000}s)`);
   }
 
   stopMonitor() {
@@ -566,10 +583,11 @@ class Trader {
   }
 
   async _checkPositions(notify) {
-    for (const [tokenMint, pos] of this.positions) {
+    const live = await this._pricesFor([...this.positions.keys()]);
+    for (const [tokenMint, pos] of [...this.positions]) {
       if (!pos.entryPriceUsd) continue; // pas de prix d'entrée → skip
 
-      const currentPrice = await this.getCurrentPrice(tokenMint);
+      const currentPrice = live[tokenMint];
       if (!currentPrice) continue;
 
       // Trailing stop-loss : met à jour le prix le plus haut atteint
@@ -653,7 +671,7 @@ class Trader {
           );
           if (/balance token nulle/i.test(err.message)) {
             // Le wallet ne détient plus le token (vendu à la main) →
-            // resynchronise au lieu de réessayer en boucle toutes les 30s
+            // resynchronise au lieu de réessayer en boucle à chaque passage
             this.syncWallet().catch(() => {});
             if (notify) notify(`🔀 Position <code>${shortMint}</code> absente du wallet — resynchronisation automatique du tracking.`);
           } else if (notify) {

@@ -669,6 +669,9 @@ class Bot {
           symbol:    debate.token?.baseToken?.symbol || '???',
           mint:      debate.token?.baseToken?.address || '',
           score:     debate.decision?.score ?? null,
+          quant:     debate.decision?.quantScore ?? null,
+          llm:       debate.decision?.llmScore ?? null,
+          early:     debate.token?._source === 'gmgn-early',
           decision:  debate.decision?.decision || 'SKIP',
           timestamp: Date.now(),
         });
