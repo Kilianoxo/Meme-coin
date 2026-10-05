@@ -1734,7 +1734,8 @@ class PersonalAgent {
           const sym = sanitizeName(input.symbol || addr.slice(0, 6));
           // Un achat d'ARIA est TOUJOURS pris sur une session (jamais sur le pocket sécurisé),
           // avec les mêmes garde-fous et le même verrou que les achats autonomes
-          return this._withBuyLock(async () => {
+          // `return await` : sinon une erreur du swap échappe au try/catch de _execTool et fait planter le chat
+          return await this._withBuyLock(async () => {
             const chk = await this._sessionBuyCheck(addr, sym);
             if (chk.error) {
               return { erreur: chk.noSession

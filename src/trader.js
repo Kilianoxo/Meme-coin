@@ -35,6 +35,29 @@ const JUPITER_URL = 'https://lite-api.jup.ag/swap/v1';
  * @param {{ method?: string, headers?: object, body?: string }} opts
  * @returns {Promise<any>} — JSON parsé
  */
+/**
+ * Erreur Jupiter lisible : Jupiter explique son refus dans le corps de la réponse
+ * (errorCode) — on le traduit au lieu de n'afficher que « HTTP 400 ».
+ */
+const JUPITER_ERRORS = {
+  COULD_NOT_FIND_ANY_ROUTE: 'aucune route de swap trouvée (liquidité absente ou token pas encore indexé par Jupiter)',
+  NO_ROUTES_FOUND:          'aucune route de swap trouvée (liquidité absente ou token pas encore indexé par Jupiter)',
+  TOKEN_NOT_TRADABLE:       'token non échangeable sur Jupiter (pas encore indexé, gelé ou retiré)',
+  TOKEN_NOT_TRADEABLE:      'token non échangeable sur Jupiter (pas encore indexé, gelé ou retiré)',
+  ROUTE_PLAN_DOES_NOT_CONSUME_ALL_THE_AMOUNT: 'liquidité insuffisante pour ce montant — essaie une mise plus petite',
+  CIRCULAR_ARBITRAGE_IS_DISABLED: 'swap d\'un token vers lui-même',
+  INVALID_MINT:             'adresse de token invalide',
+};
+function jupiterError(status, body, url) {
+  let code = null, msg = null;
+  try { const j = JSON.parse(body); code = j.errorCode || j.code || null; msg = j.error || j.message || null; } catch { msg = String(body || '').slice(0, 160) || null; }
+  const what = url.includes('/quote') ? 'devis' : url.includes('/swap') ? 'swap' : 'requête';
+  const human = (code && JUPITER_ERRORS[code]) || msg || `HTTP ${status}`;
+  const err = new Error(`Jupiter a refusé le ${what} : ${human}${code && !JUPITER_ERRORS[code] ? ` (${code})` : ''}`);
+  err.status = status; err.jupiterCode = code;
+  return err;
+}
+
 function httpsRequest(url, opts = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -57,7 +80,7 @@ function httpsRequest(url, opts = {}) {
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(new Error(`HTTP ${res.statusCode} — ${url}`));
+          return reject(jupiterError(res.statusCode, data, url));
         }
         try { resolve(JSON.parse(data)); }
         catch (e) { reject(new Error(`JSON invalide: ${e.message}`)); }
