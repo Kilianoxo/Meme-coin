@@ -9,7 +9,7 @@
  *   /scan       — Lancer un scan manuel
  *   /positions  — Positions ouvertes
  *   /history    — 10 derniers trades
- *   /auto       — Activer/désactiver l'auto-trade
+ *   /session    — Session de trading (capital alloué, mode, plafonds)
  *   /analyse <adresse>          — Analyse complète d'un token
  *   /buy <adresse> <sol>        — Achat manuel
  *   /sell <adresse> [pct]       — Vente manuelle (défaut 100%)
@@ -81,6 +81,37 @@ class Bot {
   }
 
   /** Échappe les caractères spéciaux HTML dans du contenu dynamique */
+  /** Résumé de la session de trading (ou mode d'emploi si aucune) */
+  async _replySession(ctx, prefix = '') {
+    let balance = null;
+    try { if (this.trader.isReady()) balance = await this.trader.getSolBalance(); } catch { /* best effort */ }
+    const st = personalAgent.sessionState({ walletBalance: balance });
+    const head = prefix ? prefix + '\n\n' : '';
+    if (!st.active) {
+      const modes = st.modes.map(m => `${m.emoji} ${m.label}`).join(' · ');
+      return ctx.reply(
+        head + `⏸ <b>Aucune session en cours</b> — ARIA n'achète rien seule.\n` +
+        (balance != null ? `Wallet : ${balance.toFixed(4)} SOL\n` : '') +
+        `Mode préparé : ${st.modes.find(m => m.id === st.mode)?.label || st.mode} (${modes})\n\n` +
+        `Lancer : <code>/session start 1.5 equilibre 3 0.2</code>\n` +
+        `(capital SOL · mode · positions max · mise max par trade — les deux derniers sont optionnels)\n` +
+        `Le reste du wallet reste dans le pocket sécurisé.`,
+        { parse_mode: 'HTML' }
+      );
+    }
+    const dur = Math.round((Date.now() - st.startedAt) / 60_000);
+    return ctx.reply(
+      head + `▶️ <b>Session ${this._esc(st.modeLabel)}</b> depuis ${dur >= 60 ? Math.floor(dur / 60) + 'h' + String(dur % 60).padStart(2, '0') : dur + ' min'}\n` +
+      `Capital : ${st.capitalSol} SOL · disponible ${st.availableSol} · investi ${st.investedSol}\n` +
+      `PnL : ${st.pnlSol >= 0 ? '+' : ''}${st.pnlSol} SOL (${st.pnlPct >= 0 ? '+' : ''}${st.pnlPct}%) · ${st.closedTrades} trades, ${st.wins} gagnants\n` +
+      `Positions : ${st.openPositions}/${st.maxOpenPositions} · mise max ${st.maxSolPerTrade} SOL\n` +
+      (st.pocketSol != null ? `🔒 Pocket sécurisé : ${st.pocketSol} SOL\n` : '') +
+      `Arrêt auto si la session perd ${Math.abs(st.stopLossSol)} SOL.\n\n` +
+      `<code>/session positions 4</code> · <code>/session mise 0.25</code> · <code>/session mode chill</code> · <code>/session stop</code>`,
+      { parse_mode: 'HTML' }
+    );
+  }
+
   _esc(text) {
     return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
@@ -185,7 +216,7 @@ class Bot {
         `/scan — Scanner maintenant\n` +
         `/positions — Positions ouvertes\n` +
         `/history — Historique des trades\n` +
-        `/auto — Toggle auto-trade\n` +
+        `/session — Lancer / suivre / arrêter une session de trading\n` +
         `/settings — Voir les paramètres\n` +
         `/set &lt;clé&gt; &lt;valeur&gt; — Modifier un paramètre\n` +
         `/debat &lt;adresse&gt; — Suggérer un token → les agents débattent\n` +
@@ -211,7 +242,7 @@ class Bot {
         `/balance — Balance SOL du wallet\n\n` +
 
         `<b>Trading</b>\n` +
-        `/auto — Activer/désactiver le trading réel autonome d'ARIA\n` +
+        `/session — Session de trading : capital alloué, mode, positions, mise max (le reste du wallet reste au pocket sécurisé)\n` +
         `/scan — Lancer un scan manuel toutes sources\n` +
         `/recurring — Tokens récidivistes (boostés plusieurs fois)\n` +
         `/debat &lt;adresse&gt; — Suggérer un token au débat IA\n` +
@@ -394,8 +425,13 @@ class Bot {
       switch (key.toLowerCase()) {
         case 'maxsol':
           this.maxPositionSol = val;
-          personalAgent.setAutonomy({ maxSolPerTrade: val }); // synchronise le plafond ARIA
-          await ctx.reply(`✅ Max position mis à jour: <b>${val} SOL</b> (plafond ARIA synchronisé)`, { parse_mode: 'HTML' });
+          if (personalAgent.sessionState().active) {
+            try { personalAgent.updateSession({ maxSolPerTrade: val }); }
+            catch (err) { return ctx.reply(`❌ ${err.message}`); }
+          } else {
+            personalAgent.setAutonomy({ maxSolPerTrade: val }); // sera repris au lancement de la session
+          }
+          await ctx.reply(`✅ Mise max par trade : <b>${val} SOL</b>`, { parse_mode: 'HTML' });
           break;
         case 'sl':
           process.env.DEFAULT_STOP_LOSS_PCT = String(val);
@@ -410,17 +446,52 @@ class Bot {
       }
     });
 
-    bot.command('auto', async (ctx) => {
-      const cur  = personalAgent.getAutonomy();
-      const next = personalAgent.setAutonomy({ liveTrading: !cur.liveTrading });
-      await ctx.reply(
-        next.liveTrading
-          ? `🤖 Trading réel <b>ACTIVÉ</b> — exécution directe\n⚠️ ARIA achète et vend seule, tu reçois juste des notifications.\n` +
-            `Seuils adaptatifs : ${next.minScore}/100 classique, ${next.flexScore}/100 + signal fort (smart money, rotation, rupture, micro-cap).\n` +
-            `Taille : ${next.minSolPerTrade}-${next.maxSolPerTrade} SOL selon confiance | ${next.maxOpenPositions} positions max | stop journalier -${next.maxDailyLossSol} SOL.`
-          : `🤖 Trading réel <b>DÉSACTIVÉ</b>\nARIA scanne et envoie les signaux — tu confirmes chaque achat via les boutons.`,
-        { parse_mode: 'HTML' }
-      );
+    // Le trading réel passe désormais par une session (capital alloué + pocket sécurisé)
+    bot.command('auto', async (ctx) => this._replySession(ctx));
+
+    // ─── /session — capital alloué au bot, le reste du wallet reste au pocket ──
+    bot.command('session', async (ctx) => {
+      const [, sub, ...rest] = ctx.message.text.trim().split(/\s+/);
+      const MODE_ALIASES = { chill: 'chill', prudent: 'chill', equilibre: 'balanced', 'équilibré': 'balanced', balanced: 'balanced', agressif: 'aggressive', aggressive: 'aggressive' };
+      try {
+        switch ((sub || '').toLowerCase()) {
+          case '':
+            return this._replySession(ctx);
+          case 'start': {
+            const capitalSol = parseFloat(rest[0]);
+            if (!(capitalSol > 0)) return ctx.reply('Usage : /session start <capital SOL> [chill|equilibre|agressif] [positions] [mise max]\nEx : /session start 1.5 equilibre 3 0.2');
+            const mode = MODE_ALIASES[(rest[1] || '').toLowerCase()] || personalAgent.sessionState().mode;
+            const st = await personalAgent.startSession({
+              capitalSol, mode,
+              maxOpenPositions: rest[2] != null ? parseFloat(rest[2]) : undefined,
+              maxSolPerTrade:   rest[3] != null ? parseFloat(rest[3]) : undefined,
+            });
+            this.maxPositionSol = st.maxSolPerTrade;
+            return; // ARIA envoie déjà la notification de lancement
+          }
+          case 'stop':
+            await personalAgent.stopSession('arrêt manuel (Telegram)');
+            return;
+          case 'positions':
+            personalAgent.updateSession({ maxOpenPositions: parseFloat(rest[0]) });
+            return this._replySession(ctx, '✅ Positions simultanées mises à jour.');
+          case 'mise': case 'maxsol': {
+            const st = personalAgent.updateSession({ maxSolPerTrade: parseFloat(rest[0]) });
+            this.maxPositionSol = st.maxSolPerTrade;
+            return this._replySession(ctx, '✅ Mise max par trade mise à jour.');
+          }
+          case 'mode': {
+            const mode = MODE_ALIASES[(rest[0] || '').toLowerCase()];
+            if (!mode) return ctx.reply('Modes : chill, equilibre, agressif');
+            personalAgent.setTradingMode(mode);
+            return this._replySession(ctx, '✅ Mode appliqué.');
+          }
+          default:
+            return ctx.reply('Usage : /session | /session start <capital> [mode] [positions] [mise] | /session stop | /session positions <n> | /session mise <sol> | /session mode <chill|equilibre|agressif>');
+        }
+      } catch (err) {
+        return ctx.reply(`❌ ${err.message}`);
+      }
     });
 
     // ─── /agent — Chat Telegram avec ARIA ────────────────────────────────────
@@ -436,7 +507,7 @@ class Bot {
           `🤖 <b>${s.name}</b> ${moodEmoji}\n` +
           `Humeur: ${s.moodLabel}  |  Style: ${s.tradingStyle}\n` +
           `Confiance: ${s.confidence}/10  |  Risque: ${s.riskTolerance}/10\n\n` +
-          `⚡ Autonomie: ${a.enabled ? '✅' : '❌'}  |  Trading réel: ${a.liveTrading ? '✅' : '❌'} (/auto)\n` +
+          `⚡ Autonomie: ${a.enabled ? '✅' : '❌'}  |  Session: ${a.liveTrading ? '✅ en cours' : '❌'} (/session)\n` +
           `🎚 Seuil BUY: ${a.minScore}/100  |  Max ${a.maxSolPerTrade} SOL/trade` +
           `${s.lessons.length > 0 ? `\n\n📚 <i>${this._esc(s.lessons[s.lessons.length-1])}</i>` : ''}\n\n` +
           `Pour parler avec moi: <code>/agent bonjour ARIA!</code>`,
@@ -744,7 +815,7 @@ class Bot {
         const { sl, tp } = personalAgent._dynamicSlTp(debate.decision, debate.token?._gmgn, debate.token?.marketCap || 0);
         await this.bot.telegram.sendMessage(
           this.adminId,
-          `💡 Trading réel OFF — confirmer l'achat ? (/auto pour l'exécution directe)`,
+          `💡 Pas de session en cours — confirmer l'achat ? (/session start pour qu'ARIA achète seule)`,
           {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([

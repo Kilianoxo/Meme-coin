@@ -258,6 +258,7 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
 .assistant .btn { margin-top: 14px; }
 .robot { width: 118px; height: 118px; flex-shrink: 0; filter: drop-shadow(0 14px 18px rgba(123,77,255,.25)); }
 .status-pill {
+  white-space: nowrap;
   display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: 3px;
   padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase;
   background: var(--surface-3); color: var(--ink-3);
@@ -486,6 +487,34 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
 
 .danger-zone { border: 1.5px dashed #f6c3cf; }
 
+/* ── Session ────────────────────────────────────────────────────────── */
+.sess-card { padding: 22px 22px 20px; }
+.sess-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 6px; }
+.sess-title { font-size: 19px; font-weight: 800; letter-spacing: -.3px; }
+.sess-sub { font-size: 13px; color: var(--ink-3); margin-top: 4px; line-height: 1.5; max-width: 560px; }
+.quick { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 0 6px 52px; }
+.quick button { padding: 7px 14px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; font-weight: 700; }
+.quick button:hover { background: var(--accent-soft); color: var(--accent); }
+.sess-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+.split { margin-top: 16px; }
+.split-bar { height: 12px; border-radius: 99px; background: linear-gradient(90deg, #d9d2ef, #e7e2f5); overflow: hidden; }
+.split-bar span { display: block; height: 100%; width: 0; border-radius: 99px; background: var(--grad); transition: width .4s ease; }
+.split-legend { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; color: var(--ink-2); }
+.split-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+.dot-s { background: var(--accent); } .dot-p { background: #cfc6ea; }
+.sl-note { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 12px; opacity: .75; margin-left: 6px; }
+.sess-cta { width: 100%; margin-top: 16px; padding: 15px; font-size: 15px; }
+.sess-stop { background: #fff; color: var(--down); box-shadow: 0 10px 22px -12px rgba(10,4,40,.6); }
+.sess-history { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.sess-history .hist { display: flex; justify-content: space-between; gap: 10px; padding: 10px 14px; border-radius: 14px; background: var(--glass); border: 1px solid var(--glass-line); font-size: 12.5px; color: var(--on-dark-2); }
+.sess-history .hist b { color: #fff; }
+.advanced { margin-top: 26px; }
+.advanced summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase; color: var(--on-dark-2); margin: 0 6px 10px; }
+.advanced summary::-webkit-details-marker { display: none; }
+.advanced summary::before { content: '›'; font-size: 18px; transition: transform .2s; display: inline-block; }
+.advanced[open] summary::before { transform: rotate(90deg); }
+.preset.locked { cursor: default; }
+
 /* ── Modal "Analyser" ───────────────────────────────────────────────── */
 .sheet-backdrop {
   position: fixed; inset: 0; z-index: 80; display: none; align-items: center; justify-content: center; padding: 20px;
@@ -560,6 +589,8 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   .strat-cfg, .strat .strat-v.hide-sm { display: none; }
   .set-row.stacked .set-ctrl { padding-left: 0; }
   .danger-zone .set-row { flex-wrap: wrap; }
+  .sess-tiles { grid-template-columns: repeat(2, 1fr); }
+  .quick { padding-left: 0; }
   .danger-zone .set-text { flex-basis: calc(100% - 52px); }
   .card { padding: 18px; border-radius: 24px; }
   .set-card { padding: 4px 18px; }
@@ -658,6 +689,8 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
       <div class="hero-pills">
         <span class="pill-glass" id="heroSol">Wallet non chargé</span>
         <span class="pill-glass" id="heroToday">Aujourd'hui —</span>
+        <button class="pill-glass" id="heroSession" data-goto="settings">⏸ Aucune session — lancer</button>
+        <span class="pill-glass" id="heroPocket" style="display:none">🔒 Pocket</span>
       </div>
 
       <div class="actions">
@@ -976,14 +1009,72 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
       <span class="chip save-state" id="saveState"><span class="dot"></span><span id="saveStateText">À jour</span></span>
     </div>
 
-    <div class="section-label">Profil de trading</div>
-    <div class="presets" id="presets">
-      <button class="preset" data-preset="prudent"><div class="preset-emoji">🛡️</div><div class="preset-name">Prudent</div><div class="preset-desc">Peu de trades, très sélectif, petites tailles.</div></button>
-      <button class="preset" data-preset="balanced"><div class="preset-emoji">⚖️</div><div class="preset-name">Équilibré</div><div class="preset-desc">Le compromis par défaut entre volume et qualité.</div></button>
-      <button class="preset" data-preset="aggressive"><div class="preset-emoji">🚀</div><div class="preset-name">Agressif</div><div class="preset-desc">Plus de trades, tailles plus grosses, plus de risque.</div></button>
+    <!-- ── Session de trading : capital alloué, le reste reste au pocket ── -->
+    <div class="section-label">Session de trading</div>
+    <div class="card sess-card">
+      <div class="sess-head">
+        <div>
+          <div class="sess-title" id="sessTitle">Aucune session en cours</div>
+          <div class="sess-sub" id="sessSub">Choisis le capital que le bot peut utiliser. Le reste du wallet va dans un pocket sécurisé auquel il ne touche jamais.</div>
+        </div>
+        <span class="status-pill" id="sessPill">en pause</span>
+      </div>
+
+      <!-- Avant la session : capital de départ -->
+      <div id="sessIdle">
+        <div class="set-row">
+          <span class="ico-sq green"><svg class="i"><use href="#i-coins"/></svg></span>
+          <div class="set-text"><div class="set-title">Capital de la session</div><div class="set-desc">Wallet : <b id="sessWallet">—</b> · le bot ne pourra jamais engager plus que ce montant.</div></div>
+          <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="sessCapital" min="0.01" step="0.1" data-save="sessionForm"><span class="u">SOL</span><button type="button" data-step="1" aria-label="Plus">+</button></div>
+        </div>
+        <div class="quick" id="sessQuick">
+          <button type="button" data-pct="10">10 %</button><button type="button" data-pct="25">25 %</button>
+          <button type="button" data-pct="50">50 %</button><button type="button" data-pct="100">Tout</button>
+        </div>
+      </div>
+
+      <!-- Pendant la session : chiffres en direct -->
+      <div id="sessLive" style="display:none">
+        <div class="sess-tiles">
+          <div class="mini"><div class="mini-v" id="sessAvail">—</div><div class="mini-l">Disponible</div></div>
+          <div class="mini"><div class="mini-v" id="sessInvested">—</div><div class="mini-l">Investi</div></div>
+          <div class="mini"><div class="mini-v" id="sessPnl">—</div><div class="mini-l" id="sessPnlPct">PnL session</div></div>
+          <div class="mini"><div class="mini-v" id="sessTrades">—</div><div class="mini-l">Trades fermés</div></div>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="split-bar"><span id="splitSession"></span></div>
+        <div class="split-legend">
+          <span><i class="dot-s"></i>Session <b id="splitSessionTxt">—</b></span>
+          <span><i class="dot-p"></i>🔒 Pocket sécurisé <b id="splitPocketTxt">—</b></span>
+        </div>
+      </div>
     </div>
 
     <div class="section-label">Mode</div>
+    <div class="presets" id="modeCards"></div>
+
+    <div class="section-label">Tes limites <span class="sl-note">modifiables avant et pendant la session</span></div>
+    <div class="card set-card">
+      <div class="set-row">
+        <span class="ico-sq"><svg class="i"><use href="#i-layers"/></svg></span>
+        <div class="set-text"><div class="set-title">Positions simultanées</div><div class="set-desc">Nombre maximum de tokens que la session détient en même temps (tes achats manuels ne comptent pas).</div></div>
+        <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="sessPositions" min="1" max="10" step="1" data-save="session"><button type="button" data-step="1" aria-label="Plus">+</button></div>
+      </div>
+      <div class="set-row">
+        <span class="ico-sq green"><svg class="i"><use href="#i-coins"/></svg></span>
+        <div class="set-text"><div class="set-title">Mise max par trade</div><div class="set-desc">Ce qu'ARIA engage au maximum sur un token, quand elle est très confiante. Elle mise moins quand elle l'est moins.</div></div>
+        <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="sessMaxSol" min="0.01" step="0.01" data-save="session"><span class="u">SOL</span><button type="button" data-step="1" aria-label="Plus">+</button></div>
+      </div>
+      <div class="hint" id="sessHint" style="padding:0 0 16px">Tout le reste (seuils de score, confiance, mise mini, coupe-circuits) est réglé automatiquement par le mode.</div>
+    </div>
+
+    <button class="btn btn-primary sess-cta" id="sessStartBtn" onclick="startSession()">▶ Lancer la session</button>
+    <button class="btn sess-cta sess-stop" id="sessStopBtn" onclick="stopSession()" style="display:none">⏹ Arrêter la session</button>
+    <div class="sess-history" id="sessHistory"></div>
+
+    <div class="section-label">Comportement</div>
     <div class="card set-card">
       <div class="set-row">
         <span class="ico-sq blue"><svg class="i"><use href="#i-cpu"/></svg></span>
@@ -996,73 +1087,52 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
         <label class="switch"><input type="checkbox" id="autoEnabled" data-save="autonomy"><span class="track"></span><span class="knob"></span></label>
       </div>
       <div class="set-row">
-        <span class="ico-sq red"><svg class="i"><use href="#i-zap"/></svg></span>
-        <div class="set-text"><div class="set-title">Trading réel</div><div class="set-desc">ARIA achète et vend seule avec les vrais SOL du wallet, dans les limites ci-dessous. Sinon elle t'envoie les signaux à valider sur Telegram.</div></div>
-        <label class="switch danger"><input type="checkbox" id="autoLive" onchange="confirmLiveTrading(this)"><span class="track"></span><span class="knob"></span></label>
-      </div>
-      <div class="set-row">
         <span class="ico-sq green"><svg class="i"><use href="#i-copy"/></svg></span>
         <div class="set-text"><div class="set-title">Copy-trading</div><div class="set-desc">Réplique les achats des wallets suivis — après les filtres anti-rug et l'analyse d'ARIA, jamais à l'aveugle.</div></div>
         <label class="switch"><input type="checkbox" id="autoCopy" data-save="autonomy"><span class="track"></span><span class="knob"></span></label>
       </div>
     </div>
 
-    <div class="section-label">Détection des tokens</div>
-    <div class="card set-card">
-      <div class="set-row stacked">
-        <span class="ico-sq amber"><svg class="i"><use href="#i-clock"/></svg></span>
-        <div class="set-text"><div class="set-title">Âge minimum d'un token</div><div class="set-desc">Plus bas = on entre plus tôt dans les pumps, mais avec plus de risque. Sous 2 h, le token doit en plus avoir 100 holders et 2 wallets smart money / KOL.</div></div>
-        <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoMinAge" min="0" max="12" step="0.5" data-save="autonomy" data-suffix=" h"><output class="range-val" data-for="autoMinAge">—</output></div>
+    <details class="advanced">
+      <summary><span>Réglages avancés</span><span class="sl-note">gérés automatiquement par le mode — à ne toucher que si tu sais pourquoi</span></summary>
+      <div class="card set-card">
+        <div class="set-row stacked">
+          <span class="ico-sq amber"><svg class="i"><use href="#i-clock"/></svg></span>
+          <div class="set-text"><div class="set-title">Âge minimum d'un token</div><div class="set-desc">Sous 2 h, le token doit en plus avoir 100 holders et 2 wallets smart money / KOL.</div></div>
+          <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoMinAge" min="0" max="12" step="0.5" data-save="autonomy" data-suffix=" h"><output class="range-val" data-for="autoMinAge">—</output></div>
+        </div>
+        <div class="set-row">
+          <span class="ico-sq"><svg class="i"><use href="#i-scan"/></svg></span>
+          <div class="set-text"><div class="set-title">Source « early » (5 min)</div><div class="set-desc">Classement GMGN des 5 dernières minutes, pour repérer les tokens qui démarrent.</div></div>
+          <label class="switch"><input type="checkbox" id="autoEarly" data-save="autonomy"><span class="track"></span><span class="knob"></span></label>
+        </div>
+        <div class="set-row stacked">
+          <span class="ico-sq"><svg class="i"><use href="#i-target"/></svg></span>
+          <div class="set-text"><div class="set-title">Score minimum</div><div class="set-desc">Note sur 100 qu'un token doit atteindre pour qu'ARIA achète.</div></div>
+          <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoMinScore" min="40" max="95" step="1" data-save="autonomy"><output class="range-val" data-for="autoMinScore">—</output></div>
+        </div>
+        <div class="set-row stacked">
+          <span class="ico-sq amber"><svg class="i"><use href="#i-zap"/></svg></span>
+          <div class="set-text"><div class="set-title">Score avec signal fort</div><div class="set-desc">Seuil abaissé quand un signal fort accompagne le token.</div></div>
+          <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoFlexScore" min="40" max="90" step="1" data-save="autonomy"><output class="range-val" data-for="autoFlexScore">—</output></div>
+        </div>
+        <div class="set-row stacked">
+          <span class="ico-sq blue"><svg class="i"><use href="#i-gauge"/></svg></span>
+          <div class="set-text"><div class="set-title">Confiance minimum</div><div class="set-desc">Niveau de certitude (sur 10) exigé en plus du score.</div></div>
+          <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoMinConf" min="1" max="10" step="1" data-save="autonomy" data-suffix="/10"><output class="range-val" data-for="autoMinConf">—</output></div>
+        </div>
+        <div class="set-row">
+          <span class="ico-sq green"><svg class="i"><use href="#i-coins"/></svg></span>
+          <div class="set-text"><div class="set-title">Mise minimum</div><div class="set-desc">Taille d'un trade quand ARIA est peu confiante.</div></div>
+          <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="autoMinSol" min="0.001" max="10" step="0.01" data-save="autonomy"><span class="u">SOL</span><button type="button" data-step="1" aria-label="Plus">+</button></div>
+        </div>
+        <div class="set-row">
+          <span class="ico-sq red"><svg class="i"><use href="#i-shield"/></svg></span>
+          <div class="set-text"><div class="set-title">Perte maximum par jour</div><div class="set-desc">Au-delà, ARIA arrête de trader jusqu'au lendemain (coupe-circuit).</div></div>
+          <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="autoMaxLoss" min="0.01" max="50" step="0.05" data-save="autonomy"><span class="u">SOL</span><button type="button" data-step="1" aria-label="Plus">+</button></div>
+        </div>
       </div>
-      <div class="set-row">
-        <span class="ico-sq"><svg class="i"><use href="#i-scan"/></svg></span>
-        <div class="set-text"><div class="set-title">Source « early » (5 min)</div><div class="set-desc">Ajoute le classement GMGN des 5 dernières minutes pour repérer les tokens qui démarrent, avant qu'ils dominent le classement 1 h.</div></div>
-        <label class="switch"><input type="checkbox" id="autoEarly" data-save="autonomy"><span class="track"></span><span class="knob"></span></label>
-      </div>
-    </div>
-
-    <div class="section-label">Seuils d'entrée</div>
-    <div class="card set-card">
-      <div class="set-row stacked">
-        <span class="ico-sq"><svg class="i"><use href="#i-target"/></svg></span>
-        <div class="set-text"><div class="set-title">Score minimum</div><div class="set-desc">Note sur 100 qu'un token doit atteindre pour qu'ARIA achète.</div></div>
-        <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoMinScore" min="40" max="95" step="1" data-save="autonomy"><output class="range-val" data-for="autoMinScore">—</output></div>
-      </div>
-      <div class="set-row stacked">
-        <span class="ico-sq amber"><svg class="i"><use href="#i-zap"/></svg></span>
-        <div class="set-text"><div class="set-title">Score avec signal fort</div><div class="set-desc">Seuil abaissé quand un signal fort accompagne le token (smart money massive, rotation KOL, rupture, micro-cap saine).</div></div>
-        <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoFlexScore" min="40" max="90" step="1" data-save="autonomy"><output class="range-val" data-for="autoFlexScore">—</output></div>
-      </div>
-      <div class="set-row stacked">
-        <span class="ico-sq blue"><svg class="i"><use href="#i-gauge"/></svg></span>
-        <div class="set-text"><div class="set-title">Confiance minimum</div><div class="set-desc">Niveau de certitude (sur 10) exigé en plus du score.</div></div>
-        <div class="set-ctrl range-wrap"><input class="range" type="range" id="autoMinConf" min="1" max="10" step="1" data-save="autonomy" data-suffix="/10"><output class="range-val" data-for="autoMinConf">—</output></div>
-      </div>
-    </div>
-
-    <div class="section-label">Taille et exposition</div>
-    <div class="card set-card">
-      <div class="set-row">
-        <span class="ico-sq green"><svg class="i"><use href="#i-coins"/></svg></span>
-        <div class="set-text"><div class="set-title">Mise minimum</div><div class="set-desc">Taille d'un trade quand ARIA est peu confiante (5/10).</div></div>
-        <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="autoMinSol" min="0.001" max="10" step="0.01" data-save="autonomy"><span class="u">SOL</span><button type="button" data-step="1" aria-label="Plus">+</button></div>
-      </div>
-      <div class="set-row">
-        <span class="ico-sq green"><svg class="i"><use href="#i-coins"/></svg></span>
-        <div class="set-text"><div class="set-title">Mise maximum</div><div class="set-desc">Taille d'un trade quand ARIA est très confiante (9/10 et plus).</div></div>
-        <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="autoMaxSol" min="0.001" max="10" step="0.01" data-save="autonomy"><span class="u">SOL</span><button type="button" data-step="1" aria-label="Plus">+</button></div>
-      </div>
-      <div class="set-row">
-        <span class="ico-sq"><svg class="i"><use href="#i-layers"/></svg></span>
-        <div class="set-text"><div class="set-title">Positions simultanées</div><div class="set-desc">Nombre maximum de tokens détenus en même temps.</div></div>
-        <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="autoMaxPos" min="1" max="10" step="1" data-save="autonomy"><button type="button" data-step="1" aria-label="Plus">+</button></div>
-      </div>
-      <div class="set-row">
-        <span class="ico-sq red"><svg class="i"><use href="#i-shield"/></svg></span>
-        <div class="set-text"><div class="set-title">Perte maximum par jour</div><div class="set-desc">Au-delà, ARIA arrête de trader jusqu'au lendemain (coupe-circuit).</div></div>
-        <div class="stepper"><button type="button" data-step="-1" aria-label="Moins">−</button><input type="number" id="autoMaxLoss" min="0.01" max="50" step="0.05" data-save="autonomy"><span class="u">SOL</span><button type="button" data-step="1" aria-label="Plus">+</button></div>
-      </div>
-    </div>
+    </details>
 
     <div class="label-row" style="margin-top:26px">
       <div class="section-label" style="margin-top:0">Paper trading</div>
@@ -1164,7 +1234,7 @@ function goTo(page) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (page === 'aria')     { fetchAgent(); setTimeout(() => scrollChat(), 50); }
   if (page === 'paper')    fetchPaper();
-  if (page === 'settings') { fetchAgent(); fetchPaper(); fetchAiState(); }
+  if (page === 'settings') { fetchAgent(); fetchPaper(); fetchAiState(); fetchData(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => goTo(b.dataset.page)));
 document.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => goTo(b.dataset.goto)));
@@ -1342,8 +1412,10 @@ function render(d) {
   for (const h of d.history || []) if (h.symbol) symbolByMint[h.tokenMint] = h.symbol;
   for (const p of d.positions || []) if (p.symbol) symbolByMint[p.tokenMint] = p.symbol;
 
+  lastWallet = d.walletBalance ?? null;
   renderHero(d);
   renderGmgnStatus(d.gmgnStatus);
+  renderSession(d.session);
   renderStats(d.stats, d.weekly);
   allTimeline = d.pnlTimeline || [];
   allManualTimeline = d.manualTimeline || [];
@@ -1776,38 +1848,26 @@ function renderAutonomy(a) {
   if (!a) return;
   currentAutonomy = a;
   setVal('autoEnabled', a.enabled);
-  setVal('autoLive', a.liveTrading);
   setVal('autoCopy', a.copyTrading !== false);
   setVal('autoMinScore', a.minScore);
   setVal('autoFlexScore', a.flexScore ?? 55);
   setVal('autoMinConf', a.minConfidence);
   setVal('autoMinSol', a.minSolPerTrade ?? 0.05);
-  setVal('autoMaxSol', a.maxSolPerTrade);
-  setVal('autoMaxPos', a.maxOpenPositions);
   setVal('autoMaxLoss', a.maxDailyLossSol);
   setVal('autoMinAge', a.minTokenAgeHours ?? 1);
   setVal('autoEarly', a.earlyScan !== false);
 
-  const [label, cls] = a.enabled && a.liveTrading ? ['Trading réel', 'live'] : a.enabled ? ['Autonome', 'on'] : ['Désactivée', ''];
+  const [label, cls] = a.enabled && a.liveTrading ? ['Session en cours', 'live'] : a.enabled ? ['Signaux', 'on'] : ['Désactivée', ''];
   for (const id of ['autoBadge', 'homeAriaStatus']) {
     const el = document.getElementById(id);
     el.textContent = label;
     el.className = 'status-pill ' + cls;
   }
-  setText('chatAutoText', a.enabled && a.liveTrading ? 'Trading réel actif' : a.enabled ? 'Autonome · signaux' : 'Autonomie désactivée');
+  setText('chatAutoText', a.enabled && a.liveTrading ? 'Session de trading en cours' : a.enabled ? 'Autonome · signaux (pas de session)' : 'Autonomie désactivée');
 
   const chip = document.getElementById('ariaChip');
   chip.className = 'chip ' + (a.enabled && a.liveTrading ? 'aria-live' : a.enabled ? 'aria-on' : '');
-  setText('ariaChipText', a.enabled && a.liveTrading ? 'ARIA · réel' : a.enabled ? 'ARIA · autonome' : 'ARIA · off');
-  markPreset();
-}
-
-function confirmLiveTrading(cb) {
-  if (cb.checked && !confirm("⚠️ TRADING RÉEL\n\nARIA va acheter et vendre seule avec les vrais SOL de ton wallet, dans les limites configurées.\n\nActiver ?")) {
-    cb.checked = false;
-    return;
-  }
-  saveAutonomy();
+  setText('ariaChipText', a.enabled && a.liveTrading ? 'ARIA · session' : a.enabled ? 'ARIA · signaux' : 'ARIA · off');
 }
 
 function setSaveState(state) {
@@ -1820,11 +1880,9 @@ async function saveAutonomy() {
   const num = id => parseFloat(document.getElementById(id).value);
   const patch = {
     enabled: document.getElementById('autoEnabled').checked,
-    liveTrading: document.getElementById('autoLive').checked,
     copyTrading: document.getElementById('autoCopy').checked,
     minScore: num('autoMinScore'), flexScore: num('autoFlexScore'), minConfidence: num('autoMinConf'),
-    minSolPerTrade: num('autoMinSol'), maxSolPerTrade: num('autoMaxSol'),
-    maxOpenPositions: num('autoMaxPos'), maxDailyLossSol: num('autoMaxLoss'),
+    minSolPerTrade: num('autoMinSol'), maxDailyLossSol: num('autoMaxLoss'),
     minTokenAgeHours: num('autoMinAge'), earlyScan: document.getElementById('autoEarly').checked,
   };
   setSaveState('saving');
@@ -1858,23 +1916,6 @@ async function toggleAi(cb) {
   } catch { cb.checked = !wanted; toast('Erreur réseau', 'err'); }
 }
 
-const PRESETS = {
-  prudent:    { autoMinScore: 78, autoFlexScore: 65, autoMinConf: 7, autoMinSol: 0.03, autoMaxSol: 0.1,  autoMaxPos: 2, autoMaxLoss: 0.25 },
-  balanced:   { autoMinScore: 70, autoFlexScore: 55, autoMinConf: 6, autoMinSol: 0.05, autoMaxSol: 0.2,  autoMaxPos: 3, autoMaxLoss: 0.5 },
-  aggressive: { autoMinScore: 62, autoFlexScore: 50, autoMinConf: 5, autoMinSol: 0.08, autoMaxSol: 0.3,  autoMaxPos: 5, autoMaxLoss: 0.8 },
-};
-function markPreset() {
-  for (const [name, p] of Object.entries(PRESETS)) {
-    const match = Object.entries(p).every(([id, v]) => Math.abs(parseFloat(document.getElementById(id).value) - v) < 1e-9);
-    document.querySelector(`.preset[data-preset="${name}"]`).classList.toggle('active', match);
-  }
-}
-document.querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => {
-  const p = PRESETS[b.dataset.preset];
-  for (const [id, v] of Object.entries(p)) { const el = document.getElementById(id); el.value = v; if (el.classList.contains('range')) paintRange(el); }
-  saveAutonomy().then(() => toast('Profil « ' + b.querySelector('.preset-name').textContent + ' » appliqué'));
-}));
-
 // Sliders : remplissage + valeur affichée
 function paintRange(el) {
   const min = +el.min, max = +el.max, v = +el.value;
@@ -1904,7 +1945,181 @@ document.querySelectorAll('[data-save]').forEach(el => el.addEventListener('chan
   const kind = el.dataset.save;
   clearTimeout(saveTimers[kind]);
   setSaveState('saving');
-  saveTimers[kind] = setTimeout(() => (kind === 'paper' ? savePaperConfig() : saveAutonomy()), 450);
+  if (kind === 'sessionForm' || (kind === 'session' && !currentSession?.active)) {
+    // Avant la session : simple formulaire, rien n'est envoyé avant « Lancer »
+    if (el.id !== 'sessCapital') sessFormTouched = true;
+    else if (!sessFormTouched) suggestLimits();
+    renderSessionPreview();
+    setSaveState('saved');
+    return;
+  }
+  saveTimers[kind] = setTimeout(() => (kind === 'paper' ? savePaperConfig() : kind === 'session' ? updateSession() : saveAutonomy()), 450);
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION DE TRADING (capital alloué + pocket sécurisé)
+// ═══════════════════════════════════════════════════════════════════════════
+let currentSession = null, lastWallet = null, sessFormTouched = false, sessFormMode = null;
+
+function renderSession(st) {
+  if (!st) return;
+  currentSession = st;
+  const live = st.active;
+  document.getElementById('sessIdle').style.display = live ? 'none' : '';
+  document.getElementById('sessLive').style.display = live ? '' : 'none';
+  document.getElementById('sessStartBtn').style.display = live ? 'none' : '';
+  document.getElementById('sessStopBtn').style.display = live ? '' : 'none';
+  const pill = document.getElementById('sessPill');
+  pill.textContent = live ? 'en cours' : 'en pause';
+  pill.className = 'status-pill ' + (live ? 'live' : '');
+  setText('sessWallet', lastWallet != null ? lastWallet.toFixed(4) + ' SOL' : 'non chargé');
+
+  if (live) {
+    const mins = Math.round((Date.now() - st.startedAt) / 60_000);
+    const dur = mins >= 60 ? Math.floor(mins / 60) + ' h ' + String(mins % 60).padStart(2, '0') : mins + ' min';
+    setText('sessTitle', `Session ${st.modeLabel} · ${st.capitalSol} SOL`);
+    setText('sessSub', `En cours depuis ${dur}. Arrêt automatique si la session perd ${Math.abs(st.stopLossSol).toFixed(3)} SOL. Si tu l'arrêtes, les positions ouvertes restent gérées jusqu'à leur vente.`);
+    setText('sessAvail', st.availableSol.toFixed(3) + ' ◎');
+    setText('sessInvested', st.investedSol.toFixed(3) + ' ◎');
+    const pnl = document.getElementById('sessPnl');
+    pnl.textContent = fSol(st.pnlSol); pnl.className = 'mini-v ' + tone(st.pnlSol);
+    setText('sessPnlPct', 'PnL session ' + fPct(st.pnlPct));
+    setText('sessTrades', `${st.closedTrades} · ${st.wins} ✓`);
+    setVal('sessPositions', st.maxOpenPositions);
+    setVal('sessMaxSol', st.maxSolPerTrade);
+    document.getElementById('sessMaxSol').max = st.capitalSol;
+  } else {
+    setText('sessTitle', 'Aucune session en cours');
+    setText('sessSub', 'Choisis le capital que le bot peut utiliser. Le reste du wallet va dans un pocket sécurisé auquel il ne touche jamais.');
+    const cap = document.getElementById('sessCapital');
+    if (!cap.value && lastWallet != null) { cap.value = Math.max(0.01, Math.floor(lastWallet * 0.25 * 100) / 100); suggestLimits(); }
+  }
+  renderModeCards();
+  renderSessionPreview();
+  renderSessionHistory(st.history || []);
+  renderHeroSession(st);
+}
+
+function sessionCapital() {
+  return currentSession?.active ? currentSession.capitalSol : parseFloat(document.getElementById('sessCapital').value) || 0;
+}
+
+/** Répartition session / pocket sécurisé (barre + légende) */
+function renderSessionPreview() {
+  const cap = sessionCapital();
+  const w = lastWallet;
+  const st = currentSession;
+  const sessionPart = st?.active ? st.availableSol + st.investedSol : cap;
+  const pocket = st?.active && st.pocketSol != null ? st.pocketSol : (w != null ? Math.max(0, w - cap) : null);
+  const total = (w != null ? Math.max(w, sessionPart) : sessionPart) || 1;
+  document.getElementById('splitSession').style.width = Math.min(100, (sessionPart / total) * 100) + '%';
+  setText('splitSessionTxt', sessionPart.toFixed(3) + ' ◎');
+  setText('splitPocketTxt', pocket != null ? pocket.toFixed(3) + ' ◎' : '—');
+}
+
+/** Valeurs proposées par le mode tant que le trader n'a pas réglé lui-même ses limites */
+function suggestLimits() {
+  const m = (currentSession?.modes || []).find(x => x.id === (sessFormMode || currentSession?.mode));
+  const cap = sessionCapital();
+  if (!m || !(cap > 0)) return;
+  document.getElementById('sessPositions').value = m.defaultPositions;
+  document.getElementById('sessMaxSol').value = Math.max(0.01, Math.round(cap * m.defaultSolPct * 100) / 100);
+}
+
+function renderModeCards() {
+  const st = currentSession; if (!st) return;
+  const active = st.active ? st.mode : (sessFormMode || st.mode);
+  const el = document.getElementById('modeCards');
+  el.innerHTML = (st.modes || []).map(m => `
+    <button class="preset ${m.id === active ? 'active' : ''}" data-mode="${esc(m.id)}">
+      <div class="preset-emoji">${esc(m.emoji)}</div><div class="preset-name">${esc(m.label)}</div><div class="preset-desc">${esc(m.desc)}</div>
+    </button>`).join('');
+  el.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => chooseMode(b.dataset.mode));
+}
+
+async function chooseMode(mode) {
+  sessFormMode = mode;
+  if (!currentSession?.active && !sessFormTouched) suggestLimits();
+  renderModeCards();
+  renderSessionPreview();
+  const url = currentSession?.active ? '/api/session/update' : '/api/session/mode';
+  await postSession(url, { mode }, currentSession?.active ? 'Mode appliqué à la session' : 'Mode préparé pour la prochaine session');
+}
+
+async function postSession(url, body, okMsg) {
+  setSaveState('saving');
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    if (d.autonomy) renderAutonomy(d.autonomy);
+    setSaveState('saved');
+    if (okMsg) toast(okMsg);
+    fetchData();
+    return d;
+  } catch (err) {
+    setSaveState('error');
+    toast(err.message || 'Erreur réseau', 'err');
+    return null;
+  }
+}
+
+function updateSession() {
+  return postSession('/api/session/update', {
+    maxOpenPositions: parseFloat(document.getElementById('sessPositions').value),
+    maxSolPerTrade: parseFloat(document.getElementById('sessMaxSol').value),
+  });
+}
+
+async function startSession() {
+  const capitalSol = parseFloat(document.getElementById('sessCapital').value);
+  const maxOpenPositions = parseFloat(document.getElementById('sessPositions').value);
+  const maxSolPerTrade = parseFloat(document.getElementById('sessMaxSol').value);
+  const mode = sessFormMode || currentSession?.mode || 'balanced';
+  const label = (currentSession?.modes || []).find(m => m.id === mode)?.label || mode;
+  if (!(capitalSol > 0)) { toast('Indique le capital de la session', 'err'); return; }
+  const pocket = lastWallet != null ? ` Les ${Math.max(0, lastWallet - capitalSol).toFixed(4)} SOL restants restent dans le pocket sécurisé.` : '';
+  if (!confirm(`▶ Lancer une session de ${capitalSol} SOL en mode ${label} ?\n\nARIA va acheter et vendre SEULE avec ces ${capitalSol} SOL (vrai argent) : ${maxOpenPositions} positions max, ${maxSolPerTrade} SOL max par trade.${pocket}`)) return;
+  const btn = document.getElementById('sessStartBtn');
+  btn.disabled = true;
+  const d = await postSession('/api/session/start', { capitalSol, mode, maxOpenPositions, maxSolPerTrade }, 'Session lancée');
+  btn.disabled = false;
+  if (d) { sessFormTouched = false; sessFormMode = null; }
+}
+
+async function stopSession() {
+  if (!confirm("⏹ Arrêter la session ?\n\nARIA n'achètera plus rien. Les positions encore ouvertes continuent d'être gérées (stop-loss, take-profit) jusqu'à leur vente.")) return;
+  await postSession('/api/session/stop', {}, 'Session arrêtée');
+}
+
+function renderSessionHistory(list) {
+  const el = document.getElementById('sessHistory');
+  el.innerHTML = list.length ? list.map(h => `
+    <div class="hist"><span>${esc(new Date(h.startedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }))} · ${esc((currentSession.modes || []).find(m => m.id === h.mode)?.label || h.mode)} · ${h.capitalSol} SOL · ${h.closedTrades} trades</span>
+    <b class="${tone(h.pnlSol)}">${fSol(h.pnlSol)} (${fPct(h.pnlPct)})</b></div>`).join('') : '';
+}
+
+function renderHeroSession(st) {
+  const p = document.getElementById('heroSession');
+  const k = document.getElementById('heroPocket');
+  if (st.active) {
+    p.textContent = `▶ Session ${st.modeLabel} · ${st.availableSol.toFixed(3)} ◎ dispo · ${fSol(st.pnlSol)}`;
+    p.className = 'pill-glass ' + tone(st.pnlSol);
+    k.style.display = st.pocketSol != null ? '' : 'none';
+    k.textContent = '🔒 Pocket ' + (st.pocketSol ?? 0).toFixed(3) + ' ◎';
+  } else {
+    p.textContent = '⏸ Aucune session — lancer';
+    p.className = 'pill-glass';
+    k.style.display = 'none';
+  }
+}
+
+document.querySelectorAll('#sessQuick button').forEach(b => b.addEventListener('click', () => {
+  if (lastWallet == null) { toast('Wallet non chargé', 'err'); return; }
+  const v = Math.max(0.01, Math.floor((lastWallet - 0.02) * parseInt(b.dataset.pct, 10)) / 100);
+  document.getElementById('sessCapital').value = v.toFixed(2);
+  if (!sessFormTouched) suggestLimits();
+  renderSessionPreview();
 }));
 
 // ═══════════════════════════════════════════════════════════════════════════

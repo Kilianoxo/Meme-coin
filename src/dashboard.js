@@ -203,6 +203,13 @@ class Dashboard {
       return;
     }
 
+    // ── Session de trading (capital alloué + pocket sécurisé) ───────────────
+    const sessionMatch = pathname.match(/^\/api\/session\/(start|update|stop|mode)$/);
+    if (sessionMatch && req.method === 'POST') {
+      this._apiSession(req, res, sessionMatch[1]);
+      return;
+    }
+
     if (pathname === '/api/agent/journal' && req.method === 'GET') {
       this._jsonOk(res, { journal: personalAgent.getJournal(80) });
       return;
@@ -421,6 +428,10 @@ class Dashboard {
       walletBalance:   walletBalance !== null ? parseFloat(walletBalance.toFixed(6)) : null,
       walletAddress:   this.trader.walletAddress || null,
       gmgnStatus:      gmgn.rateStatus(),
+      session:         personalAgent.sessionState({
+        walletBalance,
+        unrealizedByMint: Object.fromEntries(enrichedPositions.filter(p => p.pnlSol != null).map(p => [p.tokenMint, p.pnlSol])),
+      }),
       performance:     personalAgent.performanceReport(),
       solPriceUsd:     prices[WSOL_MINT] ?? null,
       walletTokens:    enrichedWalletTokens,
@@ -672,6 +683,21 @@ class Dashboard {
       conversation: personalAgent.getConversation(40),
       autonomy:     personalAgent.getAutonomy(),
       journal:      personalAgent.getJournal(60),
+    });
+  }
+
+  _apiSession(req, res, action) {
+    this._readBody(req, async (body = {}) => {
+      try {
+        let session;
+        if (action === 'start')  session = await personalAgent.startSession(body);
+        if (action === 'update') session = personalAgent.updateSession(body);
+        if (action === 'stop')   session = await personalAgent.stopSession('arrêt manuel (dashboard)');
+        if (action === 'mode')   session = personalAgent.setTradingMode(body.mode);
+        this._jsonOk(res, { ok: true, session, autonomy: personalAgent.getAutonomy() });
+      } catch (err) {
+        this._jsonOk(res, { ok: false, error: err.message });
+      }
     });
   }
 

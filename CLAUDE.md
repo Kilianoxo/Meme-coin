@@ -30,11 +30,30 @@ Le propriétaire trade aussi manuellement sur GMGN — positions importables via
 - `data/paper_positions.json` — Paper trading
 - `data/tokenHistory.json` — Tokens récurrents
 
+## Sessions de trading (capital alloué + pocket sécurisé) — c'est ce que règle le trader
+Le trading réel n'existe QUE dans une session (personalAgent.startSession / updateSession / stopSession,
+persistées dans agent.json : `session`, `sessionHistory`, `tradingMode`). Le trader règle seulement :
+- le CAPITAL de la session (≤ wallet − 0.02 SOL de frais) — le reste du wallet = POCKET SÉCURISÉ, jamais engagé ;
+- les POSITIONS simultanées (1-10) et la MISE MAX par trade (≤ capital), modifiables avant et PENDANT la session ;
+- le MODE préfait : chill / balanced (Équilibré) / aggressive (constante `MODES`). Le mode fixe seul tous les
+  réglages techniques (`_applyMode`) : minScore, flexScore, minConfidence, mise mini (fraction de la mise max),
+  coupe-circuit du jour (% du capital), âge min des tokens, source early. Ils restent visibles dans
+  « Réglages avancés » (repliés) du dashboard.
+Budget : disponible = capital + PnL réalisé de la session − SOL encore investi dans ses positions
+(positions étiquetées `entry.sessionId`, sessionState()). `_execAutoBuy` (scan + copy-trade) et l'outil chat
+`acheter` refusent sans session (`noSession`), ne comptent que les positions de la session (pas les achats
+manuels), ramènent la mise au disponible et refusent si < 0.01 SOL. Stop-loss de session : arrêt auto quand
+les pertes RÉALISÉES atteignent `sessionStopPct` du capital (20/30/45 %), vérifié au heartbeat et avant chaque
+achat. Arrêter une session = plus d'achats, les positions ouvertes restent gérées (SL/TP).
+`setAutonomy({liveTrading:true})` est ignoré sans session. API : POST /api/session/{start,update,stop,mode},
+état live dans /api/data.session (PnL latent, pocketSol). Telegram : /session (start|stop|positions|mise|mode),
+/auto renvoie vers /session, /set maxsol met à jour la session en cours.
+
 ## ARIA — Autonomie (exécution directe, sans confirmation — approuvé par le propriétaire)
 Config persistée dans agent.json (`autonomy`), modifiable via dashboard (POST /api/agent/autonomy) ou /auto :
 - `enabled` — signaux, watchlist auto, gestion de positions, alertes, rapport quotidien
-- `liveTrading` — exécution réelle DIRECTE sur le wallet (notification seule, pas de boutons ;
-  OFF par défaut → dans ce mode les boutons de confirmation restent le seul moyen d'agir)
+- `liveTrading` — suit la session : ON pendant une session (exécution directe, notification seule),
+  OFF sinon (signaux Telegram avec boutons de confirmation)
 - `minScore` (70) — seuil classique ; `flexScore` (55) — suffit avec un SIGNAL FORT :
   smart money massif (≥15 wallets + buy ratio ≥70%), rotation coordonnée (≥2 KOL + ≥10 smart
   + ≥10 snipers), flux live (≥3 achats smart money > 2× ventes), rupture de pattern (score
@@ -127,7 +146,8 @@ Chaque trade via chat est journalisé dans agent_journal.json.
 
 ## Commandes Telegram implémentées
 /start, /help, /status, /balance, /scan, /positions, /history
-/auto — Toggle du trading réel autonome d'ARIA
+/session — Session de trading : start <capital> [mode] [positions] [mise] | stop | positions | mise | mode
+/auto — Redirige vers /session (le trading réel passe par une session)
 /pnl — PnL réalisé + non réalisé en temps réel
 /settings, /set <maxsol|sl|tp> <valeur> (maxsol synchronise le plafond ARIA)
 /analyse <adresse>, /debat <adresse> — Analyse ARIA
