@@ -45,6 +45,19 @@ class Bot {
 
     // Donne à ARIA le moyen de pinguer Telegram pour les alertes haute priorité
     personalAgent.setNotifyCallback((msg) => this._send(msg, { parse_mode: 'HTML' }));
+
+    // GMGN a limité le bot : une alerte au début de la pause (max 1 / 10 min)
+    gmgn.onRateLimit((st) => {
+      if (Date.now() - (this._lastRateAlert || 0) < 10 * 60_000) return;
+      this._lastRateAlert = Date.now();
+      const hh = new Date(st.until).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      this._send(
+        `⏸ <b>GMGN a limité le bot</b> (trop de requêtes) — pause jusqu'à ${hh}.\n` +
+        `Scan et analyses suspendus, reprise automatique à vitesse réduite (${st.speedPct}%). ` +
+        `Les stop-loss continuent de fonctionner (prix Jupiter).`,
+        { parse_mode: 'HTML' }
+      );
+    });
   }
 
   // ─── Middleware ────────────────────────────────────────────────────────────

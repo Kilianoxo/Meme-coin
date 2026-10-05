@@ -122,6 +122,8 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
 .chip.aria-on .dot { background: #a78bff; box-shadow: 0 0 0 4px rgba(167,139,255,.25); }
 .chip.aria-live { color: #fff; background: rgba(255,92,128,.18); border-color: rgba(255,92,128,.45); }
 .chip.aria-live .dot { background: #ff5c80; animation: pulse 1.4s infinite; }
+.chip.gmgn-paused { color: #ffe08a; background: rgba(255,209,102,.14); border-color: rgba(255,209,102,.4); }
+.chip.gmgn-paused .dot { background: #ffd166; }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,92,128,.6); } 50% { box-shadow: 0 0 0 6px rgba(255,92,128,0); } }
 
 /* ── Layout ─────────────────────────────────────────────────────────── */
@@ -534,7 +536,9 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   .presets { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .preset { padding: 14px 10px; text-align: center; }
   .preset-desc { display: none; }
-  .topbar-right .chip:not(#ariaChip) { display: none; }
+  .topbar-right .chip:not(#ariaChip):not(#gmgnChip) { display: none; }
+  /* Place limitée : pendant une pause GMGN, l'alerte remplace la pastille ARIA */
+  #gmgnChip:not([style*="none"]) ~ #ariaChip { display: none; }
   .nav {
     position: fixed; z-index: 50; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
     margin: 0; justify-content: space-around; border-radius: 24px; padding: 6px;
@@ -631,6 +635,7 @@ svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-widt
   </nav>
 
   <div class="topbar-right">
+    <span class="chip gmgn-paused" id="gmgnChip" style="display:none" title="GMGN a temporairement limité le bot"><span class="dot"></span><span id="gmgnChipText">GMGN en pause</span></span>
     <span class="chip" id="ariaChip" title="État de l'autonomie ARIA"><span class="dot"></span><span id="ariaChipText">ARIA…</span></span>
     <span class="chip" id="statusChip"><span class="dot"></span><span id="sText">Connexion…</span><span class="sr-only">mis à jour</span><span id="lastUpd" style="opacity:.6"></span></span>
   </div>
@@ -1338,6 +1343,7 @@ function render(d) {
   for (const p of d.positions || []) if (p.symbol) symbolByMint[p.tokenMint] = p.symbol;
 
   renderHero(d);
+  renderGmgnStatus(d.gmgnStatus);
   renderStats(d.stats, d.weekly);
   allTimeline = d.pnlTimeline || [];
   allManualTimeline = d.manualTimeline || [];
@@ -1392,6 +1398,13 @@ function renderPerformance() {
   </div>` : '';
 
   body.innerHTML = `<div class="list">${rows}</div>${buckets}${versus}`;
+}
+
+function renderGmgnStatus(st) {
+  const chip = document.getElementById('gmgnChip');
+  if (!st || !st.banned) { chip.style.display = 'none'; return; }
+  chip.style.display = '';
+  setText('gmgnChipText', 'GMGN en pause · ' + fClock(st.until));
 }
 
 function renderHero(d) {

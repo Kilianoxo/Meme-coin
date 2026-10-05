@@ -73,7 +73,12 @@ function _gmgnEnv() {
       extra[k] = v.replace(/\\n/g, '\n');
     }
   } catch { /* fichier absent — on ne dépend que de process.env */ }
-  _envCache = { ...extra, ...process.env }; // process.env prioritaire
+  _envCache = {
+    ...extra, ...process.env, // process.env prioritaire
+    // gmgn-cli réessaie seul après un 429 : chaque réessai compte comme une violation
+    // et peut PROLONGER un ban. Le limiteur ci-dessous gère seul le rythme et les bans.
+    GMGN_RATE_LIMIT_AUTO_RETRY_MAX_WAIT_MS: '0',
+  };
   return _envCache;
 }
 
@@ -105,7 +110,7 @@ function _exec(args, timeout = CLI_TIMEOUT_MS) {
     execFile('gmgn-cli', args, { env: _gmgnEnv(), timeout, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
-          const e = new Error(`gmgn-cli: ${String(stderr || err.message).trim().slice(0, 300)}`);
+          const e = new Error(`gmgn-cli: ${String(stderr || err.message).trim().slice(0, 600)}`);
           e.code = err.code;
           return reject(e);
         }
@@ -114,16 +119,190 @@ function _exec(args, timeout = CLI_TIMEOUT_MS) {
   });
 }
 
-async function _cli(args) {
-  const out  = await _exec([...args, '--chain', CHAIN, '--raw']);
-  const json = JSON.parse(out);
-  // gmgn-cli signale limite/quota via exit 0 + code métier non nul — ne pas
-  // le traiter silencieusement comme une liste vide
-  if (json && typeof json === 'object' && json.code != null && json.code !== 0) {
-    throw new Error(`gmgn-cli code=${json.code} ${json.msg || json.message || ''}`.trim());
+// ─── Limiteur de débit (modèle GMGN : seau qui fuit pondéré) ─────────────────
+//
+// GMGN limite par forfait (Free 5/5, Plus 20/20, Pro 50/50 — débit/capacité en
+// unités par seconde) et chaque route a un poids. Dépasser la capacité renvoie
+// un 429 ; les 429 répétés déclenchent un BAN d'IP (jusqu'à 5 min), que chaque
+// requête envoyée pendant le ban prolonge. Donc :
+//   1. on ne dépasse jamais la capacité (marge de sécurité sur le débit) ;
+//   2. au moindre 429, plus AUCUNE requête avant l'heure de levée annoncée ;
+//   3. les appels identiques simultanés sont fusionnés (une seule requête) ;
+//   4. la protection des positions passe avant le scan.
+
+const PLANS = { free: { rate: 5, cap: 5 }, plus: { rate: 20, cap: 20 }, pro: { rate: 50, cap: 50 } };
+const PLAN_NAME = (process.env.GMGN_PLAN || 'free').toLowerCase();
+const PLAN = PLANS[PLAN_NAME] || PLANS.free;
+const RATE_SAFETY   = 0.6;   // on n'utilise que 60 % du débit annoncé
+const MAX_IN_FLIGHT = 2;     // requêtes simultanées max
+const MAX_QUEUE_WAIT_MS = 60_000;
+const BAN_MARGIN_MS = 3_000; // ne jamais réessayer pile à l'heure de levée
+
+// Poids officiels (docs gmgn-cli) et priorité (0 = la plus urgente)
+const ROUTES = {
+  'token security':      { weight: 1, priority: 0 }, // monitoring de fuite des positions
+  'token info':          { weight: 1, priority: 0 }, // prix de secours des positions
+  'track smartmoney':    { weight: 1, priority: 1 },
+  'track kol':           { weight: 1, priority: 1 },
+  'market trending':     { weight: 3, priority: 2 },
+  'portfolio activity':  { weight: 3, priority: 2 },
+  'portfolio stats':     { weight: 3, priority: 3 },
+  'portfolio holdings':  { weight: 2, priority: 3 },
+  'market hot-searches': { weight: 3, priority: 3 },
+};
+const DEFAULT_ROUTE = { weight: 3, priority: 2 };
+
+const _rl = {
+  level: 0, last: Date.now(), factor: 1, lastViolation: 0,
+  bannedUntil: 0, banReason: '', inFlight: 0, queue: [], seq: 0, timer: null,
+  stats: { sent: 0, rateLimited: 0, rejectedWhileBanned: 0 },
+};
+const _inflight = new Map();   // clé de requête → promesse partagée
+const _rateListeners = [];
+
+class RateLimitedError extends Error {
+  constructor(until) {
+    const hh = new Date(until).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    super(`GMGN en pause (limite de requêtes) jusqu'à ${hh}`);
+    this.code  = 'GMGN_RATE_LIMITED';
+    this.until = until;
   }
-  return json;
 }
+
+function _currentRate() { return PLAN.rate * RATE_SAFETY * _rl.factor; }
+
+function _leak() {
+  const now = Date.now();
+  _rl.level = Math.max(0, _rl.level - ((now - _rl.last) / 1000) * _currentRate());
+  _rl.last = now;
+  // Reprise progressive après une violation : +25 % de débit par tranche de 5 min propres
+  if (_rl.factor < 1 && now - _rl.lastViolation > 5 * 60_000) {
+    _rl.factor = Math.min(1, _rl.factor * 1.25);
+    _rl.lastViolation = now;
+  }
+}
+
+/** Extrait l'heure de levée d'un message d'erreur 429 de gmgn-cli */
+function _parseResetMs(msg) {
+  const rel = msg.match(/~(\d+)s remaining/);
+  if (rel) return Date.now() + parseInt(rel[1], 10) * 1000;
+  const unix = msg.match(/reset_at["=:\s]+(\d{10})/);
+  if (unix) return parseInt(unix[1], 10) * 1000;
+  const abs = msg.match(/resets at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) GMT([+-]\d{2}):?(\d{2})/);
+  if (abs) {
+    const t = Date.parse(`${abs[1].replace(' ', 'T')}${abs[2]}:${abs[3]}`);
+    if (!isNaN(t)) return t;
+  }
+  return null;
+}
+
+function _isRateLimitError(msg) {
+  return /\b429\b|RATE_LIMIT/.test(msg) && !/ERROR_RATE_LIMIT_BLOCKED/.test(msg);
+}
+
+function _enterBan(msg) {
+  const reset = _parseResetMs(msg) ?? Date.now() + 60_000;
+  const until = Math.max(_rl.bannedUntil, reset + BAN_MARGIN_MS);
+  const wasBanned = Date.now() < _rl.bannedUntil;
+  _rl.bannedUntil = until;
+  _rl.banReason   = /BANNED/.test(msg) ? 'ban' : 'limite';
+  _rl.factor      = Math.max(0.25, _rl.factor * 0.5); // ralentit pour la suite
+  _rl.lastViolation = Date.now();
+  _rl.level       = PLAN.cap;                          // considère le seau plein
+  _rl.stats.rateLimited++;
+  console.warn(`[GMGN] ⏸ Limite de requêtes atteinte (${_rl.banReason}) — pause jusqu'à ${new Date(until).toLocaleTimeString('fr-FR')}, débit réduit à ${Math.round(_rl.factor * 100)}%`);
+  _rejectQueue();
+  if (!wasBanned) {
+    for (const fn of _rateListeners) { try { fn(rateStatus()); } catch { /* listener */ } }
+  }
+}
+
+function _rejectQueue() {
+  const err = new RateLimitedError(_rl.bannedUntil);
+  for (const job of _rl.queue.splice(0)) { _rl.stats.rejectedWhileBanned++; job.reject(err); }
+}
+
+function _pump() {
+  if (_rl.timer) { clearTimeout(_rl.timer); _rl.timer = null; }
+  if (Date.now() < _rl.bannedUntil) { _rejectQueue(); return; }
+
+  // Purge des demandes qui attendent depuis trop longtemps (données périmées)
+  const now = Date.now();
+  for (let i = _rl.queue.length - 1; i >= 0; i--) {
+    if (now - _rl.queue[i].queuedAt > MAX_QUEUE_WAIT_MS) {
+      _rl.queue.splice(i, 1)[0].reject(new Error('gmgn-cli: file d\'attente saturée, requête abandonnée'));
+    }
+  }
+  _rl.queue.sort((a, b) => a.priority - b.priority || a.seq - b.seq);
+
+  while (_rl.queue.length > 0 && _rl.inFlight < MAX_IN_FLIGHT) {
+    _leak();
+    const job = _rl.queue[0];
+    if (_rl.level + job.weight > PLAN.cap) {
+      const waitMs = Math.ceil(((_rl.level + job.weight - PLAN.cap) / _currentRate()) * 1000) + 25;
+      _rl.timer = setTimeout(_pump, waitMs);
+      return;
+    }
+    _rl.queue.shift();
+    _rl.level += job.weight;
+    _rl.inFlight++;
+    _rl.stats.sent++;
+    job.run().finally(() => { _rl.inFlight--; _pump(); });
+  }
+}
+
+/** Exécute une commande gmgn-cli en respectant le débit GMGN */
+function _cli(args) {
+  if (Date.now() < _rl.bannedUntil) {
+    _rl.stats.rejectedWhileBanned++;
+    return Promise.reject(new RateLimitedError(_rl.bannedUntil));
+  }
+  const key = args.join(' ');
+  if (_inflight.has(key)) return _inflight.get(key); // même requête déjà en cours → partagée
+
+  const route = ROUTES[`${args[0]} ${args[1]}`] || DEFAULT_ROUTE;
+  const p = new Promise((resolve, reject) => {
+    _rl.queue.push({
+      ...route, seq: _rl.seq++, queuedAt: Date.now(), reject,
+      run: async () => {
+        try {
+          const out  = await _exec([...args, '--chain', CHAIN, '--raw']);
+          const json = JSON.parse(out);
+          // gmgn-cli signale limite/quota via exit 0 + code métier non nul — ne pas
+          // le traiter silencieusement comme une liste vide
+          if (json && typeof json === 'object' && json.code != null && json.code !== 0) {
+            throw new Error(`gmgn-cli code=${json.code} ${json.error || ''} ${json.msg || json.message || ''}`.trim());
+          }
+          resolve(json);
+        } catch (err) {
+          if (_isRateLimitError(String(err.message))) {
+            _enterBan(String(err.message));
+            reject(new RateLimitedError(_rl.bannedUntil));
+          } else {
+            reject(err);
+          }
+        }
+      },
+    });
+    _pump();
+  });
+  _inflight.set(key, p);
+  p.then(() => _inflight.delete(key), () => _inflight.delete(key));
+  return p;
+}
+
+/** État du limiteur — pour le dashboard, le scanner et les alertes */
+function rateStatus() {
+  _leak();
+  const banned = Date.now() < _rl.bannedUntil;
+  return {
+    plan: PLAN_NAME, banned, until: banned ? _rl.bannedUntil : null, reason: banned ? _rl.banReason : null,
+    speedPct: Math.round(_rl.factor * 100), queued: _rl.queue.length, inFlight: _rl.inFlight, ..._rl.stats,
+  };
+}
+
+/** fn(status) appelée au DÉBUT de chaque pause (pas à chaque requête refusée) */
+function onRateLimit(fn) { _rateListeners.push(fn); }
 
 // ─── Helpers de parsing (le CLI renvoie prix/volumes en strings, booléens en 0/1) ──
 
@@ -750,6 +929,9 @@ function assessEscape(cur, entry) {
 
 module.exports = {
   isAvailable,
+  rateStatus,
+  onRateLimit,
+  RateLimitedError,
   hasKey,
   getTrending,
   getHotSearches,

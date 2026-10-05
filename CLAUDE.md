@@ -62,6 +62,23 @@ lastActivityTs par wallet, pur code), gestion active des positions (~9 min, cool
 décisions HOLD/SELL/TIGHTEN_SL), apprentissage (~30 min), rapport quotidien à 20h Paris.
 Tout est journalisé dans agent_journal.json + push SSE `aria_journal`.
 
+## Limite de débit GMGN (IMPORTANT)
+GMGN applique un seau qui fuit PAR FORFAIT (Free 5/5, Plus 20/20, Pro 50/50 — unités/s / capacité) et un
+POIDS par route (trending 3, hot-searches 3, token info 1, token security 1, track 1, portfolio activity/stats 3,
+holdings 2). Les 429 répétés → BAN d'IP jusqu'à 5 min, prolongé de 5 s par requête envoyée pendant le ban.
+Tout appel passe par `_cli()` (src/gmgn.js) qui implémente côté client :
+- seau pondéré à 60 % du débit du forfait (`GMGN_PLAN` = free|plus|pro, défaut free), 2 requêtes en vol max,
+  file à priorités (0 : token security/info = protection des positions ; 2 : trending ; 3 : hot/portfolio),
+  requêtes en attente > 60 s abandonnées ;
+- fusion des requêtes identiques en cours (single-flight) ;
+- porte de ban : au premier 429, plus AUCUNE requête jusqu'à l'heure de levée annoncée + 3 s (erreur locale
+  `RateLimitedError`, code GMGN_RATE_LIMITED) ; débit ensuite divisé par 2, puis +25 % par 5 min sans violation ;
+- réessai interne de gmgn-cli désactivé (`GMGN_RATE_LIMIT_AUTO_RETRY_MAX_WAIT_MS=0`) ;
+- `rateStatus()` (exposé dans /api/data.gmgnStatus → pastille « GMGN en pause » du dashboard) et
+  `onRateLimit(fn)` (alerte Telegram au début de chaque pause, max 1 / 10 min).
+Le scanner saute ses scans pendant une pause ; la source early (trending 5m) ne tourne qu'un scan sur deux.
+NE JAMAIS appeler gmgn-cli en dehors de `_cli()` et ne jamais lancer plusieurs classements d'affilée.
+
 ## Mesure et qualité de décision
 - Note HYBRIDE (personalAgent.analyzeToken) : `gmgn.quantScore()` (déterministe, 0-100 : consensus
   smart/KOL 25, pression achat 20, momentum 20, liquidité 15, distribution 20 ; plafond 35 si verdict
@@ -149,6 +166,7 @@ GMGN_API_KEY (REQUIS pour le scan — npm i -g gmgn-cli ; aussi lu depuis ~/.con
 GMGN_TRENDING_ARGS, GMGN_MIN_CONFLUENCE (optionnels — tuning source GMGN)
 MIN_LIQUIDITY_USD (défaut: 5000), MIN_VOLUME_24H_USD (défaut: 20000 — mesuré sur la fenêtre trending GMGN 1h), MIN_MARKET_CAP_USD (défaut: 30000)
 MIN_TOKEN_AGE_HOURS (défaut: 1 — valeur initiale, réglable ensuite dans le dashboard), MAX_TOKEN_AGE_HOURS (défaut: 72)
+GMGN_PLAN (défaut: free — free|plus|pro, règle le limiteur de débit sur ton forfait GMGN)
 POSITION_CHECK_SECONDS (défaut: 10) — fréquence de surveillance SL/TP (réel + paper)
 QUANT_WEIGHT (défaut: 0.6), QUANT_SKIP_BELOW (défaut: 30) — note hybride chiffres/IA
 JUPITER_PRICE_URL (défaut: https://lite-api.jup.ag/price/v3)

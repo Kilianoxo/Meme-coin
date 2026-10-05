@@ -420,6 +420,7 @@ class Dashboard {
       updatedAt:       Date.now(),
       walletBalance:   walletBalance !== null ? parseFloat(walletBalance.toFixed(6)) : null,
       walletAddress:   this.trader.walletAddress || null,
+      gmgnStatus:      gmgn.rateStatus(),
       performance:     personalAgent.performanceReport(),
       solPriceUsd:     prices[WSOL_MINT] ?? null,
       walletTokens:    enrichedWalletTokens,

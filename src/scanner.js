@@ -149,16 +149,29 @@ class Scanner extends EventEmitter {
       return;
     }
 
+    // GMGN en pause (limite de requêtes) : on n'envoie RIEN — chaque requête
+    // pendant un ban le prolonge. Un seul message par pause.
+    const rl = gmgn.rateStatus();
+    if (rl.banned) {
+      if (this._pausedUntil !== rl.until) {
+        this._pausedUntil = rl.until;
+        console.warn(`[Scanner] ⏸ GMGN en pause jusqu'à ${new Date(rl.until).toLocaleTimeString('fr-FR')} — scans suspendus, reprise automatique`);
+      }
+      return;
+    }
+    if (this._pausedUntil) { console.log('[Scanner] ▶ GMGN disponible — reprise des scans'); this._pausedUntil = null; }
+
     let rows = [];
     try {
       rows = await gmgn.getTrending('1h');
     } catch (err) {
-      console.error(`[Scanner] Erreur GMGN trending:`, err.message);
+      if (err.code !== 'GMGN_RATE_LIMITED') console.error(`[Scanner] Erreur GMGN trending:`, err.message);
       return;
     }
     // Source "early" : classement 5 min → repère les tokens qui démarrent avant
-    // qu'ils dominent le classement 1h (où on arrive souvent après le pump)
-    if (personalAgent.getAutonomy().earlyScan) {
+    // qu'ils dominent le classement 1h (où on arrive souvent après le pump).
+    // Un scan sur deux : le classement pèse 3 unités sur une capacité de 5 (forfait gratuit).
+    if (personalAgent.getAutonomy().earlyScan && this.scanCount % 2 === 0) {
       const known = new Set(rows.map(r => r.baseToken?.address));
       const early = await gmgn.getTrending('5m').catch(() => []);
       rows = rows.concat(early.filter(r => !known.has(r.baseToken?.address)));
